@@ -181,7 +181,7 @@ export default function DashboardPage() {
                         </div>
                     </div>
                     <div className="flex flex-col lg:flex-row justify-between gap-4 mr-6 mt-7">
-                        <div className="flex flex-col w-full lg:w-[65%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between">
+                        <div className="flex flex-col w-full lg:w-[65%] min-h-[400px] bg-white border border-gray-400 rounded-md p-4 justify-between">
                             <div className="flex flex-row justify-between items-center mb-4">
                                 <h2 className="text-lg font-semibold text-gray-900">Verification Activity</h2>
                                 <div className="flex flex-row">
@@ -209,7 +209,7 @@ export default function DashboardPage() {
                                 <p className="text-sm text-black truncate">Sun</p>
                             </div>
                         </div>
-                        <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] border border-gray-400 rounded-md p-4">
+                        <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] bg-white border border-gray-400 rounded-md p-4">
                             <h1 className="text-lg font-semibold text-gray-900">High Risk Alerts</h1>
                         </div>
                         
