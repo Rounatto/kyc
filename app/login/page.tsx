@@ -25,7 +25,7 @@ export default function Login() {
                     </div>
                     <div className="flex flex-col">{/*div du formulaire*/}
                         <label className="text-sm font-medium text-black">Email address</label>
-                        <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100">{/*div de l'input email*/}
+                        <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100 focus-within:border-blue-400 focus-within:ring-0 focus-within:ring-blue-400">{/*div de l'input email*/}
                             <span className="flex h-5 w-5 items-center justify-center text-black" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" xmlns="http://www.w3.org/2000/svg">
                                     <path d="M3 8.5v7A2.5 2.5 0 0 0 5.5 18h13A2.5 2.5 0 0 0 21 15.5v-7A2.5 2.5 0 0 0 18.5 6h-13A2.5 2.5 0 0 0 3 8.5z" stroke="#111827" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -40,7 +40,7 @@ export default function Login() {
                                 Forgot password?
                             </Link>
                         </div>
-                        <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100">{/*div de l'input password*/}
+                        <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100 focus-within:border-blue-400 focus-within:ring-0 focus-within:ring-blue-400">{/*div de l'input password*/}
                             <span className="flex h-5 w-5 items-center justify-center text-black" aria-hidden="true">
                                 <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" xmlns="http://www.w3.org/2000/svg">
                                     <rect x="3" y="10" width="18" height="10" rx="2" stroke="#111827" strokeWidth="1.5"/>
