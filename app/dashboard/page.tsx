@@ -1,6 +1,49 @@
 "use client"
 import Link from "next/link";
+import VerificationTable from "@/components/VerificationTable";
 
+const recentRequestsData = [
+    {/*entre{} c est la une (row)*/
+        id: 1,
+        Avatar:"EL",/*URL de l'avatar du client, peut être une image ou des initiales*/
+        Nom: "Eleanor Lewis",
+        Email: "e.lewis@corporate.com",
+        Type: "Individual KYC",
+        Submitted: "Oct 24, 14:20",
+        Status: "verified",
+        Score: "98/100",
+    },
+    {
+        id: 2,
+        Avatar:"MR",/*URL de l'avatar du client, peut être une image ou des initiales*/
+        Nom: "Marcus Rossi",
+        Email: "m.rossi@globex.io",
+        Type: "Corporate KYB",
+        Submitted: "Oct 24, 13:45",
+        Status: "pending",
+        Score: "--",
+    },
+    {
+        id: 3,
+        Avatar:"BT",/*URL de l'avatar du client, peut être une image ou des initiales*/
+        Nom: "Braker Tech Ltd",
+        Email: "complance@braker.net",
+        Type: "Entity Screening",
+        Submitted: "Oct 24, 11:12",
+        Status: "rejected",
+        Score: "12/100",
+    },
+    {
+        id: 4,
+        Avatar:"SK",/*URL de l'avatar du client, peut être une image ou des initiales*/
+        Nom: "Sienna Kim",
+        Email: "skim@creative.co",
+        Type: "Individual KYC",
+        Submitted: "Oct 24, 09:30",
+        Status: "verified",
+        Score: "94/100",
+    }
+];
 export default function DashboardPage() {
     return (
         <div className="w-full">{/*page entière*/}
@@ -181,7 +224,7 @@ export default function DashboardPage() {
                         </div>
                     </div>
                     <div className="flex flex-col lg:flex-row justify-between gap-4 mt-7">{/*verification activity feed and High Risk Alerts*/}
-                        <div className="flex flex-col w-full lg:w-[70%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300">{/*verification activity feed*/}
+                        <div className="flex flex-col w-full lg:w-[70%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">{/*verification activity feed*/}
                             <div className="flex flex-row justify-between items-center mb-4">{/*Header verification activity et approved et risk*/}
                                 <h2 className="font-bold">Verification Activity</h2>
                                 <div className="flex flex-row">{/*bouton approved et risk*/}
@@ -209,7 +252,7 @@ export default function DashboardPage() {
                                 <p className="text-sm text-black truncate">Sunday</p>
                             </div>
                         </div>
-                        <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between gap-10 hover:shadow-md hover:-translate-y-1 transition-all duration-300">{/*High Risk Alerts*/}
+                        <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between gap-10 hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">{/*High Risk Alerts*/}
                             <div className="flex flex-row">{/*High Risk Alerts and viewall*/}
                                 <h2 className="font-bold">High Risk Alerts</h2>
                                 <Link href="#" className="text-sm text-blue-700 ml-auto hover:underline">View All</Link>
@@ -261,84 +304,7 @@ export default function DashboardPage() {
                         </div>
                         
                     </div>
-                    <div className="flex flex-col w-full border border-gray-400 rounded-md justify-between">{/*Section des Recent Verification Requests*/}
-                        <div className="flex flex-row justify-between p-5 border-b border-gray-400">{/*Recent Verification Requests title et deux icones*/}
-                            <h2 className="font-bold">Recent Verification Requests</h2>
-                            <div className="flex flex-row gap-2">{/*les deux icones de filtre et trois points verticale*/}
-                                <span className="text-gray-900 hover:bg-gray-200 p-1 rounded-xs cursor-pointer">{/*Icone de filtre*/}
-                                    hk
-                                </span>
-                                <span className="text-gray-900 hover:bg-gray-200 p-1 rounded-xs cursor-pointer">{/*Icone de trois points verticale*/}
-                                    bkd
-                                </span>
-                            </div>
-                        </div>
-                        <div className="flex flex-col justify-between w-full">{/*la section vérification du milieu*/}
-                            <header className="flex flex-row bg-gray-200/80 py-2 px-4 w-full">{/*descriprion de ce que contient le tableau*/}
-                                <p className="text-sm text-gray-600 mr-20">CUSTOMER</p>
-                                <p className="text-sm text-gray-600 mr-20">TYPE</p>
-                                <p className="text-sm text-gray-600 mr-12">SUBMITTED</p>
-                                <p className="text-sm text-gray-600 mr-14">STATUS</p>
-                                <p className="text-sm text-gray-600 mr-13">SCORE</p>
-                                <p className="text-sm text-gray-600">ACTION</p>
-                            </header>
-                            <div className="flex flex-col w-full">{/*les lignes exemples du tableau*/}
-                                <div className="flex flex-row py-7 border-b border-gray-400">{/*1ère ligne du tableau*/}
-                                    <div className="flex flex-row">{/*Customer avec image et nom*/}
-                                        <div className="w-10 h-10 bg-blue-800/20 rounded-full mr-4">{/*Image du client*/}
-                                            <p className="text-blue-800">EL</p>
-                                        </div>
-                                        <div className="flex flex-col gap-0.5">{/*Nom du client et email*/}
-                                            <p className="text-sm text-gray-900 mt-2">Eleanor Lewis</p>{/*Nom du client*/}
-                                            <p className="text-xs text-gray-500">e.lewis@corporate.com</p>{/*Email du client*/}
-                                        </div>
-                                    </div>
-                                    <div>{/*Type de vérification*/}
-                                        <p>Individual KYC</p>
-                                    </div>
-                                    <div>{/*Date de soumission*/}
-
-                                    </div>
-                                    <div>{/*Status de la vérification*/}
-
-                                    </div>
-                                    <div>{/*Score de risque*/}
-
-                                    </div>
-                                    <div>{/*Action possible sur la vérification*/}
-
-                                    </div>                                
-                                </div>
-                                <div className="flex flex-row py-7 border-b border-gray-400">{/*2ème ligne du tableau*/}
-
-                                </div>
-                                <div className="flex flex-row py-7 border-b border-gray-400">{/*3ème ligne du tableau*/}
-
-                                </div>
-                                <div className="flex flex-row py-7 border-b border-gray-400">{/*4ème ligne du tableau*/}
-
-                                </div>
-                            </div>
-                        </div>
-                        <footer className="flex flex-row justify-between bg-gray-200/80 p-5">{/*Footer avec le bouton view all*/}
-                            <p className="text-xs text-gray-900 mt-2">Showing 4 of 12,842 requests</p>
-                            <div className="flex flex-row gap-2">
-                                <div className="bg-white w-5 h-6 rounded-xs item-center border border-gray-400 cursor-pointer">{/*Button page precedente*/}
-                                    <span>{/*fleche gauche pour page precedente*/}
-
-                                    </span>
-                                </div>
-                                <p>1</p>{/* le nbr de la page ou on est actuellement*/}
-                                <div className="bg-white w-5 h-6 rounded-xs item-center border border-gray-400 cursor-pointer">{/*Button page suivante*/}
-                                    <span>{/*fleche droite pour page suivante*/}
-                                        
-                                    </span>
-                                </div>
-                            </div>
-                        </footer>
-
-                    </div>
-                    
+                    <VerificationTable data={recentRequestsData} />{/*Le tableau des recent verification requests*/}
                 </div>
             </div>
     );
