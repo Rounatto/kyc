@@ -44,7 +44,7 @@ export default function VerificationTable({ data }: { data: any[] }) {
                                             <td className="hidden lg:table-cell lg:w-[15%] px-4 py-3 lg:px-6 md:py-4 text-center">ACTION</td>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-gray-200 bg-white text-xs md:text-sm text-gray-700">
+                                    <tbody className="divide-y divide-gray-300 bg-white text-xs md:text-sm text-gray-700">
                                         {data && data.map((row) => (
                                             <tr className="bg-white transition-colors" key={row.id}>{/*1ère ligne du tableau*/}
                                                 <td className="px-4 py-4 md:px-2 lg:px-6 md:py-5 align-top md:align-middle">
