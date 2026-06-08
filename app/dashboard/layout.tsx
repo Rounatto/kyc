@@ -1,5 +1,6 @@
 "use client"
 
+import { ChartColumn, LayoutDashboard, LogOut, MessageCircleQuestionMark, Settings, Shield, User } from 'lucide-react';
 import Link from 'next/link'
 import { useState } from 'react';
 
@@ -15,7 +16,7 @@ export default function RootLayout({ children }: Readonly<{
         <div className="hidden md:flex h-20 items-center px-6">{/* Logo and Title Grand bloc horizental*/}
           <div className="flex items-center gap-3">{/* Logo et titre*/}
             <div className="w-9 h-10 bg-blue-700 rounded-lg flex items-center text-white shrink-0">{/*LOGO*/}
-              <span className="font-bold text-sm">LOGO</span>
+              <span className="font-bold text-sm"><Shield /></span>
             </div>
             <div className="flex flex-col">{/* Titre et sous-titre*/}
               <span className="font-bold text-[#0f172a] leading-tight">Compliance</span>
@@ -35,7 +36,7 @@ export default function RootLayout({ children }: Readonly<{
               }`}>
             <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">{/*Icone et titre*/}
               <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
-                <span className="font-bold text-sm">D</span>
+                <span className="font-bold text-sm"><LayoutDashboard /></span>
               </div>
               <span className="text-[11px] md:text-sm font-medium">Dashboard</span>
             </div>
@@ -49,7 +50,7 @@ export default function RootLayout({ children }: Readonly<{
               }`}>
             <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">{/*Icone et titre*/}
               <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
-                <span className="font-bold text-sm">C</span>
+                <span className="font-bold text-sm"><User /></span>
               </div>
               <span className="text-[11px] md:text-sm font-medium">Customers</span>
             </div>
@@ -63,7 +64,7 @@ export default function RootLayout({ children }: Readonly<{
               }`}>
             <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">{/*Icone et titre*/}
               <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
-                <span className="font-bold text-sm">R</span>
+                <span className="font-bold text-sm"><ChartColumn /></span>
               </div>
               <span className="text-[11px] md:text-sm font-medium">Reports</span>
             </div>
@@ -77,7 +78,7 @@ export default function RootLayout({ children }: Readonly<{
               }`}>
             <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">{/*Icone et titre*/}
               <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
-                <span className="font-bold text-sm">S</span>
+                <span className="font-bold text-sm"><Settings /></span>
               </div>
               <span className="text-[11px] md:text-sm font-medium">Settings</span>
             </div>
@@ -98,7 +99,7 @@ export default function RootLayout({ children }: Readonly<{
               }`}>
               <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">
                 <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
-                  <span className="font-bold text-sm">Su</span>
+                  <span className="font-bold text-sm"><MessageCircleQuestionMark /></span>
                 </div>
                 <span className="text-[11px] md:text-sm font-medium">Support</span>
               </div>
@@ -111,7 +112,7 @@ export default function RootLayout({ children }: Readonly<{
               }`}>
               <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">
                 <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
-                  <span className="font-bold text-sm">Si</span>
+                  <span className="font-bold text-sm"><LogOut /></span>
                 </div>
                 <span className="text-[11px] md:text-sm font-medium">Sign out</span>
               </div>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Eye, Mail, Lock, EyeOff, FingerprintPattern, CircleQuestionMark } from "lucide-react";
 
 export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
@@ -10,11 +11,7 @@ export default function Login() {
                 <div className="flex flex-row w-full justify-between items-center px-8">{/*div de trust verify et ?*/}
                     <h1 className="text-xl font-bold text-blue-700">TrustVerify</h1>
                     <span className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="9" />
-                            <circle cx="12" cy="8" r="0.8" fill="currentColor" stroke="none" />
-                            <path d="M12 11v4" />
-                        </svg>
+                        <CircleQuestionMark className="text-gray-500 w-5 h-5" />
                     </span>
                 </div>
             <div className="flex flex-col items-center justify-center flex-1 w-full gap-4 justify-center">{/*div qui groupe la carte blanche centrale et le all systems operational*/}
@@ -27,10 +24,7 @@ export default function Login() {
                         <label className="text-sm font-medium text-black">Email address</label>
                         <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100 focus-within:border-blue-400 focus-within:ring-0 focus-within:ring-blue-400">{/*div de l'input email*/}
                             <span className="flex h-5 w-5 items-center justify-center text-black" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M3 8.5v7A2.5 2.5 0 0 0 5.5 18h13A2.5 2.5 0 0 0 21 15.5v-7A2.5 2.5 0 0 0 18.5 6h-13A2.5 2.5 0 0 0 3 8.5z" stroke="#111827" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                    <path d="M21 8l-9 6-9-6" stroke="#111827" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                </svg>
+                                <Mail className="text-gray-500" />
                             </span>
                             <input type="email" placeholder="name@company.com" className="w-full outline-none text-sm text-gray-600"/>
                         </div>
@@ -42,17 +36,12 @@ export default function Login() {
                         </div>
                         <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100 focus-within:border-blue-400 focus-within:ring-0 focus-within:ring-blue-400">{/*div de l'input password*/}
                             <span className="flex h-5 w-5 items-center justify-center text-black" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <rect x="3" y="10" width="18" height="10" rx="2" stroke="#111827" strokeWidth="1.5"/>
-                                    <path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="#111827" strokeWidth="1.5" strokeLinecap="round"/>
-                                </svg>
+                                <Lock className="text-gray-500" />
                             </span>
                             <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-600"/>
-                            <span className="text-gray-600 cursor-pointer" aria-hidden="true" onClick={() => setShowPassword(!showPassword)}>
-                                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" stroke="#4B5563" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                            <span className="text-gray-500 cursor-pointer" aria-hidden="true" onClick={() => setShowPassword(!showPassword)}>
+                                {showPassword ? <EyeOff className="text-gray-500" /> : <Eye className="text-gray-500" />}
                                     <circle cx="12" cy="12" r="3" stroke="#4B5563" strokeWidth="1.5"/>
-                                </svg>
                             </span>
                         </div>
                         <div className="flex items-center gap-2 mb-5">{/*div du remember me*/}
@@ -81,13 +70,7 @@ export default function Login() {
                             </div>
                             <div className="flex items-center justify-center py-1.5 px-3 border border-gray-300 rounded-md cursor-pointer hover:bg-gray-100 transition duration-200 w-full">{/*div du bouton passkey*/}
                                 <span className="flex h-5 w-5 items-center justify-center" aria-hidden="true">
-                                    <svg viewBox="0 0 24 24" className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none">
-                                        <path d="M12 2c-3.9 0-7 3.1-7 7v1" stroke="#111827" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                                        <path d="M5 10v1c0 4 3 7 7 7s7-3 7-7v-1" stroke="#111827" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                                        <path d="M12 6a4 4 0 0 0-4 4v1" stroke="#111827" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        <path d="M8 11c0 2.2 1.8 4 4 4s4-1.8 4-4" stroke="#111827" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                                        <path d="M12 14v2" stroke="#111827" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                                    </svg>
+                                    <FingerprintPattern className="text-gray-500" />
                                 </span>
                                 <p className="ml-2 text-sm text-gray-800">Passkey</p>{/*changement!!*/}
                             </div>

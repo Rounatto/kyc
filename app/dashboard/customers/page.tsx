@@ -1,7 +1,7 @@
 "use client"
 import Link from "next/link";
 import VerificationLogTable from "@/components/VerificationLogTable";
-
+import { Bell, MessageCircleQuestionMark,User, Search, CircleQuestionMark, Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, Gavel, Flag, Earth, ListFilter} from "lucide-react";
 const recentRequestsData = [
     {/*entre{} c est la une (row)*/
         id: 1,
@@ -61,18 +61,11 @@ export default function CustomerPage() {
                 <div className="flex items-center gap-1 sm:gap-2 mt-2 md:mt-3 shrink-0">{/*Actions secondaires en haut a droite*/}
                     <button className="text-gray-700 hover:text-gray-700 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200">{/*Button sonnerie*/}
                         <span className="sr-only">Notifications</span>
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9" />
-                            <path d="M10 20a2 2 0 0 0 4 0" />
-                        </svg>
+                        <Bell />
                     </button>
                     <button className="text-gray-700 hover:text-gray-700 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200">{/*Button information*/}
                         <span className="sr-only">Information</span>
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <circle cx="12" cy="12" r="9" />
-                            <path d="M12 10v6" />
-                            <path d="M12 7h.01" />
-                        </svg>
+                        <CircleQuestionMark />
                     </button>
                     <div className="w-9 h-10 mr-2 md:mr-3 bg-gray-300 rounded-xl overflow-hidden border border-gray-200 cursor-pointer">{/*contenaire de l'image de profil*/}
                         <div className="w-full h-full bg-slate-400"></div>{/*Image de profil*/}
@@ -89,17 +82,13 @@ export default function CustomerPage() {
                     <div className="flex flex-row gap-3 w-full lg:w-auto">{/*les deux boutons*/}
                         <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">{/*Button Last 30 days*/}
                             <span className="flex items-center justify-center text-gray-600" aria-hidden="true">
-                                lo
+                                <ListFilter />
                             </span>
                             <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Filter</p>
                         </button>
                         <button className=" flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">{/*Button Export*/}
                             <span className="flex items-center justify-center text-gray-700" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M12 3v12" />
-                                    <path d="m7 10 5 5 5-5" />
-                                    <path d="M5 21h14" />
-                                </svg>
+                                <Download />
                             </span>
                             <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Export CSV</p>
                         </button>
@@ -110,11 +99,7 @@ export default function CustomerPage() {
                             <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
                                 <p className="text-sm font-semibold text-gray-500 truncate">Total Customers</p>
                                 <div className="text-blue-800 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <svg viewBox="0 0 32 32" className="h-6 w-6" fill="none" aria-hidden="true">
-                                                <circle cx="16" cy="10" r="4" fill="currentColor" />
-                                                <path d="M7.5 25c0-4.7 3.7-8.5 8.5-8.5s8.5 3.8 8.5 8.5" fill="currentColor" />
-                                                <path d="M21.8 18.2l2.1 2.1 4.3-4.3" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                    </svg>
+                                    <User />
                                 </div>       
                             </div>
                             <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
@@ -128,10 +113,7 @@ export default function CustomerPage() {
                             <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
                                 <p className="text-sm font-semibold text-gray-500 truncate">Verified Today</p>
                                 <div className="text-green-700 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" aria-hidden="true">
-                                            <path d="M12 2l6 2v5c0 4.5-2.5 8.1-6 9-3.5-.9-6-4.5-6-9V4l6-2z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                                            <path d="M8.5 12.3l2.5 2.5L15.2 10" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                                    </svg>
+                                    <ShieldCheck />
                                 </div>       
                             </div>
                             <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
@@ -145,17 +127,7 @@ export default function CustomerPage() {
                             <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
                                 <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
                                 <div className="text-yellow-500 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" aria-hidden="true">
-                                            <rect x="3" y="6" width="14" height="11" rx="2" stroke="currentColor" strokeWidth="1.4" fill="none" />
-                                            <rect x="8.5" y="4.6" width="6" height="1.6" rx="0.4" fill="currentColor" stroke="currentColor" strokeWidth="0.7" />
-                                            <circle cx="6.5" cy="10.8" r="0.5" fill="currentColor" />
-                                            <circle cx="6.5" cy="12.8" r="0.5" fill="currentColor" />
-                                            <g transform="translate(15,13)">
-                                                <circle cx="2.2" cy="2.2" r="2.1" fill="#ffffff" stroke="currentColor" strokeWidth="1.05" />
-                                                <path d="M2.2 1.5v1" stroke="currentColor" strokeWidth="0.95" strokeLinecap="round" />
-                                                <path d="M2.2 2.2h0.8" stroke="currentColor" strokeWidth="0.95" strokeLinecap="round" />
-                                            </g>
-                                    </svg>
+                                    <ClipboardClock />
                                 </div>       
                             </div>
                             <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
@@ -169,11 +141,7 @@ export default function CustomerPage() {
                             <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
                                 <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
                                 <div className="text-red-700 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" aria-hidden="true">
-                                            <path d="M12 3 2 20h20L12 3z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                                            <rect x="11" y="8" width="2" height="5" rx="0.8" fill="currentColor" />
-                                            <circle cx="12" cy="16.2" r="0.9" fill="currentColor" />
-                                        </svg>
+                                    <TriangleAlert />
                                 </div>       
                             </div>
                             <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
