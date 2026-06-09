@@ -2,12 +2,32 @@
 
 import { ChartColumn, LayoutDashboard, LogOut, MessageCircleQuestionMark, Settings, Shield, User } from 'lucide-react';
 import Link from 'next/link'
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 
 export default function RootLayout({ children }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('');
+  const pathname = usePathname();
+  
+  useEffect(() => {
+    if (pathname.includes('/dashboard/customers')){
+      setActiveTab('customers');
+    }
+    else if (pathname.includes('/dashboard/reports')){
+      setActiveTab('reports');
+    }
+    else if (pathname.includes('/dashboard/settings')){
+      setActiveTab('settings');
+    }
+    else if (pathname.includes('/dashboard/support')){
+      setActiveTab('support');
+    }
+    else{
+      setActiveTab('dashboard');
+    }
+  }, [pathname]);
 
   return (
     <div className="flex h-[100dvh] w-full bg-gray-100 text-gray-900 font-sans overflow-hidden">{/*page entiere*/}
@@ -15,7 +35,7 @@ export default function RootLayout({ children }: Readonly<{
         {/* Logo Section */}
         <div className="hidden md:flex h-20 items-center px-6">{/* Logo and Title Grand bloc horizental*/}
           <div className="flex items-center gap-3">{/* Logo et titre*/}
-            <div className="w-9 h-10 bg-blue-700 rounded-lg flex items-center text-white shrink-0">{/*LOGO*/}
+            <div className="w-9 h-10 bg-blue-700 rounded-lg flex items-center justify-center text-white shrink-0">{/*LOGO*/}
               <span className="font-bold text-sm"><Shield /></span>
             </div>
             <div className="flex flex-col">{/* Titre et sous-titre*/}
@@ -29,7 +49,7 @@ export default function RootLayout({ children }: Readonly<{
         <nav className="flex flex-row w-full md:flex-col md:flex-1 md:gap-1 md:mt-6">
           {/* Dashboard Link - Le Link englobe TOUT pour que la barre bleue aille au bout à droite */}
           <Link 
-            href="/dashboard" onClick = {() => setActiveTab('dashboard')} className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
+            href="/dashboard" className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
               ${activeTab === 'dashboard'
                 ? "md:bg-blue-50/40 text-blue-700 md:before:absolute md:before:right-0 md:before:top-0 md:before:h-full md:before:w-[3px] md:before:bg-blue-700" 
                 : "md:text-gray-700 md:hover:bg-gray-300/50 hover:text-gray-900"
@@ -43,7 +63,7 @@ export default function RootLayout({ children }: Readonly<{
           </Link>
           {/*customers Link*/}
           <Link 
-            href="/dashboard/customers" onClick = {() => setActiveTab('customers')} className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
+            href="/dashboard/customers" className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
               ${activeTab === 'customers'
                 ? "md:bg-blue-50/40 text-blue-700 md:before:absolute md:before:right-0 md:before:top-0 md:before:h-full md:before:w-[3px] md:before:bg-blue-700" 
                 : "md:text-gray-700 md:hover:bg-gray-300/50 hover:text-gray-900"
@@ -57,7 +77,7 @@ export default function RootLayout({ children }: Readonly<{
           </Link>
           {/*reports Link*/}
           <Link 
-            href="/dashboard/reports" onClick = {() => setActiveTab('reports')} className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
+            href="/dashboard/reports" className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
               ${activeTab === 'reports'
                 ? "md:bg-blue-50/40 text-blue-700 md:before:absolute md:before:right-0 md:before:top-0 md:before:h-full md:before:w-[3px] md:before:bg-blue-700" 
                 : "md:text-gray-700 md:hover:bg-gray-300/50 hover:text-gray-900"
@@ -71,7 +91,7 @@ export default function RootLayout({ children }: Readonly<{
           </Link>
           {/*Settings Link*/}
           <Link 
-            href="/dashboard/settings" onClick = {() => setActiveTab('settings')} className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
+            href="/dashboard/settings" className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
               ${activeTab === 'settings'
                 ? "md:bg-blue-50/40 text-blue-700 md:before:absolute md:before:right-0 md:before:top-0 md:before:h-full md:before:w-[3px] md:before:bg-blue-700" 
                 : "md:text-gray-700 md:hover:bg-gray-300/50 hover:text-gray-900"
@@ -92,7 +112,7 @@ export default function RootLayout({ children }: Readonly<{
             <div className="w-full h-[2px] bg-gray-300 mt-2 mb-2"></div>
             {/*actions secondaires*/}
             <div className="flex flex-col gap-1">
-              <Link href="/dashboard/support" onClick = {() => setActiveTab('support')} className={`relative flex items-center justify-between px-7 py-3 font-semibold transition-all w-full group
+              <Link href="/dashboard/support" className={`relative flex items-center justify-between px-7 py-3 font-semibold transition-all w-full group
                ${activeTab === 'support'
                 ? "md:bg-blue-50/40 text-blue-700 md:before:absolute md:before:right-0 md:before:top-0 md:before:h-full md:before:w-[3px] md:before:bg-blue-700" 
                 : "md:text-gray-700 md:hover:bg-gray-300/50 hover:text-gray-900"
