@@ -2,10 +2,34 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Eye, Mail, Lock, EyeOff, FingerprintPattern, CircleQuestionMark } from "lucide-react";
+import { Eye, Mail, Lock,Circle, EyeOff, FingerprintPattern, CircleQuestionMark } from "lucide-react";
+import { signIn } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import  LoginBtn  from "@/components/login-btn";
 
 export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [error, setError] = useState("");
+    const router = useRouter();
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError("");
+
+        const resultat = await signIn("credentials", {
+            email: email,
+            password: password,
+            redirect: false,
+        });
+
+        if (resultat?.error) {
+            setError("Identifiants incorrects. Testez test@example.com et password");
+        } else {
+            router.push("/dashboard");
+        }
+    };
     return (
         <div className="flex min-h-screen w-full flex-col justify-between items-center py-3 bg-gray-100">{/*Plus grand div page entiere*/}
                 <div className="flex flex-row w-full justify-between items-center px-8">{/*div de trust verify et ?*/}
@@ -20,13 +44,14 @@ export default function Login() {
                         <h1 className="text-2xl font-bold text-black">Welcome Back</h1>
                         <p className="text-sm text-gray-500 m-2">Please enter your details to sign in</p>
                     </div>
-                    <div className="flex flex-col">{/*div du formulaire*/}
+
+                    <form onSubmit={handleSubmit} className="flex flex-col">{/*div du formulaire*/}
                         <label className="text-sm font-medium text-black">Email address</label>
                         <div className="flex items-center gap-2 w-full border border-gray-300 rounded-md py-3 px-3 mb-5 bg-gray-100 focus-within:border-blue-400 focus-within:ring-0 focus-within:ring-blue-400">{/*div de l'input email*/}
                             <span className="flex h-5 w-5 items-center justify-center text-black" aria-hidden="true">
                                 <Mail className="text-gray-500" />
                             </span>
-                            <input type="email" placeholder="name@company.com" className="w-full outline-none text-sm text-gray-600"/>
+                            <input type="email" placeholder="name@company.com" className="w-full outline-none text-sm text-gray-600" value={email} onChange={(e) => setEmail(e.target.value)} required />
                         </div>
                         <div className="flex flex-row items-center justify-between">{/*div du label et du lien mot de passe oublié*/}
                             <label className="text-sm font-medium text-black">Password</label>
@@ -38,19 +63,17 @@ export default function Login() {
                             <span className="flex h-5 w-5 items-center justify-center text-black" aria-hidden="true">
                                 <Lock className="text-gray-500" />
                             </span>
-                            <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-600"/>
+                            <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-600" value={password} onChange={(e) => setPassword(e.target.value)} required />
                             <span className="text-gray-500 cursor-pointer" aria-hidden="true" onClick={() => setShowPassword(!showPassword)}>
                                 {showPassword ? <EyeOff className="text-gray-500" /> : <Eye className="text-gray-500" />}
-                                    <circle cx="12" cy="12" r="3" stroke="#4B5563" strokeWidth="1.5"/>
                             </span>
                         </div>
                         <div className="flex items-center gap-2 mb-5">{/*div du remember me*/}
                             <input type="checkbox" id="remember" className="h-4 w-4 rounded border-gray-100 focus:ring-gray-700"/>
                             <label className="text-sm text-gray-600">Remember for 30 days</label>
                         </div>
-                        <div className="flex items-center w-full justify-center bg-blue-700 hover:bg-blue-800 text-white rounded-md shadow-md transition duration-200 my-2 py-2 mb-3 text-sm font-medium cursor-pointer">{/*div du bouton sign in*/}
-                            Sign in
-                        </div>
+                        {error && <p className="text-red-500 text-sm mb-4 text-center font-medium">{error}</p>}
+                        <LoginBtn />
                         <div className="flex flex-row items-center my-4 gap-2 justify-center">{/*div du or continue with*/}
                             <span className="flex-1 h-[2px] bg-gray-200"></span>
                             <span className="text-sm text-gray-700">or continue with</span>
@@ -81,7 +104,7 @@ export default function Login() {
                                 Create an account
                             </Link>
                         </div>
-                    </div>
+                    </form>
                 </div>
                 <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-200 border border-gray-200 text-sm text-gray-700">{/*div du all systems operational*/}
                     <span className="h-2 w-2 rounded-full bg-green-500"></span>

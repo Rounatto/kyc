@@ -3,12 +3,35 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, Scale} from "lucide-react";
+import { useRouter } from "next/navigation";
+
 export default function Register() {
     const [showPassword, setShowPassword] = useState(false);
     const [password, setPassword] = useState("");
+    const [fullName, setFullName] = useState("");
+    const [companyName, setCompanyName] = useState("");
+    const [email, setEmail] = useState("");
+    const [error, setError] = useState("");
+
     const correctLength = password.length >= 12;
     const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
     const isValid = correctLength && hasSpecialChar;
+    
+    const router = useRouter();
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError("");
+
+        if (!isValid) {
+            setError("Veuillez respecter les critères de mot de passe.");
+            return;
+        }
+        console.log("Tentative d'inscription avec :", { fullName, companyName, email, password});
+        alert("L'interface fonctionne ! (La base de données sera branche a l'etape suivante)");
+        router.push("/login");
+    }
+
 
     return (
         <div className="flex h-screen w-full flex-row bg-gray-100 overflow-hidden">{/*Plus grand div page entiere*/}
@@ -44,15 +67,15 @@ export default function Register() {
                         <h2 className="text-2xl font-bold text-gray-900">Create your account</h2>
                         <p className="text-sm text-gray-500 mt-1">Start your 14-day premium trial today.</p>
                     </div>
-                    <div className="flex flex-col gap-4">{/*div du formulaire*/}
+                    <form onSubmit={handleSubmit} className="flex flex-col gap-4">{/*div du formulaire*/}
                         <div className="flex flex-row gap-4">{/*div qui groupe les inputs Fullname et Company Name*/}
                             <div className="flex flex-col flex-1">{/*div des inputs nom et prenom*/}
                                 <label className="text-sm font-medium text-gray-700"> Full Name</label>
-                                <input type="text" placeholder="Jhon Doe" className="w-full border border-gray-300 rounded-md py-2 px-3 text-sm outline-none text-gray-600 focus:border-blue-500"/>
+                                <input type="text" placeholder="Jhon Doe" className="w-full border border-gray-300 rounded-md py-2 px-3 text-sm outline-none text-gray-600 focus:border-blue-500" value={fullName} onChange={(e) => setFullName(e.target.value)} required/>
                             </div>
                             <div className="flex flex-col flex-1">{/*div de l'input Company Name*/}
                                 <label className="text-sm font-medium text-gray-700">Company Name</label>
-                                <input type="text" placeholder="Acme Corp" className="w-full border border-gray-300 rounded-md py-2 px-3 text-sm outline-none text-gray-600 focus:border-blue-500"/>
+                                <input type="text" placeholder="Acme Corp" className="w-full border border-gray-300 rounded-md py-2 px-3 text-sm outline-none text-gray-600 focus:border-blue-500" value={companyName} onChange={(e) => setCompanyName(e.target.value)} required/>
                             </div>
                         </div>
                         <div className="flex flex-col">{/*div de l'input email*/}
@@ -61,7 +84,7 @@ export default function Register() {
                                 <span className="flex h-5 w-5 items-center justify-center text-gray-600" aria-hidden="true">
                                     <Mail className="text-gray-500"/>
                                 </span>
-                                <input type="email" placeholder="name@company.com" className="w-full outline-none text-sm text-gray-600"/>
+                                <input type="email" placeholder="name@company.com" className="w-full outline-none text-sm text-gray-600" value={email} onChange={(e) => setEmail(e.target.value)} required/>
                             </div>
                         </div>
                         <div className="flex flex-col">{/*div de l'input password*/}
@@ -70,7 +93,7 @@ export default function Register() {
                                 <span className="flex h-5 w-5 items-center justify-center text-gray-600" aria-hidden="true">
                                     <Lock className="text-gray-500" />
                                 </span>
-                                <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-600" value={password} onChange={(e) => setPassword(e.target.value)}/>
+                                <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-600" value={password} onChange={(e) => setPassword(e.target.value)} required/>
                                 <span className="text-gray-500 cursor-pointer" aria-hidden="true" onClick={() => setShowPassword(!showPassword)}>
                                     {showPassword ? <EyeOff className="text-gray-500"/> : <Eye className="text-gray-500"/>}
                                 </span>
@@ -79,10 +102,10 @@ export default function Register() {
                                 Must be at least 12 characters with 1 special symbol.
                             </p>
                         </div>
-                        <button className="w-full bg-blue-700 text-white py-2 px-4 rounded-sm hover:bg-blue-600 transition-colors text-sm font-medium mt-4">Create Account</button>
+                        <button className="w-full bg-blue-700 text-white py-2 px-4 rounded-sm hover:bg-blue-600 transition-colors text-sm font-medium mt-4" type="submit">Create Account</button>
                         <div className="w-full h-[2px] bg-gray-200 mt-4"></div>
                         <p className="text-sm text-gray-500 text-center">Already have an account? <Link href="/login" className="text-blue-600 hover:underline">Log in</Link></p>
-                    </div>
+                    </form>
                 </div>
             </div>
         </div> 

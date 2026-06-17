@@ -1,6 +1,6 @@
 "use client"
 
-import { ChartColumn, LayoutDashboard, LogOut, MessageCircleQuestionMark, Settings, Shield, User } from 'lucide-react';
+import { ChartColumn,MessageCircle, LayoutDashboard, LogOut, MessageCircleQuestionMark, Settings, Shield, User } from 'lucide-react';
 import Link from 'next/link'
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
@@ -23,6 +23,9 @@ export default function RootLayout({ children }: Readonly<{
     }
     else if (pathname.includes('/dashboard/support')){
       setActiveTab('support');
+    }
+    else if (pathname.includes('/dashboard/chat')){
+      setActiveTab('chat');
     }
     else{
       setActiveTab('dashboard');
@@ -101,6 +104,19 @@ export default function RootLayout({ children }: Readonly<{
                 <span className="font-bold text-sm"><Settings /></span>
               </div>
               <span className="text-[11px] md:text-sm font-medium">Settings</span>
+            </div>
+          </Link>
+          <Link 
+            href="/dashboard/chat" className={`relative flex flex-col md:flex-row items-center justify-center md:justify-between flex-1 md:flex-none py-2 md:px-7 md:py-3 font-semibold transition-all md:w-full group
+              ${activeTab === 'chat'
+                ? "md:bg-blue-50/40 text-blue-700 md:before:absolute md:before:right-0 md:before:top-0 md:before:h-full md:before:w-[3px] md:before:bg-blue-700" 
+                : "md:text-gray-700 md:hover:bg-gray-300/50 hover:text-gray-900"
+              }`}>
+            <div className="flex flex-col items-center gap-0.5 md:flex-row md:gap-3">{/*Icone et titre*/}
+              <div className="flex items-center justify-center w-6 h-6 md:w-8 md:h-8 rounded-lg shrink-0">
+                <span className="font-bold text-sm"><MessageCircle /></span>
+              </div>
+              <span className="text-[11px] md:text-sm font-medium">Chat</span>
             </div>
           </Link>
         </nav>

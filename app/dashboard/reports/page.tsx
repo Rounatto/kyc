@@ -1,61 +1,19 @@
 "use client"
 import Link from "next/link";
-import VerificationTable from "@/components/VerificationTable";
 import { 
-    Calendar, Download, ChevronDown, Shield, ClipboardClock, 
-    Clock, ShieldCheck, TriangleAlert, Gavel, Flag, Earth, 
-    TrendingUp, TrendingDown, Minus
+    Calendar, Download, ChevronDown, Shield,
+    Clock, ShieldCheck, TriangleAlert, 
+    TrendingUp, TrendingDown, Minus, RefreshCw
 } from "lucide-react";
 import Header from "@/components/header";
-
-const recentRequestsData = [
-    {
-        id: 1,
-        Avatar:"EL",
-        Nom: "Eleanor Lewis",
-        Email: "e.lewis@corporate.com",
-        Type: "Individual KYC",
-        Submitted: "Oct 24, 14:20",
-        Status: "verified",
-        Score: "98/100",
-    },
-    {
-        id: 2,
-        Avatar:"MR",
-        Nom: "Marcus Rossi",
-        Email: "m.rossi@globex.io",
-        Type: "Corporate KYB",
-        Submitted: "Oct 24, 13:45",
-        Status: "pending",
-        Score: "--",
-    },
-    {
-        id: 3,
-        Avatar:"BT",
-        Nom: "Braker Tech Ltd",
-        Email: "complance@braker.net",
-        Type: "Entity Screening",
-        Submitted: "Oct 24, 11:12",
-        Status: "rejected",
-        Score: "12/100",
-    },
-    {
-        id: 4,
-        Avatar:"SK",
-        Nom: "Sienna Kim",
-        Email: "skim@creative.co",
-        Type: "Individual KYC",
-        Submitted: "Oct 24, 09:30",
-        Status: "verified",
-        Score: "94/100",
-    }
-];
+import { useState } from "react";
 
 export default function Report() {
+    const [action, setAction] = useState("");
     return (
         <div className="w-full">
             <Header />
-            <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8">
+            <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-4 md:px-8 lg:px-12 mt-8">
                 <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end bg-gray-100 gap-4 lg:gap-0">
                     <div className="flex flex-col mb-2">
                         <h2 className="text-2xl font-bold text-gray-900">Reports and Analytics</h2>
@@ -138,25 +96,25 @@ export default function Report() {
                 </div>
 
                 <div className="flex flex-col lg:flex-row justify-between gap-4 mt-2">
-                    <div className="flex flex-col w-full lg:w-[70%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">{/*Graphique de volume de vérification*/}
-                        <h2 className="font-bold text-lg mb-5">Verification Volume Over Time</h2>
-                        <div className="flex flex-row items-end justify-between h-64 gap-3 mb-2 px-2 border border-t-0 border-gray-200">
+                    <div className="flex flex-col w-full lg:w-[70%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">
+                        <h2 className="font-bold text-lg mb-8">Verification Volume Over Time</h2>
+                        <div className="flex flex-row items-end justify-between h-64 gap-4 mb-6 px-2">
                             {[
-                                { h: "40%", v: "400" },
-                                { h: "55%", v: "550" },
+                                { h: "40%", v: "300" },
+                                { h: "55%", v: "400" },
                                 { h: "45%", v: "450" },
-                                { h: "70%", v: "700" },
-                                { h: "65%", v: "650" },
-                                { h: "85%", v: "850" },
-                                { h: "100%", v: "1000" }
+                                { h: "65%", v: "600" },
+                                { h: "55%", v: "500" },
+                                { h: "80%", v: "750" },
+                                { h: "95%", v: "900" }
                             ].map((item, index) => (
                                 <div key={index} className="flex flex-col items-center flex-1 group gap-2 relative h-full justify-end">
-                                    <div className="hidden group-hover:flex bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-lg z-10">
+                                    <div className="absolute -top-10 hidden group-hover:flex bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-lg z-10">
                                         {item.v}
                                     </div>
                                     <div 
                                         style={{ height: item.h }}
-                                        className="w-full bg-blue-100 rounded-t-sm transition-all duration-300 hover:bg-blue-700 cursor-pointer"
+                                        className="w-full bg-blue-100 rounded-t-sm transition-all duration-300 group-hover:bg-blue-700 cursor-pointer"
                                     />
                                 </div>
                             ))}
@@ -165,44 +123,126 @@ export default function Report() {
                             <p>Mon</p><p>Tue</p><p>Wed</p><p>Thu</p><p>Fri</p><p>Sat</p><p>Sun</p>
                         </div>
                     </div>
-                    /*A continuer*/
+
                     <div className="flex flex-col w-full lg:w-[35%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">
-                        <h2 className="font-bold text-lg mb-6">High Risk Alerts</h2>
-                        <div className="flex flex-col gap-6">
-                            <div className="flex items-center gap-4">
-                                <div className="bg-red-100 p-3 rounded-xl text-red-700">
-                                    <Gavel className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-bold">Johanathan Vance</p>
-                                    <p className="text-xs text-gray-500">PEP Match identified</p>
-                                </div>
-                                <p className="text-xs text-gray-400 ml-auto">2m ago</p>
+                        <h2 className="font-bold text-lg mb-4">Status Distribution</h2>
+                        
+                        <div className="flex-1 flex flex-col items-center justify-center w-full relative my-4">
+                            <svg viewBox="0 0 200 200" className="w-full max-w-[220px] h-auto drop-shadow-sm">
+                                <rect x="45" y="45" width="110" height="110" rx="12" fill="none" stroke="#f3f4f6" strokeWidth="14" />
+                                <text x="100" y="105" textAnchor="middle" fill="#111827" fontSize="28" fontWeight="bold">12k</text>
+                                <text x="100" y="125" textAnchor="middle" fill="#6b7280" fontSize="10" fontWeight="bold">TOTAL</text>
+                                
+                                <path d="M 35 95 L 100 160" stroke="#ef4444" strokeWidth="12" strokeLinecap="butt" />
+                                <path d="M 100 160 L 165 95 L 95 25" fill="none" stroke="#16a34a" strokeWidth="12" strokeLinecap="butt" strokeLinejoin="miter" />
+                                <path d="M 55 35 L 165 75" stroke="#f59e0b" strokeWidth="12" strokeLinecap="butt" />
+                            </svg>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-y-3 gap-x-2 w-full mt-auto px-2">
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 bg-green-600 shrink-0"></div>
+                                <p className="text-[11px] text-gray-500 font-medium truncate">Approved (75%)</p>
                             </div>
-                            <div className="flex items-center gap-4">
-                                <div className="bg-red-100 p-3 rounded-xl text-red-700">
-                                    <Flag className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-bold">Sarrah McHale</p>
-                                    <p className="text-xs text-gray-500">IP Anomaly: Moscow</p>
-                                </div>
-                                <p className="text-xs text-gray-400 ml-auto">1h ago</p>
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 bg-yellow-500 shrink-0"></div>
+                                <p className="text-[11px] text-gray-500 font-medium truncate">Pending (15%)</p>
                             </div>
-                            <div className="flex items-center gap-4">
-                                <div className="bg-red-100 p-3 rounded-xl text-red-700">
-                                    <Earth className="w-6 h-6" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-bold">Zeno Logistics Ltd</p>
-                                    <p className="text-xs text-gray-500">Sanctions List Hit</p>
-                                </div>
-                                <p className="text-xs text-gray-400 ml-auto">3h ago</p>
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 bg-red-500 shrink-0"></div>
+                                <p className="text-[11px] text-gray-500 font-medium truncate">Rejected (7%)</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 bg-red-800 shrink-0"></div>
+                                <p className="text-[11px] text-gray-500 font-medium truncate">Flagged (3%)</p>
                             </div>
                         </div>
                     </div>
                 </div>
-                <VerificationTable data={recentRequestsData} />
+
+                <div className="flex flex-col w-full border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden mt-2 hover:shadow-md transition-all duration-300">
+                    <div className="flex flex-row justify-between items-center p-4 md:p-6 border-b border-gray-100 bg-white">
+                        <h2 className="font-bold text-base md:text-lg text-gray-900 shrink-0">Recent Reports</h2>
+                        <Link href="#" className="text-xs md:text-sm font-medium text-blue-700 hover:underline shrink-0">View all</Link>
+                    </div>
+                    
+                    <div className="w-full">
+                        <table className="w-full text-left border-collapse table-fixed">
+                            <thead className="text-[9px] md:text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-100 bg-gray-50/30">
+                                <tr>
+                                    <th className="w-[32%] md:w-[32%] px-2 md:px-4 py-3 md:py-4">REPORT NAME</th>
+                                    <th className="w-[15%] md:w-[12%] px-2 md:px-4 py-3 md:py-4">TYPE</th>
+                                    <th className="w-[23%] md:w-[25%] px-2 md:px-4 py-3 md:py-4">GENERATION DATE</th>
+                                    <th className="w-[20%] md:w-[20%] px-2 md:px-4 py-3 md:py-4">STATUS</th>
+                                    <th className="w-[10%] md:w-[11%] px-2 md:px-4 py-3 md:py-4 text-center">ACTION</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 text-[10px] md:text-sm text-gray-700 font-medium">
+                                <tr className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-900 font-bold">
+                                        Monthly KYC Summary - October
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4">
+                                        <span className="bg-blue-100 text-blue-600 px-1.5 md:px-2 py-0.5 md:py-1 rounded text-[8px] md:text-[10px] font-bold">KYC</span>
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-500">
+                                        01 Nov 2023, 08:30
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4">
+                                        <span className="bg-green-100/50 text-green-700 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-xs font-medium flex items-center gap-1 md:gap-1.5 w-max max-w-full">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-green-600 shrink-0"></div>
+                                            <span className="truncate">Ready</span>
+                                        </span>
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4 text-center">
+                                        <Download className="w-4 h-4 md:w-5 md:h-5 text-blue-600 hover:text-blue-800 cursor-pointer mx-auto shrink-0" />
+                                    </td>
+                                </tr>
+                                <tr className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-900 font-bold">
+                                        AML Compliance Alert - Q3
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4">
+                                        <span className="bg-red-100 text-red-600 px-1.5 md:px-2 py-0.5 md:py-1 rounded text-[8px] md:text-[10px] font-bold">AML</span>
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-500">
+                                        28 Oct 2023, 14:15
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4">
+                                        <span className="bg-green-100/50 text-green-700 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-xs font-medium flex items-center gap-1 md:gap-1.5 w-max max-w-full">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-green-600 shrink-0"></div>
+                                            <span className="truncate">Ready</span>
+                                        </span>
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4 text-center">
+                                        <Download className="w-4 h-4 md:w-5 md:h-5 text-blue-600 hover:text-blue-800 cursor-pointer mx-auto shrink-0" />
+                                    </td>
+                                </tr>
+                                <tr className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-900 font-bold">
+                                        Corporate Entity Audit (KYB)
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4">
+                                        <span className="bg-gray-200 text-gray-700 px-1.5 md:px-2 py-0.5 md:py-1 rounded text-[8px] md:text-[10px] font-bold">KYB</span>
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-500">
+                                        Today, 10:05
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4">
+                                        <span className="bg-orange-100/50 text-orange-700 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-xs font-medium flex items-center gap-1 md:gap-1.5 w-max max-w-full">
+                                            <RefreshCw className="w-2 h-2 md:w-3 md:h-3 shrink-0" />
+                                            <span className="truncate">In progress</span>
+                                        </span>
+                                    </td>
+                                    <td className="px-2 md:px-4 py-3 md:py-4 text-center">
+                                        <Download className="w-4 h-4 md:w-5 md:h-5 text-gray-400 hover:text-gray-600 cursor-pointer mx-auto shrink-0" />
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
             </div>
         </div>
     );
