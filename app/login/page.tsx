@@ -70,7 +70,7 @@ export default function Login() {
                         </div>
                         <div className="flex items-center gap-2 mb-5">{/*div du remember me*/}
                             <input type="checkbox" id="remember" className="h-4 w-4 rounded border-gray-100 focus:ring-gray-700"/>
-                            <label className="text-sm text-gray-600">Remember for 30 days</label>
+                            <label className="text-sm text-gray-600">Remember for 15 days</label>
                         </div>
                         {error && <p className="text-red-500 text-sm mb-4 text-center font-medium">{error}</p>}
                         <LoginBtn />
@@ -110,7 +110,7 @@ export default function Login() {
                     <span className="h-2 w-2 rounded-full bg-green-500"></span>
                     All systems operational
                 </div>
-            </div>{}
+            </div>
             <div className="flex flex-row items-center gap-10 mb-4 text-sm text-gray-500 justify-center">{/*div du footer*/}
                 <Link href="/privacy-policy" className="hover:underline hover:text-gray-700">
                     Privacy Policy

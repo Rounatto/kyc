@@ -1,11 +1,17 @@
 import { Search, CircleQuestionMark, Bell,LogOut, User } from "lucide-react";
 import { useState } from "react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 
 export default function Header(){
 
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+    const { data: session, status } = useSession();
+    const userName = session?.user?.name || "Utilisateur";
+    const userEmail = session?.user?.email || "chargement...";
+    const userInitial = userName.charAt(0).toUpperCase();
+    const userImage = session?.user?.image;
 
     return(
             <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8">{/*Header*/}  
@@ -29,15 +35,22 @@ export default function Header(){
                     </button>
                     <div className="relative">
                         <div onClick={() => setIsMenuOpen(!isMenuOpen)} className="w-9 h-10 mr-2 md:mr-3 bg-gray-300 rounded-xl overflow-hidden border border-gray-200 cursor-pointer">{/*contenaire de l'image de profil*/}
-                            <div className="w-full h-full bg-slate-400"></div>{/*Image de profil*/}
+                            {userImage ? (
+                                <img src={userImage} alt="Avatar" className="w-full h-full object-cover" />
+                            ) : (
+                                <span>{status === "loading" ? "..." : userInitial}</span>
+                            )}
                         </div>
                         {isMenuOpen && (
                             <div className="absolute right-2 mt-2 w-48 bg-white bordder border-gray-200 rounded-md shadow-lg py-1 z-50">
                                 <div className="px-4 py-2 border-b border-gray-100 mb-1">
-                                    <p className="text-sm font-medium text-gray-900">Mon Compte</p>
-                                    <p className="text-xs text-gray-500 truncate">admin@trustverify.com</p>
+                                    <p className="text-sm font-medium text-gray-900 truncate">{userName}</p>
+                                    <p className="text-xs text-gray-500 truncate">{userEmail}</p>
                                 </div>
-                                <Link href="#" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"><User className="w-4 h-4" />Mon Profile</Link>
+                                <Link href="#" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                                    <User className="w-4 h-4" />
+                                    Mon Profile
+                                </Link>
                                 <button onClick={() => signOut({ callbackUrl: "/login"})} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-100 transition-colors mt-1 border-t border-gray-100 cursor-pointer"><LogOut className="w-4 h-4" />Logout</button>
                             </div>
                         )}
