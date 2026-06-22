@@ -5,7 +5,7 @@ import { Bell, MessageCircleQuestionMark, Search, CircleQuestionMark, Calendar, 
 import Header from "@/components/header";
 
 const recentRequestsData = [
-    {/*entre{} c est la une (row)*/
+    {
         id: 1,
         Avatar:"EL",/*URL de l'avatar du client, peut être une image ou des initiales*/
         Nom: "Eleanor Lewis",
