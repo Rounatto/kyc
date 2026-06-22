@@ -41,7 +41,32 @@ export const authOptions: NextAuthOptions = {
     })
   ],
   session: {
-    strategy: "jwt",
+    strategy: "jwt" as const
+  },
+  callbacks: {
+    async jwt({ token, user, trigger, session }) {
+      if (user) {
+        token.id = user.id;
+        token.name = user.name;
+        token.image = user.image;
+        token.companyName = (user as any).companyName;
+      }
+      if (trigger === "update" && session?.user) {
+        token.name = session.user.name;
+        token.image = session.user.image;
+        token.companyName = session.user.companyName;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (token && session.user) {
+        session.user.id = token.id as string;
+        session.user.name = token.name;
+        session.user.image = token.image as string;
+        (session.user as any).companyName = token.companyName as string;
+      }
+      return session;
+    },
   },
   pages: {
     signIn: "/login",
