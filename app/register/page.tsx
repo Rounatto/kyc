@@ -27,11 +27,24 @@ export default function Register() {
             setError("Veuillez respecter les critères de mot de passe.");
             return;
         }
-        console.log("Tentative d'inscription avec :", { fullName, companyName, email, password});
-        alert("L'interface fonctionne ! (La base de données sera branche a l'etape suivante)");
-        router.push("/login");
+        try{
+            const response = await fetch("/api/register", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ email, password, fullName, companyName }),
+            });
+            if (response.ok) {
+                router.push("/login");
+            } else {
+                const data = await response.json();
+                setError(data.error || "Une erreur est survenue lors de l'inscription.");
+            }
+        } catch (err) {
+            setError("Impossible de se connecter au serveur.");
+        }
     }
-
 
     return (
         <div className="flex h-screen w-full flex-row bg-gray-100 overflow-hidden">{/*Plus grand div page entiere*/}

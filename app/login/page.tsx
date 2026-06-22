@@ -25,7 +25,7 @@ export default function Login() {
         });
 
         if (resultat?.error) {
-            setError("Identifiants incorrects. Testez test@example.com et password");
+            setError("Email ou mot de passe incorrect.");
         } else {
             router.push("/dashboard");
         }
