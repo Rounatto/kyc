@@ -12,6 +12,7 @@ export default function Header(){
     const userEmail = session?.user?.email || "chargement...";
     const userInitial = userName.charAt(0).toUpperCase();
     const userImage = session?.user?.image;
+    const companyName = (session?.user as any)?.companyName || "";
 
     return(
             <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8">{/*Header*/}  
@@ -49,7 +50,7 @@ export default function Header(){
                                     </div>
                                 <Link href="/dashboard/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                                     <User className="w-4 h-4" />
-                                    Mon Profile
+                                    Profil
                                 </Link>
                                 <button onClick={() => signOut({ callbackUrl: "/login"})} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-100 transition-colors mt-1 border-t border-gray-100 cursor-pointer"><LogOut className="w-4 h-4" />Logout</button>
                             </div>
