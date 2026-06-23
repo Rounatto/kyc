@@ -12,6 +12,9 @@ export default function Login() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
+
+    const [rememberMe, setRememberMe] = useState(false);
+
     const router = useRouter();
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -21,6 +24,7 @@ export default function Login() {
         const resultat = await signIn("credentials", {
             email: email,
             password: password,
+            rememberMe: rememberMe.toString(),
             redirect: false,
         });
 
@@ -69,7 +73,7 @@ export default function Login() {
                             </span>
                         </div>
                         <div className="flex items-center gap-2 mb-5">{/*div du remember me*/}
-                            <input type="checkbox" id="remember" className="h-4 w-4 rounded border-gray-100 focus:ring-gray-700"/>
+                            <input type="checkbox" id="remember" className="h-4 w-4 rounded border-gray-100 focus:ring-gray-700" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)}/>
                             <label className="text-sm text-gray-600">Remember for 15 days</label>
                         </div>
                         {error && <p className="text-red-500 text-sm mb-4 text-center font-medium">{error}</p>}

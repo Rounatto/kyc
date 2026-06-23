@@ -9,7 +9,8 @@ export const authOptions: NextAuthOptions = {
       name: "Connexion",
       credentials: {
         email: { label: "Email", type: "email", placeholder: "test@example.com" },
-        password: { label: "Password", type: "password" }
+        password: { label: "Password", type: "password" },
+        rememberMe: { label: "Remember Me", type: "checkbox" }
       },
       
       async authorize(credentials): Promise<any> { 
@@ -36,13 +37,15 @@ export const authOptions: NextAuthOptions = {
           email: user.email,
           name: user.fullName,
           companyName: (user as any).companyName,
-          image: user.avatarUrl
+          image: user.avatarUrl,
+          rememberMe: credentials?.rememberMe === "true"
         };
       }
     })
   ],
   session: {
-    strategy: "jwt" as const
+    strategy: "jwt" as const,
+    maxAge: 15 * 24 * 60 * 60,
   },
   callbacks: {
     async jwt({ token, user, trigger, session }) {
@@ -51,6 +54,11 @@ export const authOptions: NextAuthOptions = {
         token.name = user.name;
         token.image = user.image;
         token.companyName = (user as any).companyName;
+        if ((user as any).rememberMe) {
+          token.exp = Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60;
+        } else {
+          token.exp = Math.floor(Date.now() / 1000) + (1 * 24 * 60 * 60);
+        }
       }
       if (trigger === "update" && session?.user) {
         token.name = session.user.name;
