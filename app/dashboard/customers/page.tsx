@@ -1,92 +1,114 @@
 "use client"
-import Link from "next/link";
-import VerificationLogTable from "@/components/VerificationLogTable";
-import { Bell, MessageCircleQuestionMark,User, Search, CircleQuestionMark, Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, Gavel, Flag, Earth, ListFilter} from "lucide-react";
-const recentRequestsData = [
-    {/*entre{} c est la une (row)*/
-        id: 1,
-        Avatar:"JD",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Jameson Dillinger",
-        Email: "j.dillinger@corporate.com",
-        Status: "verified",
-        RiskLevel: "Low",
-        DateAdded: "Oct 12, 2023 14:32 PM"
-        
-    },
-    {
-        id: 2,
-        Avatar:"MW",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Mariana Woods",
-        Email: "m.rossi@globex.io",
-        Status: "pending",
-        RiskLevel: "Medium",
-        DateAdded: "Oct 14, 2023 09:15 AM"
-    },
-    {
-        id: 3,
-        Avatar:"AK",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Alper Kamu",
-        Email: "akamu@braker.net",
-        Status: "action required",
-        RiskLevel: "High",
-        DateAdded: "Oct 14, 2023 11:04 AM"
-    },
-    {
-        id: 4,
-        Avatar:"SH",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Sarah Henderson",
-        Email: "s.henderson@creative.co",
-        Status: "verified",
-        RiskLevel: "Low",
-        DateAdded: "Oct 15, 2023 08:45 AM"
-    }
-];
-export default function CustomerPage() {
-    return (
-        <div className="w-full">{/*page entière*/}
-            <header className="flex items-center justify-between gap-4 border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8">{/*Header*/}
-                
-                <div className="flex items-center gap-4 lg:gap-8 flex-1">{/*Logo et search*/}
 
-                            <div className="flex relative flex-row mt-2 md:mt-3 w-full max-w-[150px] sm:max-w-xs lg:max-w-[340px] border border-gray-300 rounded-lg text-sm outline-none bg-gray-200/50 text-gray-700 placeholder-gray-400">{/*Search bar*/}
-                                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true">{/*Icone de loupe*/}
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                        <circle cx="11" cy="11" r="6.5" />
-                                        <path d="m16.2 16.2 4.1 4.1" />
-                                    </svg>
-                                </span>
-                                <input type="text" placeholder="Search customers..." className="w-full bg-transparent border-transparent rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-all text-gray-800 placeholder-gray-600 truncate"/>{/*Input de recherche*/}
-                            </div>
-                    </div>
-                <div className="flex items-center gap-1 sm:gap-2 mt-2 md:mt-3 shrink-0">{/*Actions secondaires en haut a droite*/}
-                    <button className="text-gray-700 hover:text-gray-700 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200">{/*Button sonnerie*/}
-                        <span className="sr-only">Notifications</span>
-                        <Bell />
-                    </button>
-                    <button className="text-gray-700 hover:text-gray-700 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200">{/*Button information*/}
-                        <span className="sr-only">Information</span>
-                        <CircleQuestionMark />
-                    </button>
-                    <div className="w-9 h-10 mr-2 md:mr-3 bg-gray-300 rounded-xl overflow-hidden border border-gray-200 cursor-pointer">{/*contenaire de l'image de profil*/}
-                        <div className="w-full h-full bg-slate-400"></div>{/*Image de profil*/}
-                    </div>
-                </div>
-            </header>
-            <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8 ">{/* section de ce qui il y a a droite*/}
-                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end bg-gray-100 gap-4 lg:gap-0">{/*Section de titre et boutons*/}
-                    <div className="flex flex-col mb-2">{/*Titre et sous-titre*/}
+import Link from "next/link";
+import { useState, useEffect } from "react";
+import VerificationLogTable from "@/components/VerificationLogTable";
+import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert } from "lucide-react";
+import CustomerHeader from "@/components/HeaderCustomers";
+
+export default function CustomerPage() {
+    const [customers, setCustomers] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [totalItems, setTotalItems] = useState(0);
+
+    const limitPerPage = 10;
+
+    useEffect(() => {
+        async function fetchCustomers() {
+            setLoading(true);
+            try{
+                const response = await fetch(`/api/customers?page=${currentPage}&limit=${limitPerPage}`);
+                const data = await response.json();
+
+                if (response.ok && data.requests) {
+                    const formattedData = data.requests.map((req: any) => {
+                        const initials = req.customerName ? req.customerName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2) : "??";
+                        
+                        let dateFormatted = "N/A";
+                        if (req.submittedAt) {
+                            const d = new Date(req.submittedAt);
+                            if (!isNaN(d.getTime())) {
+                                const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                                dateFormatted = `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+                            }
+                        }
+                        
+                        // 1. Intelligent Score Parsing
+                        let risk = "Medium";
+                        let parsedScore = NaN;
+                        
+                        if (req.score) {
+                            // Extract only the numbers (e.g., "20/100" -> "20")
+                            const match = String(req.score).match(/\d+/);
+                            if (match) {
+                                parsedScore = parseInt(match[0], 10);
+                            }
+                        }
+
+                        // 2. Dynamic Risk Calculation
+                        if (!isNaN(parsedScore)) {
+                            if (parsedScore >= 80) risk = "Low";
+                            else if (parsedScore <= 50) risk = "High";
+                        }
+
+                        return {
+                            id: req.id,
+                            Avatar: initials,
+                            Nom: req.customerName,
+                            Email: req.email,
+                            Status: req.status ? req.status.toLowerCase() : "pending",
+                            RiskLevel: risk,
+                            DateAdded: dateFormatted,
+                        };
+                    });
+                    
+                    setCustomers(formattedData);
+                    setTotalItems(data.total);
+                    setTotalPages(Math.ceil(data.total / limitPerPage));
+                }
+            } catch (error) {
+                console.error("Error fetching customers:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+        fetchCustomers();   
+    }, [currentPage]);
+
+    const handleNextPage = () => {
+        if (currentPage < totalPages) {
+            setCurrentPage((prev) => prev + 1);
+        }
+    };
+
+    const handlePrevPage = () => {
+        if (currentPage > 1) {
+            setCurrentPage((prev) => prev - 1);
+        }
+    };
+
+    return (
+        <div className="w-full">
+            
+            <CustomerHeader />
+            
+            <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end bg-gray-100 gap-4 lg:gap-0">
+                    <div className="flex flex-col mb-2">
                         <p className="text-sm text-gray-700">Organization / <span className="text-blue-700">Customers</span></p>
-                        <h2 className="text-2xl font-bold text-gray-900">Customer Directory</h2>{/*Titre*/}
-                        <p className="text-sm text-gray-500">Manage identity verifications and monitor entreprise risk profiles.</p>{/*Sous-titre*/}
+                        <h2 className="text-2xl font-bold text-gray-900">Customer Directory</h2>
+                        <p className="text-sm text-gray-500">Manage identity verifications and monitor entreprise risk profiles.</p>
                     </div>
-                    <div className="flex flex-row gap-3 w-full lg:w-auto">{/*les deux boutons*/}
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">{/*Button Last 30 days*/}
+                    <div className="flex flex-row gap-3 w-full lg:w-auto">
+                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
                             <span className="flex items-center justify-center text-gray-600" aria-hidden="true">
                                 <ListFilter />
                             </span>
                             <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Filter</p>
                         </button>
-                        <button className=" flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">{/*Button Export*/}
+                        <button className=" flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
                             <span className="flex items-center justify-center text-gray-700" aria-hidden="true">
                                 <Download />
                             </span>
@@ -94,99 +116,113 @@ export default function CustomerPage() {
                         </button>
                     </div>
                 </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">{/* section des 4 cartes de résumé*/}
-                        <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">{/*1ère carte*/}
-                            <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
-                                <p className="text-sm font-semibold text-gray-500 truncate">Total Customers</p>
-                                <div className="text-blue-800 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <User />
-                                </div>       
-                            </div>
-                            <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
-                                <p className="text-2xl font-bold text-gray-900 leading-none">12,482</p>
-                                <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">{/*le ptit logo vert*/}
-                                        +4.2%
-                                </div>
-                            </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
+                    <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                        <div className="flex flex-row justify-between items-start w-full">
+                            <p className="text-sm font-semibold text-gray-500 truncate">Total Customers</p>
+                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center">
+                                <User />
+                            </div>       
                         </div>
-                        <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">{/*2ème carte*/}
-                            <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
-                                <p className="text-sm font-semibold text-gray-500 truncate">Verified Today</p>
-                                <div className="text-green-700 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <ShieldCheck />
-                                </div>       
-                            </div>
-                            <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
-                                <p className="text-2xl font-bold text-gray-900 leading-none">842</p>
-                                <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">{/*le ptit logo vert*/}
-                                        +12%
-                                </div>
-                            </div>
-                        </div>
-                        <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">{/*3ème carte*/}
-                            <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
-                                <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
-                                <div className="text-yellow-500 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <ClipboardClock />
-                                </div>       
-                            </div>
-                            <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
-                                <p className="text-2xl font-bold text-gray-900 leading-none">156</p>
-                                <div className="text-gray-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">{/*le ptit logo vert*/}
-                                        <p className="text-gray-700">-2.1%</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">{/*4ème carte*/}
-                            <div className="flex flex-row justify-between items-start w-full">{/*Titre et chiffre*/}
-                                <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
-                                <div className="text-red-700 text-sm font-bold flex items-center justify-center">{/*le ptit logo bleu*/}
-                                    <TriangleAlert />
-                                </div>       
-                            </div>
-                            <div className="flex flex-row justify-between items-end w-full mt-4">{/*Chiffre et pourcentage*/}
-                                <p className="text-2xl font-bold text-gray-900 leading-none">24</p>
-                                <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">{/*le ptit logo vert*/}
-                                        <p className="text-red-700">+3 Today</p>
-                                </div>
+                        <div className="flex flex-row justify-between items-end w-full mt-4">
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{totalItems}</p>
+                            <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
+                                +4.2%
                             </div>
                         </div>
                     </div>
-                    <VerificationLogTable data={recentRequestsData} />{/*Le tableau des recent verification requests*/}
-                    
-                    <div className="flex flex-col lg:flex-row gap-4 md:gap-6 w-full mt-8">
-                        <div className="flex flex-col w-full lg:w-[70%] bg-white border border-gray-200 rounded-xl shadow-sm p-5 md:p-6">
-                            <div className="flex flex-row justify-between items-center mb-6">
-                                <h3 className="font-bold text-gray-900 text-base md:text-lg">Verification Velocity</h3>
-                                <span className="text-xs md:text-sm text-gray-500 font-medium">Last 30 Days</span>
-                            </div>
-                            <div className="w-full bg-slate-50/50 rounded-lg h-[200px] flex items-center justify-center relative overflow-hidden border border-gray-100">
-                                <svg viewBox="0 0 500 150" className="w-full h-full absolute inset-0 preserve-aspect-ratio-none" preserveAspectRatio="none">
-                                    <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100 L510,160 L-10,160 Z" fill="#eff6ff" opacity="0.6" />
-                                    <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100" fill="none" stroke="#2563eb" strokeWidth="3.5" strokeLinecap="round" />
-                                </svg>
-                                <span className="text-xs md:text-sm text-gray-600 italic relative z-10 font-medium">Real-time processing volume visualization</span>
+                    <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                        <div className="flex flex-row justify-between items-start w-full">
+                            <p className="text-sm font-semibold text-gray-500 truncate">Verified Today</p>
+                            <div className="text-green-700 text-sm font-bold flex items-center justify-center">
+                                <ShieldCheck />
+                            </div>       
+                        </div>
+                        <div className="flex flex-row justify-between items-end w-full mt-4">
+                            <p className="text-2xl font-bold text-gray-900 leading-none">842</p>
+                            <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
+                                +12%
                             </div>
                         </div>
-
-                        <div className="flex flex-col w-full lg:w-[30%] bg-blue-600 rounded-xl shadow-sm p-5 md:p-6 text-white justify-between">
-                            <div className="flex flex-col gap-4">
-                                <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
-                                    <path d="M11.64 5.23a.75.75 0 0 1 1.44 0l1.24 3.86a.75.75 0 0 0 .52.52l3.86 1.24a.75.75 0 0 1 0 1.44l-3.86 1.24a.75.75 0 0 0-.52.52l-1.24 3.86a.75.75 0 0 1-1.44 0l-1.24-3.86a.75.75 0 0 0-.52-.52l-3.86-1.24a.75.75 0 0 1 0-1.44l3.86-1.24a.75.75 0 0 0 .52-.52z"/>
-                                    <path d="M19.32 2.68a.5.5 0 0 1 .96 0l.4 1.2a.5.5 0 0 0 .34.34l1.2.4a.5.5 0 0 1 0 .96l-1.2.4a.5.5 0 0 0-.34.34l-.4 1.2a.5.5 0 0 1-.96 0l-.4-1.2a.5.5 0 0 0-.34-.34l-1.2-.4a.5.5 0 0 1 0-.96l1.2-.4a.5.5 0 0 0 .34-.34z"/>
-                                </svg>
-                                
-                                <h3 className="font-bold text-lg md:text-xl">AI Risk Scoring</h3>
-                                <p className="text-blue-100 text-sm md:text-base leading-relaxed">
-                                    Our new neural engine has flagged 3 potential anomalies in the last hour. Manual review recommended.
-                                </p>
+                    </div>
+                    <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                        <div className="flex flex-row justify-between items-start w-full">
+                            <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
+                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center">
+                                <ClipboardClock />
+                            </div>       
+                        </div>
+                        <div className="flex flex-row justify-between items-end w-full mt-4">
+                            <p className="text-2xl font-bold text-gray-900 leading-none">156</p>
+                            <div className="text-gray-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
+                                <p className="text-gray-700">-2.1%</p>
                             </div>
-                            <button className="mt-6 w-full py-2.5 bg-blue-500 hover:bg-blue-400 transition-colors border border-blue-400 rounded-lg font-medium text-sm cursor-pointer">
-                                Review Anomalies
-                            </button>
+                        </div>
+                    </div>
+                    <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                        <div className="flex flex-row justify-between items-start w-full">
+                            <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
+                            <div className="text-red-700 text-sm font-bold flex items-center justify-center">
+                                <TriangleAlert />
+                            </div>       
+                        </div>
+                        <div className="flex flex-row justify-between items-end w-full mt-4">
+                            <p className="text-2xl font-bold text-gray-900 leading-none">24</p>
+                            <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
+                                <p className="text-red-700">+3 Today</p>
+                            </div>
                         </div>
                     </div>
                 </div>
+
+                {loading ? (
+                    <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">
+                        Loading customers data...
+                    </div>
+                ) : (
+                    <VerificationLogTable 
+                        data={customers} 
+                        currentPage={currentPage}
+                        totalPages={totalPages}
+                        totalItems={totalItems}
+                        onNextPage={handleNextPage}
+                        onPrevPage={handlePrevPage}
+                    />
+                )}
+                
+                <div className="flex flex-col lg:flex-row gap-4 md:gap-6 w-full mt-8">
+                    <div className="flex flex-col w-full lg:w-[70%] bg-white border border-gray-200 rounded-xl shadow-sm p-5 md:p-6">
+                        <div className="flex flex-row justify-between items-center mb-6">
+                            <h3 className="font-bold text-gray-900 text-base md:text-lg">Verification Velocity</h3>
+                            <span className="text-xs md:text-sm text-gray-500 font-medium">Last 30 Days</span>
+                        </div>
+                        <div className="w-full bg-slate-50/50 rounded-lg h-[200px] flex items-center justify-center relative overflow-hidden border border-gray-100">
+                            <svg viewBox="0 0 500 150" className="w-full h-full absolute inset-0 preserve-aspect-ratio-none" preserveAspectRatio="none">
+                                <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100 L510,160 L-10,160 Z" fill="#eff6ff" opacity="0.6" />
+                                <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100" fill="none" stroke="#2563eb" strokeWidth="3.5" strokeLinecap="round" />
+                            </svg>
+                            <span className="text-xs md:text-sm text-gray-600 italic relative z-10 font-medium">Real-time processing volume visualization</span>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col w-full lg:w-[30%] bg-blue-600 rounded-xl shadow-sm p-5 md:p-6 text-white justify-between">
+                        <div className="flex flex-col gap-4">
+                            <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
+                                <path d="M11.64 5.23a.75.75 0 0 1 1.44 0l1.24 3.86a.75.75 0 0 0 .52.52l3.86 1.24a.75.75 0 0 1 0 1.44l-3.86 1.24a.75.75 0 0 0-.52.52l-1.24 3.86a.75.75 0 0 1-1.44 0l-1.24-3.86a.75.75 0 0 0-.52-.52l-3.86-1.24a.75.75 0 0 1 0-1.44l3.86-1.24a.75.75 0 0 0 .52-.52z"/>
+                                <path d="M19.32 2.68a.5.5 0 0 1 .96 0l.4 1.2a.5.5 0 0 0 .34.34l1.2.4a.5.5 0 0 1 0 .96l-1.2.4a.5.5 0 0 0-.34.34l-.4 1.2a.5.5 0 0 1-.96 0l-.4-1.2a.5.5 0 0 0-.34-.34l-1.2-.4a.5.5 0 0 1 0-.96l1.2-.4a.5.5 0 0 0 .34-.34z"/>
+                            </svg>
+                            <h3 className="font-bold text-lg md:text-xl">AI Risk Scoring</h3>
+                            <p className="text-blue-100 text-sm md:text-base leading-relaxed">
+                                Our new neural engine has flagged 3 potential anomalies in the last hour. Manual review recommended.
+                            </p>
+                        </div>
+                        <button className="mt-6 w-full py-2.5 bg-blue-500 hover:bg-blue-400 transition-colors border border-blue-400 rounded-lg font-medium text-sm cursor-pointer">
+                            Review Anomalies
+                        </button>
+                    </div>
+                </div>
             </div>
+        </div>
     );
 }

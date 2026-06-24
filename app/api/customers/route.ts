@@ -33,18 +33,33 @@ export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
         const limitParam = searchParams.get("limit");
+        const pageParam = searchParams.get("page");
 
-        const takeValue = limitParam ? parseInt(limitParam, 10) : undefined;
-        const requests = await prisma.verificationRequest.findMany({
-            take: takeValue,
-            orderBy: {
-                submittedAt: "desc",
-            },
+        const page = pageParam ? parseInt(pageParam, 10) : 1;
+        const limit = limitParam ? parseInt(limitParam, 10) : 25;
+
+        const skip = (page - 1) * limit;
+
+        const [requests, total] = await Promise.all ([
+            prisma.verificationRequest.findMany({
+                take: limit,
+                skip: skip,
+                orderBy: {
+                    submittedAt: "desc",
+                },
+            }),
+            prisma.verificationRequest.count()
+        ]);
+
+        return NextResponse.json({
+            requests,
+            total,
+            page,
+            limit
         });
-        return NextResponse.json(requests);
+
     } catch (error: any) {
         console.error("Error fetching verification requests:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
-
 }

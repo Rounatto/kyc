@@ -16,8 +16,8 @@ export default function DashboardPage() {
                 const response = await fetch("/api/customers?limit=5");
                 const data = await response.json();
 
-                if (response.ok) {
-                    const formattedData = data.map((req: any) => {
+                if (response.ok && data.requests) {
+                    const formattedData = data.requests.map((req: any) => {
                         console.log("Date brute reçue de la BDD :", req.submittedAt);
 
                         const initials = req.customerName
