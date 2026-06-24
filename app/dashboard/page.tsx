@@ -13,7 +13,7 @@ export default function DashboardPage() {
     useEffect(() => {
         async function fetchRequests() {
             try {
-                const response = await fetch("/api/customers");
+                const response = await fetch("/api/customers?limit=5");
                 const data = await response.json();
 
                 if (response.ok) {
@@ -252,7 +252,9 @@ export default function DashboardPage() {
                             Loading KYC analysis data...
                         </div>
                         ) : (
-                        <VerificationTable data={requestsData} />
+                            <div className="flex flex-col gap-4">
+                                <VerificationTable data={requestsData} />
+                            </div>
                     )}
                 </div>
             </div>

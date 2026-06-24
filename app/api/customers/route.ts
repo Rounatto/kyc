@@ -29,9 +29,14 @@ export async function POST(req: Request ) {
     }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
     try {
+        const { searchParams } = new URL(req.url);
+        const limitParam = searchParams.get("limit");
+
+        const takeValue = limitParam ? parseInt(limitParam, 10) : undefined;
         const requests = await prisma.verificationRequest.findMany({
+            take: takeValue,
             orderBy: {
                 submittedAt: "desc",
             },
