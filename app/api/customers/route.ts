@@ -31,6 +31,15 @@ export async function POST(req: Request ) {
 
 export async function GET() {
     try {
-        const requests = //gemini
+        const requests = await prisma.verificationRequest.findMany({
+            orderBy: {
+                submittedAt: "desc",
+            },
+        });
+        return NextResponse.json(requests);
+    } catch (error: any) {
+        console.error("Error fetching verification requests:", error);
+        return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
 }

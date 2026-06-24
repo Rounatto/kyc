@@ -44,7 +44,6 @@ export default function NewVerificationPage() {
 
             if (response.ok) {
                 setSuccess(true);
-                // On attend 1.5 seconde pour laisser l'utilisateur voir le succès, puis on redirige
                 setTimeout(() => {
                     router.push("/dashboard");
                 }, 1500);

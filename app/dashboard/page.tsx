@@ -1,52 +1,65 @@
 "use client"
+
 import Link from "next/link";
+import { useState, useEffect } from "react";
 import VerificationTable from "@/components/VerificationTable";
 import { Bell, MessageCircleQuestionMark, Search, CircleQuestionMark, Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, Gavel, Flag, Earth  } from "lucide-react";
 import Header from "@/components/header";
 
-const recentRequestsData = [
-    {
-        id: 1,
-        Avatar:"EL",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Eleanor Lewis",
-        Email: "e.lewis@corporate.com",
-        Type: "Individual KYC",
-        Submitted: "Oct 24, 14:20",
-        Status: "verified",
-        Score: "98/100",
-    },
-    {
-        id: 2,
-        Avatar:"MR",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Marcus Rossi",
-        Email: "m.rossi@globex.io",
-        Type: "Corporate KYB",
-        Submitted: "Oct 24, 13:45",
-        Status: "pending",
-        Score: "--",
-    },
-    {
-        id: 3,
-        Avatar:"BT",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Braker Tech Ltd",
-        Email: "complance@braker.net",
-        Type: "Entity Screening",
-        Submitted: "Oct 24, 11:12",
-        Status: "rejected",
-        Score: "12/100",
-    },
-    {
-        id: 4,
-        Avatar:"SK",/*URL de l'avatar du client, peut être une image ou des initiales*/
-        Nom: "Sienna Kim",
-        Email: "skim@creative.co",
-        Type: "Individual KYC",
-        Submitted: "Oct 24, 09:30",
-        Status: "verified",
-        Score: "94/100",
-    }
-];
 export default function DashboardPage() {
+    const [requestsData, setRequestsData] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        async function fetchRequests() {
+            try {
+                const response = await fetch("/api/customers");
+                const data = await response.json();
+
+                if (response.ok) {
+                    const formattedData = data.map((req: any) => {
+                        console.log("Date brute reçue de la BDD :", req.submittedAt);
+
+                        const initials = req.customerName
+                            ? req.customerName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
+                            : "??";
+
+                        let dateFormatted = "Date inconnue";
+                        if (req.submittedAt) {
+                            const d = new Date(req.submittedAt);
+                            if (!isNaN(d.getTime())) {
+                                const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                                const month = months[d.getMonth()];
+                                const day = d.getDate();
+                                const hours = d.getHours().toString().padStart(2, '0');
+                                const minutes = d.getMinutes().toString().padStart(2, '0');
+                                dateFormatted = `${month} ${day}, ${hours}:${minutes}`;
+                            }
+                        }
+
+                        return {
+                            id: req.id,
+                            Avatar: initials,
+                            Nom: req.customerName,
+                            Email: req.email,
+                            Type: req.type,
+                            Submitted: dateFormatted, 
+                            Status: req.status ? req.status.toLowerCase() : "pending",
+                            Score: req.score || "--",
+                        };
+                    });
+
+                    setRequestsData(formattedData);
+                }
+            } catch (error) {
+                console.error("Error fetching requests:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+        fetchRequests();
+    }, []);
+
     return (
         <div className="w-full">{/*page entière*/}
             <Header />
@@ -232,10 +245,15 @@ export default function DashboardPage() {
                                     <div className="bg-blue-700 h-full w-[75%] rounded-sm" ></div>{/*la barre bleu qui estime le risk*/}
                                 </div>
                             </div>
-                        </div>
-                        
+                        </div> 
                     </div>
-                    <VerificationTable data={recentRequestsData} />{/*Le tableau des recent verification requests*/}
+                    {loading ? (
+                        <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">
+                            Loading KYC analysis data...
+                        </div>
+                        ) : (
+                        <VerificationTable data={requestsData} />
+                    )}
                 </div>
             </div>
     );
