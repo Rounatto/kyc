@@ -12,14 +12,13 @@ export default function CustomerPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
-
-    const limitPerPage = 10;
+    const [LimitPerPage, setLimitPerPage] = useState(5);
 
     useEffect(() => {
         async function fetchCustomers() {
             setLoading(true);
             try{
-                const response = await fetch(`/api/customers?page=${currentPage}&limit=${limitPerPage}`);
+                const response = await fetch(`/api/customers?page=${currentPage}&limit=${LimitPerPage}`);
                 const data = await response.json();
 
                 if (response.ok && data.requests) {
@@ -35,19 +34,16 @@ export default function CustomerPage() {
                             }
                         }
                         
-                        // 1. Intelligent Score Parsing
                         let risk = "Medium";
                         let parsedScore = NaN;
                         
                         if (req.score) {
-                            // Extract only the numbers (e.g., "20/100" -> "20")
                             const match = String(req.score).match(/\d+/);
                             if (match) {
                                 parsedScore = parseInt(match[0], 10);
                             }
                         }
 
-                        // 2. Dynamic Risk Calculation
                         if (!isNaN(parsedScore)) {
                             if (parsedScore >= 80) risk = "Low";
                             else if (parsedScore <= 50) risk = "High";
@@ -66,7 +62,7 @@ export default function CustomerPage() {
                     
                     setCustomers(formattedData);
                     setTotalItems(data.total);
-                    setTotalPages(Math.ceil(data.total / limitPerPage));
+                    setTotalPages(Math.ceil(data.total / LimitPerPage));
                 }
             } catch (error) {
                 console.error("Error fetching customers:", error);
@@ -75,7 +71,7 @@ export default function CustomerPage() {
             }
         }
         fetchCustomers();   
-    }, [currentPage]);
+    }, [currentPage, LimitPerPage]);
 
     const handleNextPage = () => {
         if (currentPage < totalPages) {
@@ -88,6 +84,11 @@ export default function CustomerPage() {
             setCurrentPage((prev) => prev - 1);
         }
     };
+
+    const handleLimitChange = (newLimit: number) => {
+        setLimitPerPage(newLimit);
+        setCurrentPage(1); 
+    }
 
     return (
         <div className="w-full">
@@ -186,8 +187,10 @@ export default function CustomerPage() {
                         currentPage={currentPage}
                         totalPages={totalPages}
                         totalItems={totalItems}
+                        currentLimit={LimitPerPage}
                         onNextPage={handleNextPage}
                         onPrevPage={handlePrevPage}
+                        onLimitChange={handleLimitChange}
                     />
                 )}
                 

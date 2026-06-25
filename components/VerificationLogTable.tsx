@@ -1,23 +1,30 @@
 "use client"
+import { useState } from "react";
 
 interface VerificationLogTableProps {
     data: any[];
     currentPage: number;
     totalPages: number;
     totalItems: number;
+    currentLimit: number;
     onNextPage: () => void;
     onPrevPage: () => void;
+    onLimitChange : (newLimit: number) => void;
 }
 
-export default function VerificationLogTable({ 
-    data, 
-    currentPage, 
-    totalPages, 
-    totalItems, 
-    onNextPage, 
-    onPrevPage 
+export default function VerificationLogTable({
+    data,
+    currentPage,
+    totalPages,
+    totalItems,
+    currentLimit,
+    onNextPage,
+    onPrevPage,
+    onLimitChange
 }: VerificationLogTableProps) {
-    
+
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+   
     const getStatusStyle = (status: string) => {
         const safeStatus = String(status || "").toLowerCase();
         if (safeStatus === "verified") return "bg-green-100 text-green-700";
@@ -25,7 +32,7 @@ export default function VerificationLogTable({
         if (safeStatus === "action required" || safeStatus === "rejected") return "bg-red-100 text-red-700";
         return "bg-gray-100 text-gray-700";
     };
-    
+   
     const getAvatarStyle = (status: string) => {
         const avStatus = String(status || "").toLowerCase();
         if (avStatus === "verified") return "bg-blue-100/50 text-blue-700";
@@ -33,7 +40,7 @@ export default function VerificationLogTable({
         if (avStatus === "action required" || avStatus === "rejected") return "bg-red-100/50 text-red-700";
         return "bg-blue-100/50 text-blue-700";
     };
-    
+   
     const getRiskStyle = (risk: string) => {
         const safeRisk = String(risk || "").toLowerCase();
         if (safeRisk === "low") return "bg-blue-100 text-blue-600";
@@ -42,19 +49,45 @@ export default function VerificationLogTable({
         return "bg-gray-100 text-gray-700";
     };
 
+    const handleSelectLimit = (newLimit: number) => {
+        onLimitChange(newLimit);
+        setIsDropdownOpen(false);
+    };
+
     return(
         <div className="flex flex-col w-full border border-gray-400 rounded-md justify-between overflow-hidden">
             <div className="flex flex-row justify-between p-4 md:p-6 border-b border-gray-400 bg-white items-center">
                 <h2 className="font-bold text-lg md:text-xl text-gray-900">Verification Log</h2>
-                <div className="flex flex-row gap-2 items-center text-sm">
+                
+                {/* LA CORRECTION EST ICI : on a ajouté 'relative' à ce div pour que le menu s'accroche ici */}
+                <div className="flex flex-row gap-2 items-center text-sm relative">
                     <span className="text-gray-500">Show</span>
-                    <span className="text-blue-700 font-medium flex items-center cursor-pointer hover:underline">
-                        10 rows
-                        <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-                    </span>
-                </div> 
+                    
+                    <button 
+                        onClick={() => setIsDropdownOpen(!isDropdownOpen)} 
+                        className="text-blue-700 font-medium flex items-center cursor-pointer hover:underline bg-transparent border-none p-0 outline-none"
+                    >
+                        { currentLimit } rows
+                        {/* La flèche pointe vers le bas par défaut (rotation de 180 si le menu est ouvert) */}
+                        <svg 
+                            className={`w-4 h-4 ml-1 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} 
+                            fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                        >
+                            <path d="m6 9 6 6 6-6"/>
+                        </svg>
+                    </button>
+                    
+                    {/* Le menu déroulant qui s'affiche sous la flèche */}
+                    {isDropdownOpen && (
+                        <div className="absolute top-full right-0 mt-2 bg-white border border-gray-200 shadow-lg rounded-md py-1 z-50 w-24">
+                            <button onClick={() => handleSelectLimit(5)} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-700 cursor-pointer">5 rows</button>
+                            <button onClick={() => handleSelectLimit(10)} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-700 cursor-pointer">10 rows</button>
+                            <button onClick={() => handleSelectLimit(20)} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-700 cursor-pointer">20 rows</button>
+                        </div>
+                    )}
+                </div>
             </div>
-            
+           
             <div className="w-full overflow-x-auto">
                 <table className="w-full text-left border-collapse table-fixed min-w-[600px]">
                     <thead className="bg-white text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-400">
@@ -109,23 +142,23 @@ export default function VerificationLogTable({
                 <p className="text-[10px] md:text-xs font-medium text-gray-500 ml-2">
                     Showing {data ? data.length : 0} results out of {totalItems}
                 </p>
-                
+               
                 <div className="flex flex-row gap-1 items-center shrink-0">
-                    <button 
+                    <button
                         onClick={onPrevPage}
                         disabled={currentPage === 1}
                         className="bg-white w-7 h-7 md:w-8 md:h-8 flex items-center justify-center rounded border border-gray-300 hover:bg-gray-100 text-gray-500 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <svg viewBox="0 0 24 24" className="w-3 h-3 md:w-4 md:h-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
                     </button>
-                    
+                   
                     <span className="text-xs md:text-sm font-medium text-gray-700 px-2">
                         Page {currentPage} of {totalPages || 1}
                     </span>
-                    
-                    <button 
+                   
+                    <button
                         onClick={onNextPage}
-                        disabled={currentPage === totalPages || totalPages === 0}
+                        disabled={currentPage >= totalPages || totalPages === 0}
                         className="bg-white w-7 h-7 md:w-8 md:h-8 flex items-center justify-center rounded border border-gray-300 hover:bg-gray-100 text-gray-500 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <svg viewBox="0 0 24 24" className="w-3 h-3 md:w-4 md:h-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
