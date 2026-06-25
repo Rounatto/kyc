@@ -64,21 +64,31 @@ export async function GET(req: Request) {
         const { searchParams } = new URL(req.url);
         const limitParam = searchParams.get("limit");
         const pageParam = searchParams.get("page");
+        const search = searchParams.get("search") || "";
 
         const page = pageParam ? parseInt(pageParam, 10) : 1;
         const limit = limitParam ? parseInt(limitParam, 10) : 10;
-
         const skip = (page - 1) * limit;
+
+        const whereCondition = search ? {
+            OR: [
+                { customerName: { contains: search, mode: "insensitive" as const } },
+                { email: { contains: search, mode: "insensitive" as const } },
+                { cin: { contains: search } },
+                { phoneNumber: { contains: search } }
+            ]
+        } : {};
 
         const [requests, total] = await Promise.all([
             prisma.verificationRequest.findMany({
+                where: whereCondition,
                 take: limit,
                 skip: skip,
                 orderBy: {
                     submittedAt: "desc",
                 },
             }),
-            prisma.verificationRequest.count()
+            prisma.verificationRequest.count({ where: whereCondition })
         ]);
 
         return NextResponse.json({

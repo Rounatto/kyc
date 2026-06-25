@@ -1,37 +1,123 @@
 "use client"
 
-import { Search, CircleQuestionMark, Bell, LogOut, User } from "lucide-react";
-import { useState } from "react";
+import { Search, CircleQuestionMark, Bell, LogOut, User, Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function HeaderCustomers() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     const { data: session, status } = useSession();
+    const router = useRouter();
+
     const userName = session?.user?.name || "Utilisateur";
     const userEmail = session?.user?.email || "chargement...";
     const userInitial = userName.charAt(0).toUpperCase();
     const userImage = session?.user?.image;
     const companyName = (session?.user as any)?.companyName || "";
 
+    // --- ÉTATS DU MOTEUR DE RECHERCHE ---
+    const [searchTerm, setSearchTerm] = useState("");
+    const [results, setResults] = useState<any[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const [showDropdown, setShowDropdown] = useState(false);
+
+    // --- LA LOGIQUE DEBOUNCE (500ms) ---
+    useEffect(() => {
+        if (searchTerm.trim().length === 0) {
+            setResults([]);
+            setShowDropdown(false);
+            return;
+        }
+
+        const delayDebounceFn = setTimeout(async () => {
+            setIsSearching(true);
+            setShowDropdown(true);
+            
+            try {
+                const res = await fetch(`/api/customers?search=${encodeURIComponent(searchTerm)}&limit=5`);
+                const data = await res.json();
+                if (res.ok) {
+                    setResults(data.requests || []);
+                }
+            } catch (error) {
+                console.error("Search failed", error);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 500); // Exécution de la recherche après 500ms de pause
+
+        return () => clearTimeout(delayDebounceFn); // Annulation si frappe avant les 500ms
+        
+    }, [searchTerm]);
+
+    const handleResultClick = (customerId: string) => {
+        setShowDropdown(false);
+        setSearchTerm("");
+        router.push(`/dashboard/customers/${customerId}`);
+    };
+
     return (
         <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8">
             
             {/* Left Side: Your exact responsive Customer Search bar configuration */}
             <div className="flex items-center gap-4 lg:gap-8 flex-1">
-                <div className="flex relative flex-row mt-2 md:mt-3 w-full max-w-[150px] sm:max-w-xs lg:max-w-[340px] border border-gray-300 rounded-lg text-sm outline-none bg-gray-200/50 text-gray-700 placeholder-gray-400">
-                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="11" cy="11" r="6.5" />
-                            <path d="m16.2 16.2 4.1 4.1" />
-                        </svg>
-                    </span>
-                    <input 
-                        type="text" 
-                        placeholder="Search customers..." 
-                        className="w-full bg-transparent border-transparent rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-all text-gray-800 placeholder-gray-600 truncate"
-                    />
+                {/* On ajoute "relative" au conteneur parent pour que le dropdown se place bien en dessous */}
+                <div className="relative w-full max-w-[150px] sm:max-w-xs lg:max-w-[340px] mt-2 md:mt-3">
+                    <div className="flex relative flex-row w-full border border-gray-300 rounded-lg text-sm outline-none bg-gray-200/50 text-gray-700 placeholder-gray-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-500 transition-all">
+                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true">
+                            {isSearching ? (
+                                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                            ) : (
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="11" cy="11" r="6.5" />
+                                    <path d="m16.2 16.2 4.1 4.1" />
+                                </svg>
+                            )}
+                        </span>
+                        <input 
+                            type="text" 
+                            placeholder="Search customers..." 
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            onFocus={() => { if (results.length > 0) setShowDropdown(true); }}
+                            onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+                            className="w-full bg-transparent border-transparent rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-all text-gray-800 placeholder-gray-600 truncate"
+                        />
+                    </div>
+
+                    {/* MENU DÉROULANT (Google Style) */}
+                    {showDropdown && (
+                        <div className="absolute top-full left-0 mt-2 w-full min-w-[250px] bg-white border border-gray-200 shadow-xl rounded-xl overflow-hidden z-[999] flex flex-col">
+                            {results.length > 0 ? (
+                                <ul className="divide-y divide-gray-100">
+                                    {results.map((req) => (
+                                        <li 
+                                            key={req.id} 
+                                            onClick={() => handleResultClick(req.id)}
+                                            className="p-3 hover:bg-gray-50 cursor-pointer flex flex-col gap-1 transition-colors"
+                                        >
+                                            <div className="flex justify-between items-center">
+                                                <span className="font-semibold text-gray-900 text-sm truncate">{req.customerName}</span>
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${req.status === 'verified' ? 'bg-green-100 text-green-700' : req.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                                    {req.status}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-3 text-xs text-gray-500">
+                                                <span className="truncate">{req.email}</span>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : searchTerm.trim().length > 0 && !isSearching ? (
+                                <div className="p-4 text-sm text-gray-500 text-center">
+                                    No records found
+                                </div>
+                            ) : null}
+                        </div>
+                    )}
                 </div>
             </div>
 
