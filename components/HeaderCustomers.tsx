@@ -6,6 +6,35 @@ import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+// --- LA FONCTION MAGIQUE DE SURLIGNAGE ---
+// Cette fonction découpe le texte et met en gras exactement la partie tapée
+const highlightText = (text: string | null | undefined, highlight: string) => {
+    if (!text) return null;
+    if (!highlight.trim()) return <span>{text}</span>;
+    
+    // On sécurise les caractères spéciaux tapés par l'utilisateur (ex: +, ., ?)
+    const escapedHighlight = highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // On crée une règle de découpe insensible à la majuscule/minuscule ('gi')
+    const regex = new RegExp(`(${escapedHighlight})`, 'gi');
+    const parts = text.split(regex);
+    
+    return (
+        <span>
+            {parts.map((part, i) => 
+                part.toLowerCase() === highlight.toLowerCase() ? (
+                    // La partie correspondante est mise en gras (font-black) avec un léger fond bleu
+                    <strong key={i} className="font-black text-blue-600 bg-gray-100 rounded-sm px-[1px]">
+                        {part}
+                    </strong>
+                ) : (
+                    <span key={i}>{part}</span>
+                )
+            )}
+        </span>
+    );
+};
+
 export default function HeaderCustomers() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -16,7 +45,7 @@ export default function HeaderCustomers() {
     const userEmail = session?.user?.email || "chargement...";
     const userInitial = userName.charAt(0).toUpperCase();
     const userImage = session?.user?.image;
-    const companyName = (session?.user as any)?.companyName || "";
+    // const companyName = (session?.user as any)?.companyName || "";
 
     // --- ÉTATS DU MOTEUR DE RECHERCHE ---
     const [searchTerm, setSearchTerm] = useState("");
@@ -24,7 +53,7 @@ export default function HeaderCustomers() {
     const [isSearching, setIsSearching] = useState(false);
     const [showDropdown, setShowDropdown] = useState(false);
 
-    // --- LA LOGIQUE DEBOUNCE (500ms) ---
+    // --- LA LOGIQUE DEBOUNCE (300ms PRO) ---
     useEffect(() => {
         if (searchTerm.trim().length === 0) {
             setResults([]);
@@ -47,9 +76,9 @@ export default function HeaderCustomers() {
             } finally {
                 setIsSearching(false);
             }
-        }, 500); // Exécution de la recherche après 500ms de pause
+        }, 300); // Exécution de la recherche après 300ms de pause (Standard Pro)
 
-        return () => clearTimeout(delayDebounceFn); // Annulation si frappe avant les 500ms
+        return () => clearTimeout(delayDebounceFn); 
         
     }, [searchTerm]);
 
@@ -62,9 +91,7 @@ export default function HeaderCustomers() {
     return (
         <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8">
             
-            {/* Left Side: Your exact responsive Customer Search bar configuration */}
             <div className="flex items-center gap-4 lg:gap-8 flex-1">
-                {/* On ajoute "relative" au conteneur parent pour que le dropdown se place bien en dessous */}
                 <div className="relative w-full max-w-[150px] sm:max-w-xs lg:max-w-[340px] mt-2 md:mt-3">
                     <div className="flex relative flex-row w-full border border-gray-300 rounded-lg text-sm outline-none bg-gray-200/50 text-gray-700 placeholder-gray-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-500 transition-all">
                         <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true">
@@ -88,7 +115,7 @@ export default function HeaderCustomers() {
                         />
                     </div>
 
-                    {/* MENU DÉROULANT (Google Style) */}
+                    {/* MENU DÉROULANT AVEC LES RÉSULTATS SURLIGNÉS */}
                     {showDropdown && (
                         <div className="absolute top-full left-0 mt-2 w-full min-w-[250px] bg-white border border-gray-200 shadow-xl rounded-xl overflow-hidden z-[999] flex flex-col">
                             {results.length > 0 ? (
@@ -100,13 +127,24 @@ export default function HeaderCustomers() {
                                             className="p-3 hover:bg-gray-50 cursor-pointer flex flex-col gap-1 transition-colors"
                                         >
                                             <div className="flex justify-between items-center">
-                                                <span className="font-semibold text-gray-900 text-sm truncate">{req.customerName}</span>
+                                                {/* Le nom surligné */}
+                                                <span className="text-gray-900 text-sm truncate">
+                                                    {highlightText(req.customerName, searchTerm)}
+                                                </span>
                                                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${req.status === 'verified' ? 'bg-green-100 text-green-700' : req.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
                                                     {req.status}
                                                 </span>
                                             </div>
                                             <div className="flex items-center gap-3 text-xs text-gray-500">
-                                                <span className="truncate">{req.email}</span>
+                                                {/* L'email surligné */}
+                                                <span className="truncate">
+                                                    {highlightText(req.email, searchTerm)}
+                                                </span>
+                                                {/* Le CIN surligné s'il existe */}
+                                                {req.cin && (
+                                                    <span>• CIN: {highlightText(req.cin, searchTerm)}</span>
+                                                )}
+                                                {/* Note : Si tu veux aussi afficher le téléphone, on l'ajouterait ici de la même manière */}
                                             </div>
                                         </li>
                                     ))}
@@ -121,7 +159,7 @@ export default function HeaderCustomers() {
                 </div>
             </div>
 
-            {/* Right Side: LITERALLY your exact profile container, elements, logic, and conditional styles */}
+            {/* Right Side: Exact profile container */}
             <div className="flex items-center gap-2 mt-2 md:mt-3">
                 <button className="text-gray-700 hover:text-gray-500 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200 cursor-pointer">
                     <span className="sr-only">Notifications</span>
