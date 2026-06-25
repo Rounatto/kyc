@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import VerificationLogTable from "@/components/VerificationLogTable";
 import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert } from "lucide-react";
 import CustomerHeader from "@/components/HeaderCustomers";
+import NewVerificationButton from "@/components/NewVerificationButton";
 
 export default function CustomerPage() {
     const [customers, setCustomers] = useState<any[]>([]);
@@ -102,14 +103,17 @@ export default function CustomerPage() {
                         <h2 className="text-2xl font-bold text-gray-900">Customer Directory</h2>
                         <p className="text-sm text-gray-500">Manage identity verifications and monitor entreprise risk profiles.</p>
                     </div>
-                    <div className="flex flex-row gap-3 w-full lg:w-auto">
+                    <div className="flex flex-row gap-3 w-full lg:w-auto items-center">
+                        {/* Insertion du bouton adaptatif (Desktop et Mobile FAB) */}
+                        <NewVerificationButton />
+                        
                         <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
                             <span className="flex items-center justify-center text-gray-600" aria-hidden="true">
                                 <ListFilter />
                             </span>
                             <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Filter</p>
                         </button>
-                        <button className=" flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
+                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
                             <span className="flex items-center justify-center text-gray-700" aria-hidden="true">
                                 <Download />
                             </span>
@@ -118,6 +122,7 @@ export default function CustomerPage() {
                     </div>
                 </div>
                 
+                {/* Les 4 Widgets Statistiques d'origine */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
@@ -133,6 +138,7 @@ export default function CustomerPage() {
                             </div>
                         </div>
                     </div>
+                    
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Verified Today</p>
@@ -147,6 +153,7 @@ export default function CustomerPage() {
                             </div>
                         </div>
                     </div>
+                    
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
@@ -161,6 +168,7 @@ export default function CustomerPage() {
                             </div>
                         </div>
                     </div>
+                    
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
@@ -177,6 +185,7 @@ export default function CustomerPage() {
                     </div>
                 </div>
 
+                {/* Log Table Container */}
                 {loading ? (
                     <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">
                         Loading customers data...
@@ -194,7 +203,8 @@ export default function CustomerPage() {
                     />
                 )}
                 
-                <div className="flex flex-col lg:flex-row gap-4 md:gap-6 w-full mt-8">
+                {/* Section Graphique et Carte IA d'origine */}
+                <div className="grid flex-col lg:flex-row gap-4 md:gap-6 w-full mt-8">
                     <div className="flex flex-col w-full lg:w-[70%] bg-white border border-gray-200 rounded-xl shadow-sm p-5 md:p-6">
                         <div className="flex flex-row justify-between items-center mb-6">
                             <h3 className="font-bold text-gray-900 text-base md:text-lg">Verification Velocity</h3>

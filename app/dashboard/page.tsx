@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import VerificationTable from "@/components/VerificationTable";
 import { Bell, MessageCircleQuestionMark, Search, CircleQuestionMark, Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, Gavel, Flag, Earth  } from "lucide-react";
 import Header from "@/components/header";
+import NewVerificationButton from "@/components/NewVerificationButton"; // <-- Import ajouté
 
 export default function DashboardPage() {
     const [requestsData, setRequestsData] = useState<any[]>([]);
@@ -63,6 +64,10 @@ export default function DashboardPage() {
     return (
         <div className="w-full">{/*page entière*/}
             <Header />
+            
+            {/* Le bouton ici : Il sera invisible sur Desktop, mais visible (et plus haut) sur Mobile */}
+            <NewVerificationButton mobileOnly />
+
             <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8 ">{/* section de ce qui il y a a droite*/}
                 <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end bg-gray-100 gap-4 lg:gap-0">{/*Section de titre et boutons*/}
                     <div className="flex flex-col mb-2">{/*Titre et sous-titre*/}
@@ -252,11 +257,11 @@ export default function DashboardPage() {
                             Loading KYC analysis data...
                         </div>
                         ) : (
-                            <div className="flex flex-col gap-4">
+                            <div className="flex flex-col gap-4 mt-8">
                                 <VerificationTable data={requestsData} />
                             </div>
                     )}
-                </div>
             </div>
+        </div>
     );
 }

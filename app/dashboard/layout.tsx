@@ -122,7 +122,7 @@ export default function RootLayout({ children }: Readonly<{
         </nav>
         <div className="hidden md:flex md:flex-col w-full p-4 gap-4 mb-4">{/*bouton, ligne et actions secondaires*/}
             <button className="w-full bg-blue-700 hover:bg-blue-600 text-white font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors text-sm cursor-pointer">{/*bouton new verification*/}
-              <Link href="/dashboard/new-verification" className="text-base font-bold">
+              <Link href="/dashboard/customers/new-verification" className="text-base font-bold">
                   + New Verification
               </Link>
             </button>
