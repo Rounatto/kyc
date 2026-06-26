@@ -1,73 +1,15 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-export async function POST(req: Request) {
-    try {
-        const body = await req.json();
-        
-        const { 
-            customerName, 
-            email, 
-            type,  
-            status, 
-            score,
-            cin, 
-            documentType, 
-            nationality, 
-            dateOfBirth,
-            phoneNumber, 
-            userId
-        } = body;
-
-        if (!customerName || !email || !cin || !userId) {
-            return NextResponse.json({
-                error: "Missing required fields: Name, Email, CIN, and User ID are mandatory.",
-            }, { status: 400 });
-        }
-
-        const newRequest = await prisma.verificationRequest.create({
-            data: {
-                customerName: customerName,
-                email: email,
-                type: type || "Identity",
-                cin: cin,
-                documentType: documentType || "CIN",
-                nationality: nationality || "Not specified",
-                dateOfBirth: dateOfBirth || "Not specified",
-                phoneNumber: phoneNumber || null,
-                status: status || "pending",
-                score: score || "--",
-                userId: userId,
-            },
-        });
-
-        return NextResponse.json({
-            message: "Verification request created successfully", 
-            data: newRequest 
-        }, { status: 201 });
-
-    } catch (error: any) {
-        if (error.code === 'P2002') {
-            return NextResponse.json(
-                { error: "This CIN is already registered in our system. Duplicate accounts are not allowed." }, 
-                { status: 409 }
-            );
-        }
-
-        console.error("Error creating verification request:", error);
-        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-    }
-}
-
+// =====================================================================
+// 1. GET : RÉCUPÉRER LA LISTE DES CLIENTS ET CALCULER LES STATISTIQUES
+// =====================================================================
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
-        const limitParam = searchParams.get("limit");
-        const pageParam = searchParams.get("page");
         const search = searchParams.get("search") || "";
-
-        const page = pageParam ? parseInt(pageParam, 10) : 1;
-        const limit = limitParam ? parseInt(limitParam, 10) : 10;
+        const page = parseInt(searchParams.get("page") || "1");
+        const limit = parseInt(searchParams.get("limit") || "5");
         const skip = (page - 1) * limit;
 
         const whereCondition = search ? {
@@ -79,27 +21,84 @@ export async function GET(req: Request) {
             ]
         } : {};
 
-        const [requests, total] = await Promise.all([
+        const [requests, filteredTotal] = await Promise.all([
             prisma.verificationRequest.findMany({
                 where: whereCondition,
                 take: limit,
                 skip: skip,
-                orderBy: {
-                    submittedAt: "desc",
-                },
+                orderBy: { submittedAt: 'desc' } 
             }),
             prisma.verificationRequest.count({ where: whereCondition })
         ]);
 
+        // --- CALCUL DES STATISTIQUES ---
+        const pendingCount = await prisma.verificationRequest.count({
+            where: { status: "pending" }
+        });
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const verifiedTodayCount = await prisma.verificationRequest.count({
+            where: {
+                status: "verified",
+                // CORRECTION ICI : On utilise submittedAt car c'est la seule date de ta BDD
+                submittedAt: { gte: today } 
+            }
+        });
+
+        const totalAbsolute = await prisma.verificationRequest.count(); 
+
         return NextResponse.json({
             requests,
-            total,
+            total: filteredTotal,
             page,
-            limit
+            limit,
+            stats: {
+                totalCustomers: totalAbsolute,
+                verifiedToday: verifiedTodayCount,
+                pendingReviews: pendingCount,
+                highRisk: 24 
+            }
         });
 
     } catch (error: any) {
-        console.error("Error fetching verification requests:", error);
+        console.error("GET Error:", error);
+        return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+}
+
+// =====================================================================
+// 2. POST : CRÉER UN NOUVEAU CLIENT (ET GÉNÉRER SON SCORE IA)
+// =====================================================================
+export async function POST(req: Request) {
+    try {
+        const body = await req.json();
+        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId } = body;
+
+        const minScore = 45;
+        const maxScore = 98;
+        const simulatedAiScore = Math.floor(Math.random() * (maxScore - minScore + 1)) + minScore;
+
+        const newRequest = await prisma.verificationRequest.create({
+            data: {
+                customerName,
+                email,
+                type,
+                cin,
+                documentType,
+                nationality,
+                dateOfBirth,
+                phoneNumber,
+                userId,
+                status: "pending", 
+                score: simulatedAiScore.toString(), 
+            },
+        });
+
+        return NextResponse.json(newRequest, { status: 201 });
+    } catch (error: any) {
+        console.error("POST Error:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

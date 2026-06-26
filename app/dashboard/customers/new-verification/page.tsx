@@ -19,8 +19,8 @@ export default function NewVerificationPage() {
     const [customerName, setCustomerName] = useState("");
     const [email, setEmail] = useState("");
     const [type, setType] = useState("Individual KYC");
-    const [status, setStatus] = useState("pending");
-    const [score, setScore] = useState("--");
+    
+    // 💡 SUPPRESSION DE status ET score ICI (Sécurité Backend)
     
     const [cin, setCin] = useState("");
     const [documentType, setDocumentType] = useState("CIN");
@@ -58,8 +58,7 @@ export default function NewVerificationPage() {
                     customerName,
                     email,
                     type,
-                    status,
-                    score,
+                    // Le Backend s'occupera lui-même de forcer le statut à "pending"
                     cin,
                     documentType,
                     nationality: nationality ? en[nationality as keyof typeof en] : "Not specified",
@@ -254,7 +253,8 @@ export default function NewVerificationPage() {
                         <div className="flex flex-col gap-4 mt-2 bg-gray-50 p-4 rounded-lg border border-gray-200">
                             <h3 className="text-xs uppercase tracking-wider font-bold text-gray-500 mb-2">System Processing Settings</h3>
                             
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            {/* Grille ajustée car on a retiré les champs inutiles */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="flex flex-col gap-2">
                                     <label className="text-xs font-semibold text-gray-700">Procedure Type</label>
                                     <div className="relative">
@@ -265,20 +265,6 @@ export default function NewVerificationPage() {
                                             <option value="Entity Screening">Entity Screening</option>
                                         </select>
                                     </div>
-                                </div>
-
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-xs font-semibold text-gray-700">Initial Status</label>
-                                    <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full border border-gray-300 bg-white rounded-lg py-2 px-3 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800 cursor-pointer">
-                                        <option value="pending">Pending</option>
-                                        <option value="verified">Verified</option>
-                                        <option value="rejected">Rejected</option>
-                                    </select>
-                                </div>
-
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-xs font-semibold text-gray-700">Risk Score Overide</label>
-                                    <input type="text" placeholder="Ex: 94/100" value={score} onChange={(e) => setScore(e.target.value)} className="w-full border border-gray-300 rounded-lg py-2 px-3 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800" />
                                 </div>
                             </div>
                         </div>

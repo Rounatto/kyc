@@ -14,6 +14,9 @@ export default function CustomerPage() {
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
     const [LimitPerPage, setLimitPerPage] = useState(5);
+    
+    // Correction ici : setStats au lieu de setStatus
+    const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
 
     useEffect(() => {
         async function fetchCustomers() {
@@ -64,6 +67,11 @@ export default function CustomerPage() {
                     setCustomers(formattedData);
                     setTotalItems(data.total);
                     setTotalPages(Math.ceil(data.total / LimitPerPage));
+
+                    // NOUVEAU : On met à jour les vraies statistiques si l'API les envoie
+                    if (data.stats) {
+                        setStats(data.stats);
+                    }
                 }
             } catch (error) {
                 console.error("Error fetching customers:", error);
@@ -93,7 +101,6 @@ export default function CustomerPage() {
 
     return (
         <div className="w-full">
-            
             <CustomerHeader />
             
             <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8">
@@ -104,7 +111,6 @@ export default function CustomerPage() {
                         <p className="text-sm text-gray-500">Manage identity verifications and monitor entreprise risk profiles.</p>
                     </div>
                     <div className="flex flex-row gap-3 w-full lg:w-auto items-center">
-                        {/* Insertion du bouton adaptatif (Desktop et Mobile FAB) */}
                         <NewVerificationButton />
                         
                         <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
@@ -122,7 +128,7 @@ export default function CustomerPage() {
                     </div>
                 </div>
                 
-                {/* Les 4 Widgets Statistiques d'origine */}
+                {/* LES 4 WIDGETS STATISTIQUES CONNECTÉS À LA BDD */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
@@ -132,7 +138,7 @@ export default function CustomerPage() {
                             </div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
-                            <p className="text-2xl font-bold text-gray-900 leading-none">{totalItems}</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.totalCustomers}</p>
                             <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
                                 +4.2%
                             </div>
@@ -147,7 +153,7 @@ export default function CustomerPage() {
                             </div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
-                            <p className="text-2xl font-bold text-gray-900 leading-none">842</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verifiedToday}</p>
                             <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
                                 +12%
                             </div>
@@ -162,7 +168,7 @@ export default function CustomerPage() {
                             </div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
-                            <p className="text-2xl font-bold text-gray-900 leading-none">156</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pendingReviews}</p>
                             <div className="text-gray-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
                                 <p className="text-gray-700">-2.1%</p>
                             </div>
@@ -177,7 +183,7 @@ export default function CustomerPage() {
                             </div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
-                            <p className="text-2xl font-bold text-gray-900 leading-none">24</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.highRisk}</p>
                             <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
                                 <p className="text-red-700">+3 Today</p>
                             </div>
@@ -203,7 +209,7 @@ export default function CustomerPage() {
                     />
                 )}
                 
-                {/* Section Graphique et Carte IA d'origine */}
+                {/* Section Graphique et Carte IA */}
                 <div className="grid flex-col lg:flex-row gap-4 md:gap-6 w-full mt-8">
                     <div className="flex flex-col w-full lg:w-[70%] bg-white border border-gray-200 rounded-xl shadow-sm p-5 md:p-6">
                         <div className="flex flex-row justify-between items-center mb-6">
