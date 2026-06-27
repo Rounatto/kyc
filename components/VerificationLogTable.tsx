@@ -1,7 +1,8 @@
-"use client"
+"use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { MoreVertical, Eye, Copy, Mail, Flag, ChevronLeft, ChevronRight, Check } from "lucide-react";
 
 interface VerificationLogTableProps {
     data: any[];
@@ -11,9 +12,8 @@ interface VerificationLogTableProps {
     currentLimit: number;
     onNextPage: () => void;
     onPrevPage: () => void;
-    onLimitChange : (newLimit: number) => void;
+    onLimitChange: (limit: number) => void;
 }
-
 
 export default function VerificationLogTable({
     data,
@@ -25,151 +25,193 @@ export default function VerificationLogTable({
     onPrevPage,
     onLimitChange
 }: VerificationLogTableProps) {
-    
     const router = useRouter();
+    
+    const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+    const [copiedId, setCopiedId] = useState<string | null>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
 
-    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-   
-    const getStatusStyle = (status: string) => {
-        const safeStatus = String(status || "").toLowerCase();
-        if (safeStatus === "verified") return "bg-green-100 text-green-700";
-        if (safeStatus === "pending") return "bg-yellow-100 text-yellow-700";
-        if (safeStatus === "action required" || safeStatus === "rejected") return "bg-red-100 text-red-700";
-        return "bg-gray-100 text-gray-700";
-    };
-   
-    const getAvatarStyle = (status: string) => {
-        const avStatus = String(status || "").toLowerCase();
-        if (avStatus === "verified") return "bg-blue-100/50 text-blue-700";
-        if (avStatus === "pending") return "bg-yellow-100/50 text-yellow-700";
-        if (avStatus === "action required" || avStatus === "rejected") return "bg-red-100/50 text-red-700";
-        return "bg-blue-100/50 text-blue-700";
-    };
-   
-    const getRiskStyle = (risk: string) => {
-        const safeRisk = String(risk || "").toLowerCase();
-        if (safeRisk === "low") return "bg-blue-100 text-blue-600";
-        if (safeRisk === "medium") return "bg-yellow-100 text-yellow-600";
-        if (safeRisk === "high") return "bg-red-100 text-red-600";
-        return "bg-gray-100 text-gray-700";
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setOpenMenuId(null);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    const handleCopyId = (e: React.MouseEvent, id: string) => {
+        e.stopPropagation(); 
+        navigator.clipboard.writeText(id);
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 2000);
     };
 
-    const handleSelectLimit = (newLimit: number) => {
-        onLimitChange(newLimit);
-        setIsDropdownOpen(false);
+    const handleMailTo = (e: React.MouseEvent, email: string) => {
+        e.stopPropagation();
+        window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${email}`, '_blank');
+        setOpenMenuId(null);
     };
 
-    return(
-        <div className="flex flex-col w-full border border-gray-400 rounded-md justify-between overflow-hidden">
-            <div className="flex flex-row justify-between p-4 md:p-6 border-b border-gray-400 bg-white items-center">
-                <h2 className="font-bold text-lg md:text-xl text-gray-900">Verification Log</h2>
-                
-                {/* LA CORRECTION EST ICI : on a ajouté 'relative' à ce div pour que le menu s'accroche ici */}
-                <div className="flex flex-row gap-2 items-center text-sm relative">
-                    <span className="text-gray-500">Show</span>
-                    
-                    <button 
-                        onClick={() => setIsDropdownOpen(!isDropdownOpen)} 
-                        className="text-blue-700 font-medium flex items-center cursor-pointer hover:underline bg-transparent border-none p-0 outline-none"
+    const toggleMenu = (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        setOpenMenuId(openMenuId === id ? null : id);
+    };
+
+    return (
+        <div className="w-full bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-white">
+                <h3 className="font-bold text-gray-900 text-lg">Verification Log</h3>
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                    <span>Show</span>
+                    <select 
+                        value={currentLimit} 
+                        onChange={(e) => onLimitChange(Number(e.target.value))}
+                        className="border border-gray-300 rounded-md px-2 py-1 outline-none focus:border-blue-500 cursor-pointer"
                     >
-                        { currentLimit } rows
-                        {/* La flèche pointe vers le bas par défaut (rotation de 180 si le menu est ouvert) */}
-                        <svg 
-                            className={`w-4 h-4 ml-1 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} 
-                            fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                        >
-                            <path d="m6 9 6 6 6-6"/>
-                        </svg>
-                    </button>
-                    
-                    {/* Le menu déroulant qui s'affiche sous la flèche */}
-                    {isDropdownOpen && (
-                        <div className="absolute top-full right-0 mt-2 bg-white border border-gray-200 shadow-lg rounded-md py-1 z-50 w-24">
-                            <button onClick={() => handleSelectLimit(5)} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-700 cursor-pointer">5 rows</button>
-                            <button onClick={() => handleSelectLimit(10)} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-700 cursor-pointer">10 rows</button>
-                            <button onClick={() => handleSelectLimit(20)} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-700 cursor-pointer">20 rows</button>
-                        </div>
-                    )}
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                    </select>
+                    <span>rows</span>
                 </div>
             </div>
-           
-            <div className="w-full overflow-x-auto">
-                <table className="w-full text-left border-collapse table-fixed min-w-[600px]">
-                    <thead className="bg-white text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-400">
-                        <tr>
-                            <td className="w-[45%] md:w-[35%] lg:w-[30%] px-4 py-3 md:px-2 lg:px-6 md:py-4">CUSTOMER NAME</td>
-                            <td className="w-[30%] md:w-[25%] lg:w-[20%] px-4 py-3 md:px-2 lg:px-6 md:py-4">VERIFICATION STATUS</td>
-                            <td className="w-[25%] md:w-[20%] lg:w-[15%] px-4 py-3 md:px-2 lg:px-6 md:py-4 text-center">RISK LEVEL</td>
-                            <td className="hidden md:table-cell md:w-[20%] lg:w-[20%] px-4 py-3 md:px-2 lg:px-6 md:py-4">DATE ADDED</td>
-                            <td className="hidden lg:table-cell lg:w-[15%] px-4 py-3 lg:px-6 md:py-4 text-center">ACTIONS</td>
+
+            <div className="overflow-x-auto min-h-[350px]" ref={menuRef}>
+                <table className="w-full text-left border-collapse">
+                    <thead>
+                        <tr className="bg-gray-50/50 border-b border-gray-200 text-xs uppercase tracking-wider text-gray-500 font-bold">
+                            <th className="px-6 py-4">Customer</th>
+                            <th className="px-6 py-4">Status</th>
+                            <th className="px-6 py-4">AI Risk Level</th>
+                            <th className="px-6 py-4">Submitted At</th>
+                            <th className="px-6 py-4 text-right">Actions</th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-400 bg-white text-xs md:text-sm text-gray-700">
-                        {data && data.map((row: any, index: number) => (
-                            <tr key={row.id || index} onClick={() => router.push(`/dashboard/customers/${row.id}`)} className="bg-white hover:bg-blue-50/50 transition-colors cursor-pointer" >
-                                <td className="px-4 py-4 md:px-2 lg:px-6 md:py-5 align-top md:align-middle">
-                                    <div className="flex flex-row gap-2 lg:gap-3 items-center">
-                                        <div className={`font-bold rounded-xl w-10 h-10 md:w-11 md:h-11 flex items-center justify-center shrink-0 ${getAvatarStyle(row.Status)}`}>
-                                            {row.Avatar || "NA"}
+                    <tbody className="divide-y divide-gray-100">
+                        {data.length > 0 ? (
+                            data.map((item) => (
+                                <tr 
+                                    key={item.id} 
+                                    onClick={() => router.push(`/dashboard/customers/${item.id}`)}
+                                    className="hover:bg-blue-50/30 transition-colors cursor-pointer group"
+                                >
+                                    <td className="px-6 py-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
+                                                {item.Avatar}
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <span className="font-bold text-gray-900 text-sm">{item.Nom}</span>
+                                                <span className="text-xs text-gray-500">{item.Email}</span>
+                                            </div>
                                         </div>
-                                        <div className="flex flex-col gap-0.5 min-w-0 w-full break-words">
-                                            <p className="font-semibold text-gray-900 whitespace-normal break-words">{row.Nom}</p>
-                                            <p className="text-gray-500 whitespace-normal break-all md:break-words">{row.Email}</p>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td className="px-4 py-4 md:px-2 lg:px-6 md:py-5 text-gray-600 align-top md:align-middle">
-                                    <span className={`px-2 md:px-3 py-1.5 rounded-full text-[10px] md:text-xs font-bold flex items-center gap-1.5 w-max max-w-full ${getStatusStyle(row.Status)}`}>
-                                        <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0"></span>
-                                        <span className="truncate">{row.Status}</span>
-                                    </span>
-                                </td>
-                                <td className="px-4 py-4 md:px-2 lg:px-6 md:py-5 text-gray-600 align-top md:align-middle text-center">
-                                    <span className={`px-3 py-1 rounded-full text-[10px] md:text-xs font-bold inline-flex items-center justify-center w-max mx-auto ${getRiskStyle(row.RiskLevel)}`}>
-                                        {row.RiskLevel}
-                                    </span>
-                                </td>
-                                <td className="hidden md:table-cell px-4 py-4 md:px-2 lg:px-6 md:py-5 text-gray-800 align-top md:align-middle whitespace-normal break-words font-medium">
-                                    {row.DateAdded}
-                                </td>
-                                <td className="hidden lg:table-cell px-4 lg:px-6 py-4 md:py-5 text-gray-500 align-top md:align-middle text-center">
-                                    <button className="hover:bg-gray-100 p-1.5 rounded cursor-pointer transition-colors flex mx-auto">
-                                        <svg viewBox="0 0 24 24" className="h-5 w-5 text-gray-600" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                                    </button>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider
+                                            ${item.Status === 'verified' ? 'bg-green-100 text-green-700' : 
+                                              item.Status === 'rejected' ? 'bg-red-100 text-red-700' : 
+                                              'bg-yellow-100 text-yellow-700'}`}
+                                        >
+                                            {item.Status}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <span className={`inline-flex items-center gap-1.5 text-xs font-bold
+                                            ${item.RiskLevel === 'Low' ? 'text-green-600' : 
+                                              item.RiskLevel === 'High' ? 'text-red-600' : 
+                                              'text-yellow-600'}`}
+                                        >
+                                            <span className={`w-2 h-2 rounded-full 
+                                                ${item.RiskLevel === 'Low' ? 'bg-green-500' : 
+                                                  item.RiskLevel === 'High' ? 'bg-red-500' : 
+                                                  'bg-yellow-500'}`}
+                                            ></span>
+                                            {item.RiskLevel} Risk
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-sm text-gray-600 font-medium">
+                                        {item.DateAdded}
+                                    </td>
+                                    <td className="px-6 py-4 text-right relative">
+                                        <button 
+                                            onClick={(e) => toggleMenu(e, item.id)}
+                                            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                                        >
+                                            <MoreVertical className="w-5 h-5" />
+                                        </button>
+
+                                        {openMenuId === item.id && (
+                                            <div className="absolute right-8 top-10 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-2 flex flex-col text-left overflow-hidden">
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); router.push(`/dashboard/customers/${item.id}`); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                                >
+                                                    <Eye className="w-4 h-4 text-gray-400" /> Review Profile
+                                                </button>
+                                                
+                                                <button 
+                                                    onClick={(e) => handleCopyId(e, item.id)}
+                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                                >
+                                                    {copiedId === item.id ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4 text-gray-400" />}
+                                                    {copiedId === item.id ? "ID Copied!" : "Copy Case ID"}
+                                                </button>
+
+                                                <button 
+                                                    onClick={(e) => handleMailTo(e, item.Email)}
+                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                                >
+                                                    <Mail className="w-4 h-4 text-gray-400" /> Contact Applicant
+                                                </button>
+
+                                                <div className="h-[1px] bg-gray-100 my-1 w-full"></div>
+
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); alert("Profile flagged for internal audit."); setOpenMenuId(null); }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors font-medium"
+                                                >
+                                                    <Flag className="w-4 h-4" /> Flag for Audit
+                                                </button>
+                                            </div>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))
+                        ) : (
+                            <tr>
+                                <td colSpan={5} className="px-6 py-12 text-center text-gray-500 font-medium">
+                                    No records found matching your filters.
                                 </td>
                             </tr>
-                        ))}
+                        )}
                     </tbody>
                 </table>
             </div>
 
-            <footer className="flex flex-row justify-between items-center bg-white p-4 border-t border-gray-400">
-                <p className="text-[10px] md:text-xs font-medium text-gray-500 ml-2">
-                    Showing {data ? data.length : 0} results out of {totalItems}
+            {/* PAGINATION */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between mt-auto">
+                <p className="text-sm text-gray-500 font-medium">
+                    Showing <span className="font-bold text-gray-900">{data.length === 0 ? 0 : (currentPage - 1) * currentLimit + 1}</span> to <span className="font-bold text-gray-900">{Math.min(currentPage * currentLimit, totalItems)}</span> of <span className="font-bold text-gray-900">{totalItems}</span> entries
                 </p>
-               
-                <div className="flex flex-row gap-1 items-center shrink-0">
-                    <button
-                        onClick={onPrevPage}
+                <div className="flex gap-2">
+                    <button 
+                        onClick={onPrevPage} 
                         disabled={currentPage === 1}
-                        className="bg-white w-7 h-7 md:w-8 md:h-8 flex items-center justify-center rounded border border-gray-300 hover:bg-gray-100 text-gray-500 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="p-2 border border-gray-300 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-white cursor-pointer"
                     >
-                        <svg viewBox="0 0 24 24" className="w-3 h-3 md:w-4 md:h-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+                        <ChevronLeft className="w-4 h-4 text-gray-600" />
                     </button>
-                   
-                    <span className="text-xs md:text-sm font-medium text-gray-700 px-2">
-                        Page {currentPage} of {totalPages || 1}
-                    </span>
-                   
-                    <button
-                        onClick={onNextPage}
+                    <button 
+                        onClick={onNextPage} 
                         disabled={currentPage >= totalPages || totalPages === 0}
-                        className="bg-white w-7 h-7 md:w-8 md:h-8 flex items-center justify-center rounded border border-gray-300 hover:bg-gray-100 text-gray-500 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="p-2 border border-gray-300 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-white cursor-pointer"
                     >
-                        <svg viewBox="0 0 24 24" className="w-3 h-3 md:w-4 md:h-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                        <ChevronRight className="w-4 h-4 text-gray-600" />
                     </button>
                 </div>
-            </footer>
+            </div>
         </div>
     );
 }

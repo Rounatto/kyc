@@ -1,6 +1,5 @@
 "use client"
 
-import Link from "next/link";
 import { useState, useEffect } from "react";
 import VerificationLogTable from "@/components/VerificationLogTable";
 import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert, SlidersHorizontal, X } from "lucide-react";
@@ -16,23 +15,16 @@ export default function CustomerPage() {
     const [LimitPerPage, setLimitPerPage] = useState(5);
     const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
 
-    // --- LE MOTEUR DE FILTRES PRO ---
     const [isFilterOpen, setIsFilterOpen] = useState(false);
-    
-    // draftFilters = Ce que l'utilisateur coche dans le menu (sans recharger la page)
     const [draftFilters, setDraftFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
-    
-    // activeFilters = Les filtres réellement appliqués au tableau (après clic sur Apply)
     const [activeFilters, setActiveFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
 
-    // Vérifie si un filtre est actif pour allumer le bouton en bleu
     const hasActiveFilters = activeFilters.status !== 'all' || activeFilters.risk !== 'all' || activeFilters.sort !== 'newest';
 
     useEffect(() => {
         async function fetchCustomers() {
             setLoading(true);
             try{
-                // On intègre TOUS les filtres dans l'URL dynamique
                 const url = `/api/customers?page=${currentPage}&limit=${LimitPerPage}&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}`;
                 const response = await fetch(url);
                 const data = await response.json();
@@ -84,13 +76,53 @@ export default function CustomerPage() {
             }
         }
         fetchCustomers();   
-    }, [currentPage, LimitPerPage, activeFilters]); // Se recharge quand activeFilters change
+    }, [currentPage, LimitPerPage, activeFilters]);
 
-    // --- ACTIONS DES FILTRES ---
+    // --- ENGIN D'EXPORTATION CSV DU DIRECTORY (BRUT ET FILTRÉ) ---
+    const handleExportCSV = async () => {
+        try {
+            const url = `/api/customers?page=1&limit=1000&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}`;
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (response.ok && data.requests) {
+                const headers = ["ID", "Customer Name", "Email", "Procedure Type", "Document Type", "ID Number", "Nationality", "Risk Score", "Status", "Date Submitted"];
+                
+                const csvRows = data.requests.map((req: any) => {
+                    return [
+                        req.id,
+                        `"${req.customerName}"`,
+                        req.email,
+                        req.type,
+                        req.documentType,
+                        req.cin,
+                        req.nationality || "N/A",
+                        req.score || "N/A",
+                        req.status,
+                        new Date(req.submittedAt).toLocaleString()
+                    ].join(",");
+                });
+
+                const csvString = "\uFEFF" + [headers.join(","), ...csvRows].join("\n");
+                const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+                const link = document.createElement("a");
+                const urlObj = URL.createObjectURL(blob);
+                
+                link.setAttribute("href", urlObj);
+                link.setAttribute("download", `kyc_directory_export_${activeFilters.status}_risk_${activeFilters.risk}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        } catch (error) {
+            console.error("CSV Export failure:", error);
+        }
+    };
+
     const handleApplyFilters = () => {
-        setActiveFilters(draftFilters); // Transfère le brouillon vers l'état actif
-        setCurrentPage(1); // Retour au début de la liste
-        setIsFilterOpen(false); // Ferme le panneau
+        setActiveFilters(draftFilters);
+        setCurrentPage(1);
+        setIsFilterOpen(false);
     };
 
     const handleResetFilters = () => {
@@ -101,10 +133,9 @@ export default function CustomerPage() {
         setIsFilterOpen(false);
     };
 
-    // --- ACTIONS DE PAGINATION ---
-    const handleNextPage = () => { if (currentPage < totalPages) setCurrentPage((prev) => prev + 1); };
-    const handlePrevPage = () => { if (currentPage > 1) setCurrentPage((prev) => prev - 1); };
-    const handleLimitChange = (newLimit: number) => { setLimitPerPage(newLimit); setCurrentPage(1); };
+    const handleNextPage = () => { if (currentPage < totalPages) { setCurrentPage((prev) => prev + 1); } };
+    const handlePrevPage = () => { if (currentPage > 1) { setCurrentPage((prev) => prev - 1); } };
+    const handleLimitChange = (newLimit: number) => { setLimitPerPage(newLimit); setCurrentPage(1); }
 
     return (
         <div className="w-full">
@@ -121,17 +152,15 @@ export default function CustomerPage() {
                     <div className="flex flex-row gap-3 w-full lg:w-auto items-center">
                         <NewVerificationButton />
                         
-                        {/* 💡 LE BOUTON ET PANNEAU DE FILTRES PRO */}
                         <div className="relative flex-1 lg:flex-none">
                             <button 
                                 onClick={() => setIsFilterOpen(!isFilterOpen)} 
                                 className={`w-full flex items-center gap-2 px-2 md:px-4 py-2 border rounded-lg text-sm font-medium transition-colors cursor-pointer lg:w-36 h-12 justify-center
                                 ${hasActiveFilters ? 'bg-blue-50 border-blue-600 text-blue-700 hover:bg-blue-100' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
                             >
-                                <span className="flex items-center justify-center relative">
-                                    <ListFilter className="w-4 h-4" />
-                                </span>
+                                <ListFilter className="w-4 h-4" />
                                 <p className="text-xs md:text-sm whitespace-nowrap">Filter</p>
+                                {hasActiveFilters && <span className="w-2 h-2 bg-blue-600 rounded-full"></span>}
                             </button>
 
                             {isFilterOpen && (
@@ -147,7 +176,6 @@ export default function CustomerPage() {
                                     </div>
 
                                     <div className="p-4 flex flex-col gap-5">
-                                        {/* Row 1: Status */}
                                         <div className="flex flex-col gap-2">
                                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Status</label>
                                             <div className="flex gap-2 flex-wrap">
@@ -164,7 +192,6 @@ export default function CustomerPage() {
                                             </div>
                                         </div>
 
-                                        {/* Row 2: AI Risk Level */}
                                         <div className="flex flex-col gap-2">
                                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">AI Risk Level</label>
                                             <div className="flex gap-2 flex-wrap">
@@ -181,7 +208,6 @@ export default function CustomerPage() {
                                             </div>
                                         </div>
 
-                                        {/* Row 3: Sorting */}
                                         <div className="flex flex-col gap-2">
                                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Sort Directory By</label>
                                             <select 
@@ -197,27 +223,25 @@ export default function CustomerPage() {
                                         </div>
                                     </div>
 
-                                    {/* Footer Actions */}
                                     <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex gap-3">
-                                        <button onClick={handleResetFilters} className="flex-1 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">
-                                            Reset
-                                        </button>
-                                        <button onClick={handleApplyFilters} className="flex-1 px-4 py-2 text-sm font-bold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors shadow-sm cursor-pointer">
-                                            Apply Filters
-                                        </button>
+                                        <button onClick={handleResetFilters} className="flex-1 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">Reset</button>
+                                        <button onClick={handleApplyFilters} className="flex-1 px-4 py-2 text-sm font-bold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors shadow-sm cursor-pointer">Apply Filters</button>
                                     </div>
                                 </div>
                             )}
                         </div>
 
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer lg:w-36 h-12 justify-center">
-                            <span className="flex items-center justify-center text-gray-700"><Download className="w-4 h-4"/></span>
-                            <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Export CSV</p>
+                        <button 
+                            onClick={handleExportCSV}
+                            className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-blue-700 border border-blue-800 rounded-lg text-sm font-medium text-white hover:bg-blue-800 cursor-pointer lg:w-36 h-12 justify-center transition-colors shadow-sm"
+                        >
+                            <span className="flex items-center justify-center text-white"><Download className="w-4 h-4"/></span>
+                            <p className="text-xs md:text-sm font-medium text-white whitespace-nowrap">Export CSV</p>
                         </button>
                     </div>
                 </div>
                 
-                {/* LES 4 WIDGETS STATISTIQUES CONNECTÉS */}
+                {/* Widgets statistiques */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
@@ -241,7 +265,7 @@ export default function CustomerPage() {
                         </div>
                     </div>
                     
-                    <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                    <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
                             <div className="text-yellow-500 text-sm font-bold flex items-center justify-center"><ClipboardClock /></div>       
@@ -280,7 +304,6 @@ export default function CustomerPage() {
                     />
                 )}
                 
-                {/* Section Graphique et Carte IA */}
                 <div className="grid flex-col lg:flex-row gap-4 md:gap-6 w-full mt-8">
                     <div className="flex flex-col w-full lg:w-[70%] bg-white border border-gray-200 rounded-xl shadow-sm p-5 md:p-6">
                         <div className="flex flex-row justify-between items-center mb-6">
@@ -300,7 +323,7 @@ export default function CustomerPage() {
                         <div className="flex flex-col gap-4">
                             <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
                                 <path d="M11.64 5.23a.75.75 0 0 1 1.44 0l1.24 3.86a.75.75 0 0 0 .52.52l3.86 1.24a.75.75 0 0 1 0 1.44l-3.86 1.24a.75.75 0 0 0-.52.52l-1.24 3.86a.75.75 0 0 1-1.44 0l-1.24-3.86a.75.75 0 0 0-.52-.52l-3.86-1.24a.75.75 0 0 1 0-1.44l3.86-1.24a.75.75 0 0 0 .52-.52z"/>
-                                <path d="M19.32 2.68a.5.5 0 0 1 .96 0l.4 1.2a.5.5 0 0 0 .34.34l1.2.4a.5.5 0 0 1 0 .96l-1.2.4a.5.5 0 0 0-.34.34l-.4 1.2a.5.5 0 0 1-.96 0l-.4-1.2a.5.5 0 0 0-.34-.34l-1.2-.4a.5.5 0 0 1 0-.96l1.2-.4a.5.5 0 0 0 .34-.34z"/>
+                                <path d="M19.32 2.68a.5.5 0 0 1 .96 0l.4 1.2a.5.5 0 0 0 .34.34l1.2.4a.5.5 0 0 1 0 .96l-1.2.4a.5.5 0 0 0-.34-.34l-.4 1.2a.5.5 0 0 1-.96 0l-.4-1.2a.5.5 0 0 0-.34-.34l-1.2-.4a.5.5 0 0 1 0-.96l1.2-.4a.5.5 0 0 0 .34-.34z"/>
                             </svg>
                             <h3 className="font-bold text-lg md:text-xl">AI Risk Scoring</h3>
                             <p className="text-blue-100 text-sm md:text-base leading-relaxed">
