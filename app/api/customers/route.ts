@@ -58,7 +58,7 @@ export async function GET(req: Request) {
                 totalCustomers: totalAbsolute,
                 verifiedToday: verifiedTodayCount,
                 pendingReviews: pendingCount,
-                highRisk: 24 
+                highRisk: 24
             }
         });
 

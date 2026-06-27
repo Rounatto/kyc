@@ -1,5 +1,7 @@
 "use client"
+
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 interface VerificationLogTableProps {
     data: any[];
@@ -11,6 +13,8 @@ interface VerificationLogTableProps {
     onPrevPage: () => void;
     onLimitChange : (newLimit: number) => void;
 }
+
+const router = useRouter();
 
 export default function VerificationLogTable({
     data,
@@ -100,8 +104,8 @@ export default function VerificationLogTable({
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-400 bg-white text-xs md:text-sm text-gray-700">
-                        {data && data.map((row) => (
-                            <tr className="bg-white transition-colors hover:bg-gray-50" key={row.id}>
+                        {data && data.map((row: any, index: number) => (
+                            <tr key={row.id || index} onClick={() => router.push(`/dashboard/customers/${row.id}`)} className="bg-white hover:bg-blue-50/50 transition-colors cursor-pointer" >
                                 <td className="px-4 py-4 md:px-2 lg:px-6 md:py-5 align-top md:align-middle">
                                     <div className="flex flex-row gap-2 lg:gap-3 items-center">
                                         <div className={`font-bold rounded-xl w-10 h-10 md:w-11 md:h-11 flex items-center justify-center shrink-0 ${getAvatarStyle(row.Status)}`}>

@@ -1,8 +1,11 @@
 "use client"
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function VerificationTable({ data }: { data: any[] }) {
-    
+    const router = useRouter();
+
     const getStatusStyle = (status: string) => {
         const safeStatus = String(status || "").toLowerCase();
         if (safeStatus === "verified") return "bg-green-100 text-green-700";
@@ -53,8 +56,8 @@ export default function VerificationTable({ data }: { data: any[] }) {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-300 bg-white text-xs md:text-sm text-gray-700">
-                        {data && data.map((row) => (
-                            <tr className="bg-white transition-colors" key={row.id}>
+                        {data && data.map((row: any, index: number) => (
+                            <tr key={row.id || index} onClick={() => router.push(`/dashboard/customers/${row.id}`)} className="bg-white hover:bg-blue-50/50 transition-colors cursor-pointer">
                                 <td className="px-4 py-4 md:px-2 lg:px-6 md:py-5 align-top md:align-middle">
                                     <div className="flex flex-row gap-2 lg:gap-3 items-center">
                                         <div className={`font-bold rounded-xl w-10 h-10 md:w-11 md:h-11 flex items-center justify-center shrink-0 ${getAvatarStyle(row.Status)}`}>
