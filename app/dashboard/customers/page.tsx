@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import VerificationLogTable from "@/components/VerificationLogTable";
-import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert } from "lucide-react";
+import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert, SlidersHorizontal, X } from "lucide-react";
 import CustomerHeader from "@/components/HeaderCustomers";
 import NewVerificationButton from "@/components/NewVerificationButton";
 
@@ -14,15 +14,27 @@ export default function CustomerPage() {
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
     const [LimitPerPage, setLimitPerPage] = useState(5);
-    
-    // Correction ici : setStats au lieu de setStatus
     const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
+
+    // --- LE MOTEUR DE FILTRES PRO ---
+    const [isFilterOpen, setIsFilterOpen] = useState(false);
+    
+    // draftFilters = Ce que l'utilisateur coche dans le menu (sans recharger la page)
+    const [draftFilters, setDraftFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
+    
+    // activeFilters = Les filtres réellement appliqués au tableau (après clic sur Apply)
+    const [activeFilters, setActiveFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
+
+    // Vérifie si un filtre est actif pour allumer le bouton en bleu
+    const hasActiveFilters = activeFilters.status !== 'all' || activeFilters.risk !== 'all' || activeFilters.sort !== 'newest';
 
     useEffect(() => {
         async function fetchCustomers() {
             setLoading(true);
             try{
-                const response = await fetch(`/api/customers?page=${currentPage}&limit=${LimitPerPage}`);
+                // On intègre TOUS les filtres dans l'URL dynamique
+                const url = `/api/customers?page=${currentPage}&limit=${LimitPerPage}&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}`;
+                const response = await fetch(url);
                 const data = await response.json();
 
                 if (response.ok && data.requests) {
@@ -40,14 +52,10 @@ export default function CustomerPage() {
                         
                         let risk = "Medium";
                         let parsedScore = NaN;
-                        
                         if (req.score) {
                             const match = String(req.score).match(/\d+/);
-                            if (match) {
-                                parsedScore = parseInt(match[0], 10);
-                            }
+                            if (match) parsedScore = parseInt(match[0], 10);
                         }
-
                         if (!isNaN(parsedScore)) {
                             if (parsedScore >= 80) risk = "Low";
                             else if (parsedScore <= 50) risk = "High";
@@ -67,11 +75,7 @@ export default function CustomerPage() {
                     setCustomers(formattedData);
                     setTotalItems(data.total);
                     setTotalPages(Math.ceil(data.total / LimitPerPage));
-
-                    // NOUVEAU : On met à jour les vraies statistiques si l'API les envoie
-                    if (data.stats) {
-                        setStats(data.stats);
-                    }
+                    if (data.stats) setStats(data.stats);
                 }
             } catch (error) {
                 console.error("Error fetching customers:", error);
@@ -80,24 +84,27 @@ export default function CustomerPage() {
             }
         }
         fetchCustomers();   
-    }, [currentPage, LimitPerPage]);
+    }, [currentPage, LimitPerPage, activeFilters]); // Se recharge quand activeFilters change
 
-    const handleNextPage = () => {
-        if (currentPage < totalPages) {
-            setCurrentPage((prev) => prev + 1);
-        }
+    // --- ACTIONS DES FILTRES ---
+    const handleApplyFilters = () => {
+        setActiveFilters(draftFilters); // Transfère le brouillon vers l'état actif
+        setCurrentPage(1); // Retour au début de la liste
+        setIsFilterOpen(false); // Ferme le panneau
     };
 
-    const handlePrevPage = () => {
-        if (currentPage > 1) {
-            setCurrentPage((prev) => prev - 1);
-        }
+    const handleResetFilters = () => {
+        const defaultFilters = { status: 'all', risk: 'all', sort: 'newest' };
+        setDraftFilters(defaultFilters);
+        setActiveFilters(defaultFilters);
+        setCurrentPage(1);
+        setIsFilterOpen(false);
     };
 
-    const handleLimitChange = (newLimit: number) => {
-        setLimitPerPage(newLimit);
-        setCurrentPage(1); 
-    }
+    // --- ACTIONS DE PAGINATION ---
+    const handleNextPage = () => { if (currentPage < totalPages) setCurrentPage((prev) => prev + 1); };
+    const handlePrevPage = () => { if (currentPage > 1) setCurrentPage((prev) => prev - 1); };
+    const handleLimitChange = (newLimit: number) => { setLimitPerPage(newLimit); setCurrentPage(1); };
 
     return (
         <div className="w-full">
@@ -110,92 +117,156 @@ export default function CustomerPage() {
                         <h2 className="text-2xl font-bold text-gray-900">Customer Directory</h2>
                         <p className="text-sm text-gray-500">Manage identity verifications and monitor entreprise risk profiles.</p>
                     </div>
+                    
                     <div className="flex flex-row gap-3 w-full lg:w-auto items-center">
                         <NewVerificationButton />
                         
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
-                            <span className="flex items-center justify-center text-gray-600" aria-hidden="true">
-                                <ListFilter />
-                            </span>
-                            <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Filter</p>
-                        </button>
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-gray-300 border border-gray-400 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-200 cursor-pointer lg:w-36 h-12 justify-center">
-                            <span className="flex items-center justify-center text-gray-700" aria-hidden="true">
-                                <Download />
-                            </span>
+                        {/* 💡 LE BOUTON ET PANNEAU DE FILTRES PRO */}
+                        <div className="relative flex-1 lg:flex-none">
+                            <button 
+                                onClick={() => setIsFilterOpen(!isFilterOpen)} 
+                                className={`w-full flex items-center gap-2 px-2 md:px-4 py-2 border rounded-lg text-sm font-medium transition-colors cursor-pointer lg:w-36 h-12 justify-center
+                                ${hasActiveFilters ? 'bg-blue-50 border-blue-600 text-blue-700 hover:bg-blue-100' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                            >
+                                <span className="flex items-center justify-center relative">
+                                    <ListFilter className="w-4 h-4" />
+                                </span>
+                                <p className="text-xs md:text-sm whitespace-nowrap">Filter</p>
+                            </button>
+
+                            {isFilterOpen && (
+                                <div className="absolute left-0 lg:right-0 lg:left-auto mt-2 w-[320px] max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-xl shadow-2xl z-[100] flex flex-col overflow-hidden">
+                                    <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                                        <div className="flex items-center gap-2 text-gray-800 font-bold text-sm">
+                                            <SlidersHorizontal className="w-4 h-4 text-blue-600" />
+                                            Advanced Filters
+                                        </div>
+                                        <button onClick={() => setIsFilterOpen(false)} className="text-gray-400 hover:text-gray-700 cursor-pointer">
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+
+                                    <div className="p-4 flex flex-col gap-5">
+                                        {/* Row 1: Status */}
+                                        <div className="flex flex-col gap-2">
+                                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Status</label>
+                                            <div className="flex gap-2 flex-wrap">
+                                                {['all', 'pending', 'verified', 'rejected'].map((s) => (
+                                                    <button 
+                                                        key={s}
+                                                        onClick={() => setDraftFilters({...draftFilters, status: s})}
+                                                        className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors cursor-pointer capitalize
+                                                        ${draftFilters.status === s ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                                                    >
+                                                        {s}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Row 2: AI Risk Level */}
+                                        <div className="flex flex-col gap-2">
+                                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">AI Risk Level</label>
+                                            <div className="flex gap-2 flex-wrap">
+                                                {['all', 'high', 'medium', 'low'].map((r) => (
+                                                    <button 
+                                                        key={r}
+                                                        onClick={() => setDraftFilters({...draftFilters, risk: r})}
+                                                        className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors cursor-pointer capitalize
+                                                        ${draftFilters.risk === r ? (r === 'high' ? 'bg-red-600 text-white border-red-600' : r === 'low' ? 'bg-green-600 text-white border-green-600' : r === 'medium' ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-gray-800 text-white border-gray-800') : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                                                    >
+                                                        {r}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Row 3: Sorting */}
+                                        <div className="flex flex-col gap-2">
+                                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Sort Directory By</label>
+                                            <select 
+                                                value={draftFilters.sort}
+                                                onChange={(e) => setDraftFilters({...draftFilters, sort: e.target.value})}
+                                                className="w-full border border-gray-300 bg-white rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer"
+                                            >
+                                                <option value="newest">Newest First (SLA)</option>
+                                                <option value="oldest">Oldest First (SLA)</option>
+                                                <option value="highest_score">Safest Profiles (High Score)</option>
+                                                <option value="lowest_score">Riskiest Profiles (Low Score)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* Footer Actions */}
+                                    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex gap-3">
+                                        <button onClick={handleResetFilters} className="flex-1 px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">
+                                            Reset
+                                        </button>
+                                        <button onClick={handleApplyFilters} className="flex-1 px-4 py-2 text-sm font-bold text-white bg-blue-700 rounded-lg hover:bg-blue-800 transition-colors shadow-sm cursor-pointer">
+                                            Apply Filters
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer lg:w-36 h-12 justify-center">
+                            <span className="flex items-center justify-center text-gray-700"><Download className="w-4 h-4"/></span>
                             <p className="text-xs md:text-sm font-medium text-gray-800 whitespace-nowrap">Export CSV</p>
                         </button>
                     </div>
                 </div>
                 
-                {/* LES 4 WIDGETS STATISTIQUES CONNECTÉS À LA BDD */}
+                {/* LES 4 WIDGETS STATISTIQUES CONNECTÉS */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Total Customers</p>
-                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center">
-                                <User />
-                            </div>       
+                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center"><User /></div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.totalCustomers}</p>
-                            <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
-                                +4.2%
-                            </div>
+                            <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">+4.2%</div>
                         </div>
                     </div>
                     
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Verified Today</p>
-                            <div className="text-green-700 text-sm font-bold flex items-center justify-center">
-                                <ShieldCheck />
-                            </div>       
+                            <div className="text-green-700 text-sm font-bold flex items-center justify-center"><ShieldCheck /></div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verifiedToday}</p>
-                            <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
-                                +12%
-                            </div>
+                            <div className="text-green-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">+12%</div>
                         </div>
                     </div>
                     
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
-                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center">
-                                <ClipboardClock />
-                            </div>       
+                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center"><ClipboardClock /></div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pendingReviews}</p>
-                            <div className="text-gray-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
-                                <p className="text-gray-700">-2.1%</p>
-                            </div>
+                            <div className="text-gray-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate"><p className="text-gray-700">-2.1%</p></div>
                         </div>
                     </div>
                     
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
-                            <div className="text-red-700 text-sm font-bold flex items-center justify-center">
-                                <TriangleAlert />
-                            </div>       
+                            <div className="text-red-700 text-sm font-bold flex items-center justify-center"><TriangleAlert /></div>       
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.highRisk}</p>
-                            <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate">
-                                <p className="text-red-700">+3 Today</p>
-                            </div>
+                            <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate"><p className="text-red-700">+3 Today</p></div>
                         </div>
                     </div>
                 </div>
 
                 {/* Log Table Container */}
                 {loading ? (
-                    <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">
-                        Loading customers data...
-                    </div>
+                    <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">Loading filtered compliance data...</div>
                 ) : (
                     <VerificationLogTable 
                         data={customers} 

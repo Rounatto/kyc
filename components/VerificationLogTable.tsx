@@ -14,7 +14,6 @@ interface VerificationLogTableProps {
     onLimitChange : (newLimit: number) => void;
 }
 
-const router = useRouter();
 
 export default function VerificationLogTable({
     data,
@@ -26,6 +25,8 @@ export default function VerificationLogTable({
     onPrevPage,
     onLimitChange
 }: VerificationLogTableProps) {
+    
+    const router = useRouter();
 
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
    

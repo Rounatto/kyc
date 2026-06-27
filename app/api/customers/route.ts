@@ -10,23 +10,43 @@ export async function GET(req: Request) {
         const search = searchParams.get("search") || "";
         const page = parseInt(searchParams.get("page") || "1");
         const limit = parseInt(searchParams.get("limit") || "5");
+        const status = searchParams.get("status") || "all";
+        const risk = searchParams.get("risk") || "all";
+        const sort = searchParams.get("sort") || "newest";
         const skip = (page - 1) * limit;
 
-        const whereCondition = search ? {
-            OR: [
+        const whereCondition: any = {};
+        if (search) {
+            whereCondition.OR = [
                 { customerName: { contains: search, mode: "insensitive" as const } },
                 { email: { contains: search, mode: "insensitive" as const } },
                 { cin: { contains: search } },
                 { phoneNumber: { contains: search } }
             ]
-        } : {};
+        }
+        if (status !== "all") {
+            whereCondition.status = status;
+        }
+        if (risk === "high") {
+            whereCondition.score = { lt: "50" };
+        } else if (risk === "medium") {
+            whereCondition.score = { gte: "50", lt: "80" };
+        }else if (risk === "low") {
+            whereCondition.score = { gte: "80" };
+        }
+
+        let orderByCondition: any = { submittedAt: 'desc' };
+
+        if (sort === "oldest") orderByCondition = { submittedAt: 'asc' };
+        if (sort === "highest_score") orderByCondition = { score: 'desc' };
+        if (sort === "lowest_score") orderByCondition = { score: 'asc' };
 
         const [requests, filteredTotal] = await Promise.all([
             prisma.verificationRequest.findMany({
                 where: whereCondition,
                 take: limit,
                 skip: skip,
-                orderBy: { submittedAt: 'desc' } 
+                orderBy: orderByCondition
             }),
             prisma.verificationRequest.count({ where: whereCondition })
         ]);
