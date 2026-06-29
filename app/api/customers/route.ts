@@ -86,11 +86,22 @@ export async function GET(req: Request) {
     }
 }
 
-// Création sécurisée d'un dossier KYC avec analyse IA et Audit Log
+// Création sécurisée d'un dossier KYC avec analyse IA, UploadThing et Audit Log
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId } = body;
+        // Récupération des URLs d'images générées par UploadThing
+        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl } = body;
+
+        // VÉRIFICATION DE SÉCURITÉ : Prévention de l'erreur Prisma P2003 (Clé étrangère)
+        if (!userId) {
+            return NextResponse.json({ error: "Authentication missing. Please log in." }, { status: 401 });
+        }
+        
+        const agent = await prisma.user.findUnique({ where: { id: userId } });
+        if (!agent) {
+            return NextResponse.json({ error: "Agent session invalid. Please log out and log back in." }, { status: 401 });
+        }
 
         // Validation d'unicité
         const existingRecord = await prisma.verificationRequest.findFirst({
@@ -139,14 +150,7 @@ export async function POST(req: Request) {
 
         const aiRationaleString = rationale.length > 0 ? rationale.join(" ") : "Standard profile, no anomalies detected.";
 
-        // Récupération du nom de l'agent pour le log immuable
-        let agentName = "System";
-        if (userId) {
-            const agent = await prisma.user.findUnique({ where: { id: userId } });
-            if (agent) agentName = agent.fullName;
-        }
-
-        // Insertion et Audit Log
+        // Insertion en base de données avec URLs d'images et Audit Log
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
@@ -158,16 +162,17 @@ export async function POST(req: Request) {
                 dateOfBirth,
                 phoneNumber,
                 userId,
+                idCardUrl, // Stockage du lien de la carte d'identité
+                selfieUrl, // Stockage du lien du selfie
                 status: "pending", 
                 score: calculatedScore.toString(), 
                 riskLevel: riskLevel,
                 aiRationale: aiRationaleString,
                 
-                // Le log affiche désormais explicitement le nom de l'agent
                 auditLogs: {
                     create: {
                         action: "CREATED",
-                        details: `KYC Pipeline initiated by ${agentName}.`,
+                        details: `KYC Pipeline initiated by ${agent.fullName}.`,
                         agentId: userId 
                     }
                 }
