@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import VerificationLogTable from "@/components/VerificationLogTable";
-import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert, SlidersHorizontal, X, Search } from "lucide-react";
+import { User, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert, SlidersHorizontal, X } from "lucide-react";
 import CustomerHeader from "@/components/HeaderCustomers";
 import NewVerificationButton from "@/components/NewVerificationButton";
 
@@ -15,9 +15,6 @@ export default function CustomerPage() {
     const [LimitPerPage, setLimitPerPage] = useState(5);
     const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
 
-    const [searchQuery, setSearchQuery] = useState("");
-    const [debouncedSearch, setDebouncedSearch] = useState("");
-
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [draftFilters, setDraftFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
     const [activeFilters, setActiveFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
@@ -25,18 +22,10 @@ export default function CustomerPage() {
     const hasActiveFilters = activeFilters.status !== 'all' || activeFilters.risk !== 'all' || activeFilters.sort !== 'newest';
 
     useEffect(() => {
-        const timer = setTimeout(() => {
-            setDebouncedSearch(searchQuery);
-            setCurrentPage(1);
-        }, 400);
-        return () => clearTimeout(timer);
-    }, [searchQuery]);
-
-    useEffect(() => {
         async function fetchCustomers() {
             setLoading(true);
-            try {
-                const url = `/api/customers?page=${currentPage}&limit=${LimitPerPage}&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}&search=${encodeURIComponent(debouncedSearch)}`;
+            try{
+                const url = `/api/customers?page=${currentPage}&limit=${LimitPerPage}&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}`;
                 const response = await fetch(url);
                 const data = await response.json();
 
@@ -54,10 +43,15 @@ export default function CustomerPage() {
                         }
                         
                         let risk = "Medium";
-                        let parsedScore = parseInt(String(req.score).match(/\d+/)?.[0] || "0", 10);
-                        
-                        if (parsedScore >= 80) risk = "Low";
-                        else if (parsedScore <= 50) risk = "High";
+                        let parsedScore = NaN;
+                        if (req.score) {
+                            const match = String(req.score).match(/\d+/);
+                            if (match) parsedScore = parseInt(match[0], 10);
+                        }
+                        if (!isNaN(parsedScore)) {
+                            if (parsedScore >= 80) risk = "Low";
+                            else if (parsedScore <= 50) risk = "High";
+                        }
 
                         return {
                             id: req.id,
@@ -67,7 +61,6 @@ export default function CustomerPage() {
                             Status: req.status ? req.status.toLowerCase() : "pending",
                             RiskLevel: risk,
                             DateAdded: dateFormatted,
-                            Score: req.score || "--", // 💡 CORRECTION : Ajout du champ manquant pour le tableau
                         };
                     });
                     
@@ -83,11 +76,12 @@ export default function CustomerPage() {
             }
         }
         fetchCustomers();   
-    }, [currentPage, LimitPerPage, activeFilters, debouncedSearch]); 
+    }, [currentPage, LimitPerPage, activeFilters]);
 
+    // --- ENGIN D'EXPORTATION CSV DU DIRECTORY (BRUT ET FILTRÉ) ---
     const handleExportCSV = async () => {
         try {
-            const url = `/api/customers?page=1&limit=1000&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}&search=${encodeURIComponent(debouncedSearch)}`;
+            const url = `/api/customers?page=1&limit=1000&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}`;
             const response = await fetch(url);
             const data = await response.json();
 
@@ -115,7 +109,7 @@ export default function CustomerPage() {
                 const urlObj = URL.createObjectURL(blob);
                 
                 link.setAttribute("href", urlObj);
-                link.setAttribute("download", `kyc_directory_export_${new Date().toISOString().slice(0,10)}.csv`);
+                link.setAttribute("download", `kyc_directory_export_${activeFilters.status}_risk_${activeFilters.risk}.csv`);
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
@@ -156,25 +150,16 @@ export default function CustomerPage() {
                     </div>
                     
                     <div className="flex flex-row gap-3 w-full lg:w-auto items-center">
-                        <div className="relative flex-1 lg:flex-none lg:w-64">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                            <input
-                                type="text"
-                                placeholder="Search Name, Email, ID..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full pl-9 pr-4 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:border-blue-600 focus:ring-1 focus:ring-blue-600 h-12 outline-none transition-all shadow-sm text-gray-800"
-                            />
-                        </div>
-
-                        <div className="relative">
+                        <NewVerificationButton />
+                        
+                        <div className="relative flex-1 lg:flex-none">
                             <button 
                                 onClick={() => setIsFilterOpen(!isFilterOpen)} 
-                                className={`w-full flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors cursor-pointer lg:w-36 h-12 justify-center shadow-sm
+                                className={`w-full flex items-center gap-2 px-2 md:px-4 py-2 border rounded-lg text-sm font-medium transition-colors cursor-pointer lg:w-36 h-12 justify-center
                                 ${hasActiveFilters ? 'bg-blue-50 border-blue-600 text-blue-700 hover:bg-blue-100' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
                             >
                                 <ListFilter className="w-4 h-4" />
-                                <p className="text-sm whitespace-nowrap">Filter</p>
+                                <p className="text-xs md:text-sm whitespace-nowrap">Filter</p>
                                 {hasActiveFilters && <span className="w-2 h-2 bg-blue-600 rounded-full"></span>}
                             </button>
 
@@ -197,7 +182,6 @@ export default function CustomerPage() {
                                                 {['all', 'pending', 'verified', 'rejected'].map((s) => (
                                                     <button 
                                                         key={s}
-                                                        type="button"
                                                         onClick={() => setDraftFilters({...draftFilters, status: s})}
                                                         className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors cursor-pointer capitalize
                                                         ${draftFilters.status === s ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
@@ -214,7 +198,6 @@ export default function CustomerPage() {
                                                 {['all', 'high', 'medium', 'low'].map((r) => (
                                                     <button 
                                                         key={r}
-                                                        type="button"
                                                         onClick={() => setDraftFilters({...draftFilters, risk: r})}
                                                         className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors cursor-pointer capitalize
                                                         ${draftFilters.risk === r ? (r === 'high' ? 'bg-red-600 text-white border-red-600' : r === 'low' ? 'bg-green-600 text-white border-green-600' : r === 'medium' ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-gray-800 text-white border-gray-800') : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
@@ -250,13 +233,11 @@ export default function CustomerPage() {
 
                         <button 
                             onClick={handleExportCSV}
-                            className="flex-1 lg:flex-none flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer h-12 justify-center transition-colors shadow-sm"
+                            className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-blue-700 border border-blue-800 rounded-lg text-sm font-medium text-white hover:bg-blue-800 cursor-pointer lg:w-36 h-12 justify-center transition-colors shadow-sm"
                         >
-                            <Download className="w-4 h-4 text-gray-500"/>
-                            <p className="text-sm font-medium whitespace-nowrap">Export CSV</p>
+                            <span className="flex items-center justify-center text-white"><Download className="w-4 h-4"/></span>
+                            <p className="text-xs md:text-sm font-medium text-white whitespace-nowrap">Export CSV</p>
                         </button>
-
-                        <NewVerificationButton />
                     </div>
                 </div>
                 
@@ -302,22 +283,14 @@ export default function CustomerPage() {
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.highRisk}</p>
-                            <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate"><p className="text-red-700">Action Req.</p></div>
+                            <div className="text-red-700 text-[10px] font-bold flex items-center justify-center gap-1 truncate"><p className="text-red-700">+3 Today</p></div>
                         </div>
                     </div>
                 </div>
 
                 {/* Log Table Container */}
                 {loading ? (
-                    <div className="w-full bg-white border border-gray-200 rounded-xl p-12 text-center flex flex-col items-center justify-center shadow-sm h-[400px]">
-                        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <p className="text-gray-500 font-medium">Loading filtered compliance data...</p>
-                    </div>
-                ) : customers.length === 0 ? (
-                    <div className="w-full bg-white border border-gray-200 rounded-xl p-12 text-center flex flex-col items-center justify-center shadow-sm h-[400px]">
-                        <p className="text-gray-950 font-bold text-lg">No profiles found</p>
-                        <p className="text-gray-500 text-sm mt-1">Try adjusting your search query or filters.</p>
-                    </div>
+                    <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">Loading filtered compliance data...</div>
                 ) : (
                     <VerificationLogTable 
                         data={customers} 
@@ -350,10 +323,11 @@ export default function CustomerPage() {
                         <div className="flex flex-col gap-4">
                             <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
                                 <path d="M11.64 5.23a.75.75 0 0 1 1.44 0l1.24 3.86a.75.75 0 0 0 .52.52l3.86 1.24a.75.75 0 0 1 0 1.44l-3.86 1.24a.75.75 0 0 0-.52.52l-1.24 3.86a.75.75 0 0 1-1.44 0l-1.24-3.86a.75.75 0 0 0-.52-.52l-3.86-1.24a.75.75 0 0 1 0-1.44l3.86-1.24a.75.75 0 0 0 .52-.52z"/>
+                                <path d="M19.32 2.68a.5.5 0 0 1 .96 0l.4 1.2a.5.5 0 0 0 .34.34l1.2.4a.5.5 0 0 1 0 .96l-1.2.4a.5.5 0 0 0-.34-.34l-.4 1.2a.5.5 0 0 1-.96 0l-.4-1.2a.5.5 0 0 0-.34-.34l-1.2-.4a.5.5 0 0 1 0-.96l1.2-.4a.5.5 0 0 0 .34-.34z"/>
                             </svg>
                             <h3 className="font-bold text-lg md:text-xl">AI Risk Scoring</h3>
                             <p className="text-blue-100 text-sm md:text-base leading-relaxed">
-                                Our new neural engine has flagged potential anomalies. Manual review recommended.
+                                Our new neural engine has flagged 3 potential anomalies in the last hour. Manual review recommended.
                             </p>
                         </div>
                         <button className="mt-6 w-full py-2.5 bg-blue-500 hover:bg-blue-400 transition-colors border border-blue-400 rounded-lg font-medium text-sm cursor-pointer">
