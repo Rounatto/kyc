@@ -9,12 +9,12 @@ export async function GET(
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
-        // Chargement du client en incluant sa piste d'audit complète
+        // Récupération initiale avec l'historique
         const customer = await prisma.verificationRequest.findUnique({
             where: { id: customerId },
             include: {
                 auditLogs: {
-                    orderBy: { timestamp: 'desc' } // Du plus récent au plus ancien
+                    orderBy: { timestamp: 'desc' } 
                 }
             }
         });
@@ -40,21 +40,19 @@ export async function PATCH(
         const customerId = resolvedParams.id;
 
         const body = await req.json();
-        // Réception du statut et de l'ID de l'agent depuis le front-end
         const { status, agentId } = body;
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
             return NextResponse.json({ message: "Invalid status value." }, { status: 400 });
         }
 
-        // Récupération de l'identité de l'agent pour graver son nom
+        // Récupération de l'identité de l'agent
         let agentName = "System";
         if (agentId) {
             const agent = await prisma.user.findUnique({ where: { id: agentId } });
             if (agent) agentName = agent.fullName;
         }
 
-        // Configuration du message d'audit selon l'action
         let actionName = "UPDATED";
         let logDetails = `Status changed to ${status} by ${agentName}.`;
 
@@ -63,10 +61,10 @@ export async function PATCH(
             logDetails = `KYC Profile manually approved by ${agentName}.`;
         } else if (status === "rejected") {
             actionName = "REJECTED";
-            logDetails = `KYC Profile manually rejected by ${agentName}.`;
+            logDetails = `KYC Profile rejected by ${agentName}.`;
         }
         
-        // Mise à jour du client ET création du log en une seule transaction
+        // Mise à jour ET récupération de l'historique complet
         const updatedCustomer = await prisma.verificationRequest.update({
             where: { id: customerId },
             data: { 
@@ -79,6 +77,12 @@ export async function PATCH(
                     }
                 }
             },
+            // 💡 AJOUT PRO : On demande à Prisma de renvoyer le client AVEC son historique à jour
+            include: {
+                auditLogs: {
+                    orderBy: { timestamp: 'desc' } 
+                }
+            }
         });
 
         return NextResponse.json(updatedCustomer);
