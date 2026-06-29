@@ -7,6 +7,7 @@ import Image from "next/image";
 import { ArrowLeft, Loader2, Check, X, FileText, ShieldAlert, User, Clock, History, Maximize2, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
+import { toast } from "sonner";
 
 export default function CustomerReviewPage({ params }: { params: Promise<{ id: string }> }) {
     const resolvedParams = use(params);
@@ -39,7 +40,10 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
     }, [customerId]);
 
     const handleDecision = async (newStatus: "verified" | "rejected") => {
-        setActionLoading(newStatus);
+    setActionLoading(newStatus);
+
+    // 💡 Création de la promesse pour le chargement asynchrone
+    const actionPromise = new Promise(async (resolve, reject) => {
         try {
             const res = await fetch(`/api/customers/${customerId}`, {
                 method: "PATCH",
@@ -53,11 +57,25 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
             if (res.ok) {
                 const updatedCustomer = await res.json();
                 setCustomer(updatedCustomer);
+                resolve(updatedCustomer);
+            } else {
+                const errData = await res.json();
+                reject(errData.message || "Failed to update profile status.");
             }
-        } finally { 
-            setActionLoading(null); 
+        } catch (err) {
+            reject("Network error. Please try again.");
+        } finally {
+            setActionLoading(null);
         }
-    };
+    });
+
+    // 💡 Déclenchement du Toast interactif
+    toast.promise(actionPromise, {
+        loading: `Updating compliance record to ${newStatus}...`,
+        success: () => `Profile successfully ${newStatus === "verified" ? "approved" : "rejected"}!`,
+        error: (err) => `${err}`,
+    });
+};
 
     if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /></div>;
     if (!customer) return <div className="min-h-screen flex items-center justify-center text-gray-500">Customer not found.</div>;

@@ -3,8 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import VerificationTable from "@/components/VerificationTable";
-import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight } from "lucide-react";
-import Header from "@/components/header";
+import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2 } from "lucide-react";import Header from "@/components/header";
 import NewVerificationButton from "@/components/NewVerificationButton"; 
 
 export default function DashboardPage() {
@@ -16,7 +15,8 @@ export default function DashboardPage() {
     useEffect(() => {
         async function fetchDashboardData() {
             try {
-                const response = await fetch("/api/customers?limit=10");
+                // On récupère les 10 dernières requêtes pour l'aperçu du Dashboard
+                const response = await fetch("/api/customers?limit=10&sort=newest");
                 const data = await response.json();
 
                 if (response.ok && data.requests) {
@@ -25,7 +25,7 @@ export default function DashboardPage() {
                             ? req.customerName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
                             : "??";
 
-                        let dateFormatted = "Date inconnue";
+                        let dateFormatted = "Unknown Date";
                         if (req.submittedAt) {
                             const d = new Date(req.submittedAt);
                             if (!isNaN(d.getTime())) {
@@ -34,28 +34,28 @@ export default function DashboardPage() {
                             }
                         }
 
+                        // Définition propre du risque basée sur le score
+                        let parsedScore = parseInt(String(req.score).match(/\d+/)?.[0] || "0", 10);
+
                         return {
                             id: req.id,
                             Avatar: initials,
-                            Nom: req.customerName,
-                            Email: req.email,
+                            Nom: req.customerName, // Mappé pour le tableau
+                            Email: req.email,      // Mappé pour le tableau
                             Type: req.type,
                             Submitted: dateFormatted, 
                             Status: req.status ? req.status.toLowerCase() : "pending",
                             Score: req.score || "--",
-                            rawDate: req.submittedAt
+                            rawDate: req.submittedAt,
+                            parsedScore // Ajouté pour faciliter le filtrage ci-dessous
                         };
                     });
 
+                    // On affiche les 5 plus récents dans le grand tableau
                     setRequestsData(formattedData.slice(0, 5));
 
-                    const criticalProfiles = data.requests.filter((req: any) => {
-                        if (!req.score) return false;
-                        const match = String(req.score).match(/\d+/);
-                        if (!match) return false;
-                        const parsedScore = parseInt(match[0], 10);
-                        return parsedScore <= 50;
-                    });
+                    // On extrait les vrais profils à haut risque (< 50) pour le widget de droite
+                    const criticalProfiles = formattedData.filter((req: any) => req.parsedScore <= 50);
                     setHighRiskProfiles(criticalProfiles.slice(0, 3));
 
                     if (data.stats) {
@@ -75,7 +75,7 @@ export default function DashboardPage() {
     const handleExportDashboardReport = () => {
         const timestamp = new Date().toLocaleString();
         
-        // 1. Construction d'une entête de rapport d'audit financier/conformité ultra propre
+        // 1. Construction d'une entête de rapport d'audit financier/conformité
         const reportSections = [
             "==================================================",
             "   KYC/AML COMPLIANCE PLATFORM EXECUTIVE REPORT   ",
@@ -86,18 +86,18 @@ export default function DashboardPage() {
             `- Total Identity Check Inventions: ${stats.totalCustomers}`,
             `- Total Verified Profiles Today: ${stats.verifiedToday}`,
             `- Current Active Pending Review Queue: ${stats.pendingReviews}`,
-            `- Critical High Risk Flagged Alerts: ${highRiskProfiles.length}`,
+            `- Critical High Risk Flagged Alerts: ${stats.highRisk}`,
             "",
             "2. LIVE CRITICAL ANOMALIES DETECTED",
             highRiskProfiles.length > 0 
-                ? highRiskProfiles.map(p => `- ALERT: ${p.customerName} (${p.email}) - AI Risk Score: ${p.score}/100`).join("\n")
+                ? highRiskProfiles.map(p => `- ALERT: ${p.Nom} (${p.Email}) - AI Risk Score: ${p.Score}/100`).join("\n")
                 : "- No critical security anomalies detected in this session.",
             "",
             "3. RECENT PIPELINE ACTIVITY LOG",
             "ID,Customer Name,Email,Procedure Type,Status,AI Score,Date Submitted"
         ];
         
-        // 2. Injection des lignes de données du tableau
+        // 2. Injection des lignes de données du tableau (en utilisant les clés mappées)
         const tableRows = requestsData.map((req: any) => {
             return [
                 req.id,
@@ -118,7 +118,6 @@ export default function DashboardPage() {
         const urlObj = URL.createObjectURL(blob);
         
         link.setAttribute("href", urlObj);
-        // On l'enregistre en .csv ou .txt, Excel saura le lire comme un vrai rapport chapitré
         link.setAttribute("download", `executive_compliance_report_${new Date().toISOString().split('T')[0]}.csv`);
         document.body.appendChild(link);
         link.click();
@@ -153,6 +152,7 @@ export default function DashboardPage() {
                     </div>
                 </div>
                 
+                {/* Widgets statistiques */}
                 <div className="flex flex-col sm:flex-row sm:flex-wrap lg:flex-nowrap gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full sm:w-[calc(50%-12px)] lg:flex-1 bg-white p-5 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between h-36 hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start gap-1">
@@ -188,7 +188,7 @@ export default function DashboardPage() {
                             <div className="bg-green-500/20 flex justify-center items-center rounded-sm px-2 py-1 text-green-700 text-[10px] font-bold">99.2% Rate</div>
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <p className="text-sm font-semibold text-gray-500 truncate">Approved</p>
+                            <p className="text-sm font-semibold text-gray-500 truncate">Approved Today</p>
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verifiedToday}</p>
                         </div>
                     </div>
@@ -208,6 +208,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="flex flex-col lg:flex-row justify-between gap-4 mt-7">
+                    {/* Graphique de Vélocité */}
                     <div className="flex flex-col w-full lg:w-[65%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">
                         <div className="flex flex-row justify-between items-center mb-4">
                             <h2 className="font-bold">Verification Activity</h2>
@@ -225,11 +226,14 @@ export default function DashboardPage() {
                         </div>
                     </div>
                     
+                    {/* Widget High Risk Profiles */}
                     <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between gap-6 hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">
                         <div>
                             <div className="flex flex-row items-center mb-4">
                                 <h2 className="font-bold text-gray-900">Live Critical Risks</h2>
-                                <Link href="/dashboard/customers" className="text-xs font-bold text-blue-700 ml-auto hover:underline">View All</Link>
+                                <Link href="/dashboard/customers?risk=high" className="text-xs font-bold text-blue-700 ml-auto hover:underline flex items-center gap-1">
+                                    View All <ArrowRight className="w-3 h-3" />
+                                </Link>
                             </div>
                             <div className="flex flex-col gap-3">
                                 {highRiskProfiles.length > 0 ? (
@@ -243,14 +247,15 @@ export default function DashboardPage() {
                                                 <AlertCircle className="w-4 h-4" />
                                             </div>
                                             <div className="flex flex-col min-w-0 flex-1">
-                                                <p className="text-sm font-bold text-gray-700 truncate transition-colors ">{profile.customerName}</p>
-                                                <p className="text-xs text-red-600 font-medium">Risk Score: {profile.score}/100</p>
+                                                <p className="text-sm font-bold text-gray-700 truncate transition-colors ">{profile.Nom}</p>
+                                                <p className="text-xs text-red-600 font-medium">Risk Score: {profile.Score}/100</p>
                                             </div>
                                         </Link>
                                     ))
                                 ) : (
-                                    <div className="text-center py-12 text-xs text-gray-400 font-medium">
-                                        No critical anomalies detected in the database.
+                                    <div className="text-center py-12 text-xs text-gray-400 font-medium flex flex-col items-center">
+                                        <ShieldCheck className="w-8 h-8 mb-2 opacity-30" />
+                                        No critical anomalies detected in the active pipeline.
                                     </div>
                                 )}
                             </div>
@@ -258,18 +263,26 @@ export default function DashboardPage() {
                         <div className="flex flex-col gap-3 bg-gray-100 p-4 rounded-lg">
                             <p className="text-xs font-medium text-gray-600">AI-driven risk scoring engine is monitoring active directory logs.</p>
                             <div className="w-full bg-white h-1.5 rounded-full overflow-hidden">
-                                <div className="bg-blue-700 h-full w-[75%] rounded-full" ></div>
+                                <div className="bg-blue-700 h-full w-[75%] rounded-full animate-pulse" ></div>
                             </div>
                         </div>
                     </div> 
                 </div>
 
+                {/* Tableau principal */}
                 {loading ? (
-                    <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center text-gray-500 font-medium">
-                        Loading KYC analysis data...
+                    <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center flex flex-col items-center justify-center h-64">
+                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin mb-4" />
+                        <p className="text-gray-500 font-medium">Loading recent compliance logs...</p>
                     </div>
                 ) : (
                     <div className="flex flex-col gap-4">
+                        <div className="flex justify-between items-center px-1">
+                            <h3 className="font-bold text-gray-800 text-lg">Recent Verification Requests</h3>
+                            <Link href="/dashboard/customers" className="text-sm font-bold text-blue-700 hover:underline flex items-center gap-1">
+                                View Directory <ArrowRight className="w-4 h-4" />
+                            </Link>
+                        </div>
                         <VerificationTable data={requestsData} />
                     </div>
                 )}

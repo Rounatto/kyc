@@ -3,14 +3,12 @@
 import { useState, useRef } from "react"; 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Shield, CheckCircle, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X } from "lucide-react"; 
+import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X } from "lucide-react"; 
 import Link from "next/link";
 import Header from "@/components/header";
-
+import { toast } from "sonner";
 import { getCountries, getCountryCallingCode } from 'react-phone-number-input/input';
 import en from 'react-phone-number-input/locale/en';
-
-// 💡 IMPORT UPLOADTHING
 import { useUploadThing } from "@/utils/uploadthing";
 
 export default function NewVerificationPage() {
@@ -35,14 +33,11 @@ export default function NewVerificationPage() {
     const selfieInputRef = useRef<HTMLInputElement>(null);
 
     const [loading, setLoading] = useState(false);
-    const [loadingText, setLoadingText] = useState(""); // 💡 Texte dynamique pour l'UX
-    const [success, setSuccess] = useState(false);
+    const [loadingText, setLoadingText] = useState("");
     const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
     const [globalError, setGlobalError] = useState("");
 
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
-
-    // 💡 INITIALISATION DU HOOK UPLOADTHING
     const { startUpload } = useUploadThing("kycDocumentUploader");
 
     const validateForm = () => {
@@ -139,72 +134,73 @@ export default function NewVerificationPage() {
         setLoading(true);
         setGlobalError(""); 
 
-        try {
-            // 💡 1. ENVOI DES FICHIERS SUR LE CLOUD
-            setLoadingText("Uploading secure documents...");
-            
-            let uploadedIdCardUrl = "";
-            let uploadedSelfieUrl = "";
+        let finalPhoneNumber = "Not specified";
+        if (nationality && localPhone) {
+            finalPhoneNumber = `+${callingCode} ${localPhone.trim()}`;
+        }
 
-            if (idCardFile) {
-                const idRes = await startUpload([idCardFile]);
-                if (idRes && idRes[0]) uploadedIdCardUrl = idRes[0].url;
-            }
-            if (selfieFile) {
-                const selfieRes = await startUpload([selfieFile]);
-                if (selfieRes && selfieRes[0]) uploadedSelfieUrl = selfieRes[0].url;
-            }
+        // Création de la promesse globale
+        const registrationPromise = new Promise(async (resolve, reject) => {
+            try {
+                setLoadingText("Uploading secure documents...");
+                
+                let uploadedIdCardUrl = "";
+                let uploadedSelfieUrl = "";
 
-            if (!uploadedIdCardUrl || !uploadedSelfieUrl) {
-                throw new Error("Document upload failed. Please try again.");
-            }
-
-            // 💡 2. ENVOI DES DONNÉES (AVEC LES URLS) À TON API
-            setLoadingText("Analyzing AI Risk & Creating Profile...");
-            
-            let finalPhoneNumber = "Not specified";
-            if (nationality && localPhone) {
-                finalPhoneNumber = `+${callingCode} ${localPhone.trim()}`;
-            }
-            
-            const response = await fetch("/api/customers", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    customerName,
-                    email,
-                    type,
-                    cin,
-                    documentType,
-                    nationality: nationality ? en[nationality as keyof typeof en] : "Not specified",
-                    dateOfBirth,
-                    phoneNumber: finalPhoneNumber,
-                    userId: (session?.user as any)?.id,
-                    idCardUrl: uploadedIdCardUrl, // URL Cloud du fichier
-                    selfieUrl: uploadedSelfieUrl  // URL Cloud du fichier
-                }),
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                setSuccess(true);
-                setLoadingText("Pipeline Initiated Successfully!");
-                setTimeout(() => router.push("/dashboard"), 1500);
-            } else {
-                if (data.error?.toLowerCase().includes("email")) {
-                    setFieldErrors(prev => ({ ...prev, email: "Email is already registered." }));
-                } else if (data.error?.toLowerCase().includes("cin") || data.error?.toLowerCase().includes("identity")) {
-                    setFieldErrors(prev => ({ ...prev, cin: "This ID is already registered or flagged." }));
-                } else {
-                    setGlobalError(data.error || "An error occurred during registration.");
+                if (idCardFile) {
+                    const idRes = await startUpload([idCardFile]);
+                    if (idRes && idRes[0]) uploadedIdCardUrl = idRes[0].url;
                 }
+                if (selfieFile) {
+                    const selfieRes = await startUpload([selfieFile]);
+                    if (selfieRes && selfieRes[0]) uploadedSelfieUrl = selfieRes[0].url;
+                }
+
+                if (!uploadedIdCardUrl || !uploadedSelfieUrl) {
+                    throw new Error("Document upload failed. Please try again.");
+                }
+
+                setLoadingText("Analyzing AI Risk & Creating Profile...");
+                
+                const response = await fetch("/api/customers", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        customerName,
+                        email,
+                        type,
+                        cin,
+                        documentType,
+                        nationality: nationality ? en[nationality as keyof typeof en] : "Not specified",
+                        dateOfBirth,
+                        phoneNumber: finalPhoneNumber,
+                        userId: (session?.user as any)?.id,
+                        idCardUrl: uploadedIdCardUrl,
+                        selfieUrl: uploadedSelfieUrl
+                    }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resolve(data);
+                    setTimeout(() => router.push("/dashboard"), 1500);
+                } else {
+                    reject(data.error || "An error occurred during registration.");
+                }
+            } catch (error: any) {
+                reject(error.message || "Network error. Failed to initiate pipeline.");
+            } finally {
                 setLoading(false);
             }
-        } catch (error: any) {
-            setGlobalError(error.message || "Network error. Please check your connection.");
-            setLoading(false);
-        }
+        });
+
+        // Déclenchement du Toast
+        toast.promise(registrationPromise, {
+            loading: "Processing KYC application...",
+            success: "KYC Pipeline successfully initiated! Redirecting...",
+            error: (err) => `${err}`,
+        });
     };
 
     return (
@@ -219,12 +215,6 @@ export default function NewVerificationPage() {
                 <div className="bg-white border border-gray-200 shadow-sm rounded-xl p-6 md:p-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">New Identity Verification</h2>
                     <p className="text-sm text-gray-500 mb-8">Register a new client or entity to initiate the KYC/KYB pipeline.</p>
-
-                    {success && (
-                        <div className="mb-6 p-4 bg-green-50 border border-green-200 text-green-700 rounded-lg flex items-center gap-3 text-sm font-medium">
-                            <CheckCircle className="w-5 h-5 text-green-600 shrink-0" /> Client registered successfully! Initiating pipeline...
-                        </div>
-                    )}
                     
                     {globalError && (
                         <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3 text-sm font-medium">
