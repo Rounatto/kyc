@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
-// =====================================================================
-// 1. GET : RÉCUPÉRER LA LISTE DES CLIENTS ET CALCULER LES STATISTIQUES
-// =====================================================================
+// Récupération des clients et calcul dynamique des statistiques
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
@@ -16,6 +14,7 @@ export async function GET(req: Request) {
         const skip = (page - 1) * limit;
 
         const whereCondition: any = {};
+        
         if (search) {
             whereCondition.OR = [
                 { customerName: { contains: search, mode: "insensitive" as const } },
@@ -24,19 +23,16 @@ export async function GET(req: Request) {
                 { phoneNumber: { contains: search } }
             ]
         }
+        
         if (status !== "all") {
             whereCondition.status = status;
         }
-        if (risk === "high") {
-            whereCondition.score = { lt: "50" };
-        } else if (risk === "medium") {
-            whereCondition.score = { gte: "50", lt: "80" };
-        }else if (risk === "low") {
-            whereCondition.score = { gte: "80" };
-        }
+        
+        if (risk === "high") whereCondition.riskLevel = "High";
+        else if (risk === "medium") whereCondition.riskLevel = "Medium";
+        else if (risk === "low") whereCondition.riskLevel = "Low";
 
         let orderByCondition: any = { submittedAt: 'desc' };
-
         if (sort === "oldest") orderByCondition = { submittedAt: 'asc' };
         if (sort === "highest_score") orderByCondition = { score: 'desc' };
         if (sort === "lowest_score") orderByCondition = { score: 'asc' };
@@ -51,7 +47,6 @@ export async function GET(req: Request) {
             prisma.verificationRequest.count({ where: whereCondition })
         ]);
 
-        // --- CALCUL DES STATISTIQUES ---
         const pendingCount = await prisma.verificationRequest.count({
             where: { status: "pending" }
         });
@@ -62,12 +57,15 @@ export async function GET(req: Request) {
         const verifiedTodayCount = await prisma.verificationRequest.count({
             where: {
                 status: "verified",
-                // CORRECTION ICI : On utilise submittedAt car c'est la seule date de ta BDD
-                submittedAt: { gte: today } 
+                updatedAt: { gte: today }
             }
         });
 
         const totalAbsolute = await prisma.verificationRequest.count(); 
+        
+        const highRiskCount = await prisma.verificationRequest.count({
+            where: { riskLevel: "High" }
+        });
 
         return NextResponse.json({
             requests,
@@ -78,28 +76,77 @@ export async function GET(req: Request) {
                 totalCustomers: totalAbsolute,
                 verifiedToday: verifiedTodayCount,
                 pendingReviews: pendingCount,
-                highRisk: 24
+                highRisk: highRiskCount 
             }
         });
 
     } catch (error: any) {
         console.error("GET Error:", error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json({ error: "Failed to fetch data." }, { status: 500 });
     }
 }
 
-// =====================================================================
-// 2. POST : CRÉER UN NOUVEAU CLIENT (ET GÉNÉRER SON SCORE IA)
-// =====================================================================
+// Création sécurisée d'un dossier KYC avec analyse IA et Audit Log
 export async function POST(req: Request) {
     try {
         const body = await req.json();
         const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId } = body;
 
-        const minScore = 45;
-        const maxScore = 98;
-        const simulatedAiScore = Math.floor(Math.random() * (maxScore - minScore + 1)) + minScore;
+        // Validation d'unicité
+        const existingRecord = await prisma.verificationRequest.findFirst({
+            where: {
+                OR: [ { email: email }, { cin: cin } ],
+                status: { in: ["pending", "verified"] } 
+            }
+        });
 
+        if (existingRecord) {
+            if (existingRecord.email === email) {
+                return NextResponse.json({ error: "Email is already registered in an active pipeline." }, { status: 409 });
+            }
+            if (existingRecord.cin === cin) {
+                return NextResponse.json({ error: "This Identity Document is already in use." }, { status: 409 });
+            }
+        }
+
+        // Moteur de Score IA Dynamique
+        let calculatedScore = 100;
+        let rationale = [];
+
+        if (dateOfBirth) {
+            const age = new Date().getFullYear() - new Date(dateOfBirth).getFullYear();
+            if (age < 21) {
+                calculatedScore -= 15;
+                rationale.push("Applicant is young (under 21).");
+            }
+        }
+
+        if (!phoneNumber || phoneNumber === "Not specified") {
+            calculatedScore -= 20;
+            rationale.push("Missing valid phone contact.");
+        }
+
+        if (documentType === "Passport") {
+             calculatedScore += 5; 
+             rationale.push("High-trust document provided (Passport).");
+        }
+
+        calculatedScore = Math.min(100, Math.max(0, calculatedScore));
+
+        let riskLevel = "Low";
+        if (calculatedScore < 50) riskLevel = "High";
+        else if (calculatedScore < 80) riskLevel = "Medium";
+
+        const aiRationaleString = rationale.length > 0 ? rationale.join(" ") : "Standard profile, no anomalies detected.";
+
+        // Récupération du nom de l'agent pour le log immuable
+        let agentName = "System";
+        if (userId) {
+            const agent = await prisma.user.findUnique({ where: { id: userId } });
+            if (agent) agentName = agent.fullName;
+        }
+
+        // Insertion et Audit Log
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
@@ -112,13 +159,24 @@ export async function POST(req: Request) {
                 phoneNumber,
                 userId,
                 status: "pending", 
-                score: simulatedAiScore.toString(), 
+                score: calculatedScore.toString(), 
+                riskLevel: riskLevel,
+                aiRationale: aiRationaleString,
+                
+                // Le log affiche désormais explicitement le nom de l'agent
+                auditLogs: {
+                    create: {
+                        action: "CREATED",
+                        details: `KYC Pipeline initiated by ${agentName}.`,
+                        agentId: userId 
+                    }
+                }
             },
         });
 
         return NextResponse.json(newRequest, { status: 201 });
     } catch (error: any) {
         console.error("POST Error:", error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json({ error: "Internal server error during registration." }, { status: 500 });
     }
 }
