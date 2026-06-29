@@ -149,11 +149,11 @@ export default function NewVerificationPage() {
 
                 if (idCardFile) {
                     const idRes = await startUpload([idCardFile]);
-                    if (idRes && idRes[0]) uploadedIdCardUrl = idRes[0].url;
+                    if (idRes && idRes[0]) uploadedIdCardUrl = idRes[0].ufsUrl;
                 }
                 if (selfieFile) {
                     const selfieRes = await startUpload([selfieFile]);
-                    if (selfieRes && selfieRes[0]) uploadedSelfieUrl = selfieRes[0].url;
+                    if (selfieRes && selfieRes[0]) uploadedSelfieUrl = selfieRes[0].ufsUrl;
                 }
 
                 if (!uploadedIdCardUrl || !uploadedSelfieUrl) {
