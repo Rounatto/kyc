@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react"; // Ajout de useRef pour la gestion de l'upload
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Shield, CheckCircle, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle } from "lucide-react";
+import { User, Mail, Shield, CheckCircle, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X } from "lucide-react"; // Ajout de X (croix)
 import Link from "next/link";
 import Header from "@/components/header";
 
-// Imports de la librairie pour avoir la liste des pays et les préfixes
 import { getCountries, getCountryCallingCode } from 'react-phone-number-input/input';
 import en from 'react-phone-number-input/locale/en';
 
@@ -15,50 +14,149 @@ export default function NewVerificationPage() {
     const { data: session } = useSession();
     const router = useRouter();
 
-    // -- Variables d'état (State) --
+    // Variables du formulaire
     const [customerName, setCustomerName] = useState("");
     const [email, setEmail] = useState("");
-    const [type, setType] = useState("Individual KYC");
-    
-    // 💡 SUPPRESSION DE status ET score ICI (Sécurité Backend)
-    
+    const [type, setType] = useState("Individual KYC (Standard)");
     const [cin, setCin] = useState("");
     const [documentType, setDocumentType] = useState("CIN");
     const [nationality, setNationality] = useState<string>("TN");
     const [dateOfBirth, setDateOfBirth] = useState("");
-    
-    // On stocke uniquement la partie locale du numéro
     const [localPhone, setLocalPhone] = useState<string>("");
 
+    // Variables des fichiers (Préparation Upload)
+    const [idCardFile, setIdCardFile] = useState<File | null>(null);
+    const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
+    const [selfieFile, setSelfieFile] = useState<File | null>(null);
+    const [selfiePreview, setSelfiePreview] = useState<string | null>(null);
+
+    // Références pour déclencher les clics invisibles sur les inputs type="file"
+    const idCardInputRef = useRef<HTMLInputElement>(null);
+    const selfieInputRef = useRef<HTMLInputElement>(null);
+
+    // Variables UI et Erreurs
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
-    const [errorMessage, setErrorMessage] = useState(""); 
+    const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
+    const [globalError, setGlobalError] = useState("");
 
-    // Calcul du préfixe téléphonique basé sur la nationalité (ex: "216")
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
 
+    // Moteur de validation adaptatif
+    const validateForm = () => {
+        const errors: { [key: string]: string } = {};
+        
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) errors.email = "Invalid email format.";
+
+        if (documentType === "CIN") {
+            if (nationality === "TN") {
+                const tnCinRegex = /^[0-9]{8}$/;
+                if (!tnCinRegex.test(cin)) errors.cin = "Tunisian CIN must be exactly 8 digits.";
+            } else if (nationality === "FR") {
+                const frCinRegex = /^[0-9A-Z]{12}$/i;
+                if (!frCinRegex.test(cin)) errors.cin = "French ID must be 12 characters.";
+            } else {
+                if (cin.length < 5) errors.cin = "ID number is too short.";
+            }
+        } else if (documentType === "Passport") {
+            const passportRegex = /^[A-Z0-9]{6,9}$/i;
+            if (!passportRegex.test(cin)) errors.cin = "Invalid passport format (6-9 characters).";
+        }
+
+        if (localPhone) {
+            if (nationality === "TN") {
+                const tnPhoneRegex = /^[234579][0-9]{7}$/;
+                if (!tnPhoneRegex.test(localPhone)) errors.localPhone = "Invalid Tunisian number (e.g., 98 123 456).";
+            } else {
+                if (localPhone.length < 6 || localPhone.length > 14) errors.localPhone = "Invalid phone length.";
+            }
+        }
+
+        if (dateOfBirth) {
+            const birthDate = new Date(dateOfBirth);
+            const today = new Date();
+            const age = today.getFullYear() - birthDate.getFullYear();
+            if (age < 18) errors.dateOfBirth = "Client must be at least 18 years old.";
+        }
+
+        // Vérification que les fichiers ont bien été sélectionnés (si obligatoire)
+        if (!idCardFile) errors.idCardFile = "Front ID Document is required.";
+        if (!selfieFile) errors.selfieFile = "Selfie verification is required.";
+
+        setFieldErrors(errors);
+        return Object.keys(errors).length === 0;
+    };
+
+    // Gestionnaire de changement de fichier avec création d'aperçu visuel
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: "idCard" | "selfie") => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        // On vérifie que c'est bien une image et qu'elle fait moins de 5Mo
+        if (!file.type.startsWith('image/')) {
+            setGlobalError("Please upload an image file (PNG, JPG).");
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setGlobalError("File size must be under 5MB.");
+            return;
+        }
+
+        const previewUrl = URL.createObjectURL(file);
+
+        if (type === "idCard") {
+            setIdCardFile(file);
+            setIdCardPreview(previewUrl);
+            setFieldErrors(prev => ({ ...prev, idCardFile: "" }));
+        } else {
+            setSelfieFile(file);
+            setSelfiePreview(previewUrl);
+            setFieldErrors(prev => ({ ...prev, selfieFile: "" }));
+        }
+    };
+
+    // Fonction de suppression de fichier
+    const removeFile = (type: "idCard" | "selfie", e: React.MouseEvent) => {
+        e.stopPropagation(); // Empêche de déclencher le clic d'upload quand on clique sur supprimer
+        if (type === "idCard") {
+            setIdCardFile(null);
+            setIdCardPreview(null);
+            if (idCardInputRef.current) idCardInputRef.current.value = "";
+        } else {
+            setSelfieFile(null);
+            setSelfiePreview(null);
+            if (selfieInputRef.current) selfieInputRef.current.value = "";
+        }
+    };
+
+    // Soumission des données
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        setLoading(true);
-        setErrorMessage(""); 
+        
+        if (!validateForm()) {
+            setGlobalError("Please fix the errors in the form.");
+            return;
+        }
 
-        // On assemble le préfixe intouchable et le numéro local
+        setLoading(true);
+        setGlobalError(""); 
+
         let finalPhoneNumber = "Not specified";
         if (nationality && localPhone) {
             finalPhoneNumber = `+${callingCode} ${localPhone.trim()}`;
         }
 
         try {
+            // Note: L'upload des fichiers se fera ici lors de la Phase 3
+            
             const response = await fetch("/api/customers", {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     customerName,
                     email,
                     type,
-                    // Le Backend s'occupera lui-même de forcer le statut à "pending"
                     cin,
                     documentType,
                     nationality: nationality ? en[nationality as keyof typeof en] : "Not specified",
@@ -72,206 +170,234 @@ export default function NewVerificationPage() {
 
             if (response.ok) {
                 setSuccess(true);
-                setTimeout(() => {
-                    router.push("/dashboard");
-                }, 1500);
+                setTimeout(() => router.push("/dashboard"), 1500);
             } else {
-                setErrorMessage(data.error || "Une erreur est survenue lors de l'enregistrement.");
+                if (data.error?.toLowerCase().includes("email")) {
+                    setFieldErrors(prev => ({ ...prev, email: "Email is already registered." }));
+                } else if (data.error?.toLowerCase().includes("cin") || data.error?.toLowerCase().includes("identity")) {
+                    setFieldErrors(prev => ({ ...prev, cin: "This ID is already registered or flagged." }));
+                } else {
+                    setGlobalError(data.error || "An error occurred during registration.");
+                }
             }
         } catch (error) {
-            console.error(error);
-            setErrorMessage("Erreur critique : Impossible de joindre le serveur. Vérifiez votre connexion.");
+            setGlobalError("Network error. Please check your connection.");
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="w-full min-h-screen bg-gray-50">
+        <div className="w-full min-h-screen bg-gray-50 pb-12">
             <Header />
             
-            <div className="max-w-3xl mx-auto px-4 py-8">
-                <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-blue-700 font-medium mb-6 transition-colors">
-                    <ArrowLeft className="w-4 h-4" /> Retour au Dashboard
+            <div className="max-w-4xl mx-auto px-4 py-8">
+                <Link href="/dashboard/customers" className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-blue-700 font-medium mb-6 transition-colors">
+                    <ArrowLeft className="w-4 h-4" /> Back to Directory
                 </Link>
 
                 <div className="bg-white border border-gray-200 shadow-sm rounded-xl p-6 md:p-8">
                     <h2 className="text-2xl font-bold text-gray-900 mb-2">New Identity Verification</h2>
-                    <p className="text-sm text-gray-500 mb-8">Register a new client or entity to initiate the KYC/KYB verification pipeline. Unique Identification Number is mandatory.</p>
+                    <p className="text-sm text-gray-500 mb-8">Register a new client or entity to initiate the KYC/KYB pipeline.</p>
 
                     {success && (
                         <div className="mb-6 p-4 bg-green-50 border border-green-200 text-green-700 rounded-lg flex items-center gap-3 text-sm font-medium">
-                            <CheckCircle className="w-5 h-5 text-green-600 shrink-0" /> Client identity registered successfully! Initiating pipeline...
+                            <CheckCircle className="w-5 h-5 text-green-600 shrink-0" /> Client registered successfully! Initiating pipeline...
                         </div>
                     )}
-                    {errorMessage && (
+                    
+                    {globalError && (
                         <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3 text-sm font-medium">
                             <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" /> 
-                            <span>{errorMessage}</span>
+                            <span>{globalError}</span>
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+                    <form onSubmit={handleSubmit} className="flex flex-col gap-8">
                         
-                        {/* SECTION 1 : Personal Information */}
-                        <div className="flex flex-col gap-4">
+                        {/* Section Identité */}
+                        <div className="flex flex-col gap-5">
                             <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">1. Personal Information</h3>
                             
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Full Name / Entity Name <span className="text-red-500">*</span></label>
+                            <div className="flex flex-col sm:flex-row gap-5">
+                                <div className="flex-1 flex flex-col gap-2">
+                                    <label className="text-sm font-semibold text-gray-700">Full Name <span className="text-red-500">*</span></label>
                                     <div className="relative">
                                         <User className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <input type="text" placeholder="Ex: Eleanor Lewis" value={customerName} onChange={(e) => setCustomerName(e.target.value)} required className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800" />
+                                        <input type="text" placeholder="Ex: Eleanor Lewis" value={customerName} onChange={(e) => setCustomerName(e.target.value)} required className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 text-gray-800" />
                                     </div>
                                 </div>
 
-                                <div className="flex flex-col gap-2">
+                                <div className="flex-1 flex flex-col gap-2">
                                     <label className="text-sm font-semibold text-gray-700">Email Address <span className="text-red-500">*</span></label>
                                     <div className="relative">
-                                        <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <input type="email" placeholder="Ex: e.lewis@corporate.com" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800" />
+                                        <Mail className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.email ? 'text-red-500' : 'text-gray-400'}`} />
+                                        <input type="email" placeholder="Ex: e.lewis@corporate.com" value={email} onChange={(e) => {setEmail(e.target.value); setFieldErrors({...fieldErrors, email: ""})}} required className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 ${fieldErrors.email ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
                                     </div>
+                                    {fieldErrors.email && <p className="text-xs text-red-600 font-medium">{fieldErrors.email}</p>}
                                 </div>
                             </div>
                             
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                
-                                {/* LA CASE COUNTRY CONNECTÉE */}
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Country / Nationality <span className="text-red-500">*</span></label>
+                            <div className="flex flex-col sm:flex-row gap-5">
+                                <div className="flex-1 flex flex-col gap-2">
+                                    <label className="text-sm font-semibold text-gray-700">Nationality <span className="text-red-500">*</span></label>
                                     <div className="relative">
                                         <Globe className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <select 
-                                            value={nationality} 
-                                            onChange={(e) => setNationality(e.target.value)} 
-                                            required
-                                            className="w-full border border-gray-300 bg-white rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800 cursor-pointer"
-                                        >
+                                        <select value={nationality} onChange={(e) => {setNationality(e.target.value); setFieldErrors({...fieldErrors, cin: "", localPhone: ""})}} required className="w-full border border-gray-300 bg-white rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer">
                                             <option value="">Select a country...</option>
                                             {getCountries().map((country) => (
-                                                <option key={country} value={country}>
-                                                    {en[country as keyof typeof en]}
-                                                </option>
+                                                <option key={country} value={country}>{en[country as keyof typeof en]}</option>
                                             ))}
                                         </select>
                                     </div>
                                 </div>
 
-                                {/* LE CHAMP TÉLÉPHONE COMPOSÉ AVEC DRAPEAU CLIQUABLE ET SVG HD */}
-                                <div className="flex flex-col gap-2">
+                                <div className="flex-1 flex flex-col gap-2">
                                     <label className="text-sm font-semibold text-gray-700">Phone Number</label>
-                                    <div className="flex items-center w-full border border-gray-300 rounded-lg focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 bg-white overflow-hidden transition-all h-[42px]">
-                                        
-                                        {/* BLOC DRAPEAU CLIQUABLE + PREFIXE VERROUILLÉ */}
-                                        <div className="relative flex items-center justify-center gap-1.5 bg-gray-50 border-r border-gray-300 px-3 h-full text-sm text-gray-700 font-semibold hover:bg-gray-100 transition-colors">
-                                            
-                                            {/* Le vrai drapeau en SVG (ultra net) */}
-                                            {nationality ? (
-                                                <img 
-                                                    src={`https://flagcdn.com/${nationality.toLowerCase()}.svg`} 
-                                                    alt={nationality} 
-                                                    className="w-5 h-3.5 object-cover rounded-[2px] shadow-sm"
-                                                />
-                                            ) : (
-                                                <div className="w-5 h-3.5 bg-gray-200 rounded-[2px]"></div>
-                                            )}
-                                            
-                                            {/* Le select invisible superposé sur le drapeau */}
-                                            <select 
-                                                value={nationality}
-                                                onChange={(e) => setNationality(e.target.value)}
-                                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                                title="Change country"
-                                            >
-                                                <option value="">Select country...</option>
-                                                {getCountries().map((country) => (
-                                                    <option key={country} value={country}>
-                                                        {en[country as keyof typeof en]}
-                                                    </option>
-                                                ))}
+                                    <div className={`flex items-center w-full border rounded-lg bg-white overflow-hidden transition-all h-[42px] ${fieldErrors.localPhone ? 'border-red-500 ring-1 ring-red-500' : 'border-gray-300 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500'}`}>
+                                        <div className="relative flex items-center justify-center gap-1.5 bg-gray-50 border-r border-gray-300 px-3 h-full text-sm text-gray-700 font-semibold">
+                                            {nationality ? <img src={`https://flagcdn.com/${nationality.toLowerCase()}.svg`} alt={nationality} className="w-5 h-3.5 object-cover rounded-[2px]" /> : <div className="w-5 h-3.5 bg-gray-200 rounded-[2px]"></div>}
+                                            <select value={nationality} onChange={(e) => setNationality(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                                                <option value="">Select...</option>
+                                                {getCountries().map((country) => (<option key={country} value={country}>{en[country as keyof typeof en]}</option>))}
                                             </select>
-
-                                            {/* Le préfixe verrouillé */}
                                             <span>{callingCode ? `+${callingCode}` : "+"}</span>
-                                            
-                                            {/* Petite flèche pour indiquer que c'est cliquable */}
-                                            <svg className="w-3 h-3 text-gray-400 ml-[-2px] pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                            </svg>
                                         </div>
-                                        
-                                        {/* BLOC D'ÉCRITURE : Le reste du numéro */}
-                                        <input
-                                            type="tel"
-                                            placeholder="Ex: 98 123 456"
-                                            value={localPhone}
-                                            onChange={(e) => setLocalPhone(e.target.value.replace(/[^0-9\s]/g, ''))}
-                                            className="flex-1 text-sm text-gray-800 outline-none bg-transparent px-3 h-full"
-                                        />
+                                        <input type="tel" placeholder="Ex: 98 123 456" value={localPhone} onChange={(e) => {setLocalPhone(e.target.value.replace(/[^0-9\s]/g, '')); setFieldErrors({...fieldErrors, localPhone: ""})}} className="flex-1 text-sm text-gray-800 outline-none bg-transparent px-3 h-full" />
                                     </div>
+                                    {fieldErrors.localPhone && <p className="text-xs text-red-600 font-medium">{fieldErrors.localPhone}</p>}
                                 </div>
                             </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div className="flex flex-col gap-2">
+                            
+                            <div className="flex flex-col sm:flex-row gap-5">
+                                <div className="flex-1 flex flex-col gap-2">
                                     <label className="text-sm font-semibold text-gray-700">Date of Birth</label>
                                     <div className="relative">
-                                        <Calendar className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <input type="date" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800" />
+                                        <Calendar className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.dateOfBirth ? 'text-red-500' : 'text-gray-400'}`} />
+                                        <input type="date" value={dateOfBirth} onChange={(e) => {setDateOfBirth(e.target.value); setFieldErrors({...fieldErrors, dateOfBirth: ""})}} className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 ${fieldErrors.dateOfBirth ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
                                     </div>
+                                    {fieldErrors.dateOfBirth && <p className="text-xs text-red-600 font-medium">{fieldErrors.dateOfBirth}</p>}
                                 </div>
+                                <div className="hidden sm:block flex-1"></div>
                             </div>
                         </div>
 
-                        {/* SECTION 2 : Identification Data */}
-                        <div className="flex flex-col gap-4 mt-2">
+                        {/* Section Document Officiel */}
+                        <div className="flex flex-col gap-5">
                             <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">2. Official Identification</h3>
                             
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                <div className="flex flex-col gap-2">
+                            <div className="flex flex-col sm:flex-row gap-5">
+                                <div className="w-full sm:w-1/3 flex flex-col gap-2">
                                     <label className="text-sm font-semibold text-gray-700">Document Type <span className="text-red-500">*</span></label>
-                                    <select value={documentType} onChange={(e) => setDocumentType(e.target.value)} className="w-full border border-gray-300 bg-white rounded-lg py-2.5 px-3 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800 cursor-pointer">
+                                    <select value={documentType} onChange={(e) => {setDocumentType(e.target.value); setFieldErrors({...fieldErrors, cin: ""})}} className="w-full border border-gray-300 bg-white rounded-lg py-2.5 px-3 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer">
                                         <option value="CIN">National ID (CIN)</option>
                                         <option value="Passport">Passport</option>
                                         <option value="Driving License">Driving License</option>
-                                        <option value="Corporate ID">Corporate Tax ID</option>
                                     </select>
                                 </div>
 
-                                <div className="flex flex-col gap-2 sm:col-span-2">
-                                    <label className="text-sm font-semibold text-gray-700">Unique ID Number (CIN/Passport) <span className="text-red-500">*</span></label>
+                                <div className="w-full sm:w-2/3 flex flex-col gap-2">
+                                    <label className="text-sm font-semibold text-gray-700">Unique ID Number <span className="text-red-500">*</span></label>
                                     <div className="relative">
-                                        <CreditCard className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <input type="text" placeholder="Ex: 12345678" value={cin} onChange={(e) => setCin(e.target.value)} required className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800" />
+                                        <CreditCard className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.cin ? 'text-red-500' : 'text-gray-400'}`} />
+                                        <input type="text" placeholder={nationality === "TN" && documentType === "CIN" ? "Ex: 14066711 (8 digits)" : "Ex: 12345678"} value={cin} onChange={(e) => {setCin(e.target.value.toUpperCase()); setFieldErrors({...fieldErrors, cin: ""})}} required className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 ${fieldErrors.cin ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
                                     </div>
+                                    {fieldErrors.cin && <p className="text-xs text-red-600 font-medium">{fieldErrors.cin}</p>}
                                 </div>
                             </div>
                         </div>
 
-                        {/* SECTION 3 : System Settings */}
-                        <div className="flex flex-col gap-4 mt-2 bg-gray-50 p-4 rounded-lg border border-gray-200">
-                            <h3 className="text-xs uppercase tracking-wider font-bold text-gray-500 mb-2">System Processing Settings</h3>
+                        {/* Section Fichiers */}
+                        <div className="flex flex-col gap-5">
+                            <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">3. Document Vault</h3>
                             
-                            {/* Grille ajustée car on a retiré les champs inutiles */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div className="flex flex-col gap-2">
+                            <div className="flex flex-col sm:flex-row gap-5">
+                                {/* Upload ID Card */}
+                                <div className="flex-1 flex flex-col gap-1">
+                                    <input type="file" accept="image/*" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} />
+                                    <div 
+                                        onClick={() => idCardInputRef.current?.click()}
+                                        className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 cursor-pointer relative overflow-hidden group transition-colors ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
+                                    >
+                                        {idCardPreview ? (
+                                            <>
+                                                <img src={idCardPreview} alt="ID Preview" className="absolute inset-0 w-full h-full object-cover" />
+                                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                    <p className="text-white text-sm font-bold">Change Image</p>
+                                                </div>
+                                                <button type="button" onClick={(e) => removeFile("idCard", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
+                                                    <X className="w-4 h-4" />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                                                    <FileText className={`w-5 h-5 ${fieldErrors.idCardFile ? 'text-red-500' : 'text-gray-400 group-hover:text-blue-600'}`} />
+                                                </div>
+                                                <p className="text-sm font-bold text-gray-700 mb-1">Upload Front ID</p>
+                                                <p className="text-xs text-gray-500">PNG, JPG up to 5MB</p>
+                                            </>
+                                        )}
+                                    </div>
+                                    {fieldErrors.idCardFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.idCardFile}</p>}
+                                </div>
+
+                                {/* Upload Selfie */}
+                                <div className="flex-1 flex flex-col gap-1">
+                                    <input type="file" accept="image/*" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} />
+                                    <div 
+                                        onClick={() => selfieInputRef.current?.click()}
+                                        className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 cursor-pointer relative overflow-hidden group transition-colors ${fieldErrors.selfieFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
+                                    >
+                                        {selfiePreview ? (
+                                            <>
+                                                <img src={selfiePreview} alt="Selfie Preview" className="absolute inset-0 w-full h-full object-cover" />
+                                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                    <p className="text-white text-sm font-bold">Change Image</p>
+                                                </div>
+                                                <button type="button" onClick={(e) => removeFile("selfie", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
+                                                    <X className="w-4 h-4" />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                                                    <Camera className={`w-5 h-5 ${fieldErrors.selfieFile ? 'text-red-500' : 'text-gray-400 group-hover:text-blue-600'}`} />
+                                                </div>
+                                                <p className="text-sm font-bold text-gray-700 mb-1">Upload Selfie</p>
+                                                <p className="text-xs text-gray-500">PNG or JPG file</p>
+                                            </>
+                                        )}
+                                    </div>
+                                    {fieldErrors.selfieFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.selfieFile}</p>}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Section Configuration */}
+                        <div className="flex flex-col gap-4 bg-gray-50 p-5 rounded-xl border border-gray-200 mt-2">
+                            <h3 className="text-xs uppercase tracking-wider font-bold text-gray-500 mb-1">System Processing Settings</h3>
+                            
+                            <div className="flex flex-col sm:flex-row gap-5">
+                                <div className="flex-1 flex flex-col gap-2">
                                     <label className="text-xs font-semibold text-gray-700">Procedure Type</label>
                                     <div className="relative">
                                         <Shield className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <select value={type} onChange={(e) => setType(e.target.value)} className="w-full border border-gray-300 bg-white rounded-lg py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-800 cursor-pointer">
-                                            <option value="Individual KYC">Individual KYC</option>
-                                            <option value="Corporate KYB">Corporate KYB</option>
-                                            <option value="Entity Screening">Entity Screening</option>
+                                        <select value={type} onChange={(e) => setType(e.target.value)} className="w-full border border-gray-300 bg-white rounded-lg py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 text-gray-800 cursor-pointer">
+                                            <option value="Individual KYC (Standard)">Individual KYC (Standard)</option>
+                                            <option value="Individual KYC (Enhanced)">Individual KYC (Enhanced - Biometrics)</option>
+                                            <option value="Corporate KYB (Standard)">Corporate KYB (Standard)</option>
+                                            <option value="Corporate KYB (UBO)">Corporate KYB (UBO Discovery)</option>
+                                            <option value="AML/PEP Screening">AML & Sanctions Screening</option>
                                         </select>
                                     </div>
                                 </div>
+                                <div className="hidden sm:block flex-1"></div>
                             </div>
                         </div>
 
-                        <button type="submit" disabled={loading} className="mt-4 flex items-center justify-center gap-2 w-full px-6 py-3 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-lg shadow-sm transition-colors disabled:bg-blue-400 cursor-pointer text-sm">
-                            <PlusCircle className="w-4 h-4" />
-                            {loading ? "Registering profile..." : "Initiate Verification Pipeline"}
+                        <button type="submit" disabled={loading} className="mt-4 flex items-center justify-center gap-2 w-full px-6 py-3.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 cursor-pointer text-sm">
+                            {loading ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <><PlusCircle className="w-5 h-5" /> Initiate Verification Pipeline</>}
                         </button>
                     </form>
                 </div>

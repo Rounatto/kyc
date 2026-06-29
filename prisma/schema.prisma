@@ -1,11 +1,14 @@
+// Configuration du client Prisma
 generator client {
   provider = "prisma-client-js"
 }
 
+// Connexion à la base de données (PostgreSQL)
 datasource db {
   provider = "postgresql"
 }
 
+// Table Utilisateur (Les agents/admins de l'agence)
 model User {
   id                   String                @id @default(cuid())
   fullName             String
@@ -14,23 +17,59 @@ model User {
   password             String
   avatarUrl            String?
   createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @default(now()) @updatedAt
-  verificationRequests VerificationRequest[] 
+  updatedAt            DateTime              @updatedAt 
+  
+  verificationRequests VerificationRequest[]
+  auditLogs            AuditLog[]            // Lien vers les actions que l'agent a effectuées
 }
 
+// Table Principale (Les dossiers clients soumis)
 model VerificationRequest {
   id           String   @id @default(cuid())
-  customerName String   
+  customerName String
   email        String  
   type         String   
-  status       String   @default("pending") 
-  score        String   @default("--")      
-  cin          String   @unique
+  status       String   @default("pending") // pending, verified, rejected
+  
+  // Retrait de @unique pour permettre de multiples soumissions (ex: en cas de rejet et réessai)
+  cin          String   
   documentType String   @default("CIN")
   nationality  String?
   dateOfBirth  String?
   phoneNumber  String?
+
+  // Section Fichiers (Pour UploadThing)
+  idCardUrl    String?
+  selfieUrl    String?
+
+  // Section Décision IA 
+  score        String?  
+  riskLevel    String?  // ex: Low, Medium, High
+  aiRationale  String?  // Explication textuelle de l'IA
+
   submittedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt 
+
+  // Relation : l'agent propriétaire du dossier
   userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Relation : l'historique des actions sur ce dossier
+  auditLogs    AuditLog[] 
+}
+
+// Table Historique (La Piste d'Audit obligatoire en finance/KYC)
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // Ex: CREATED, APPROVED, REJECTED
+  details     String?  // Ex: "Validé suite à un appel" ou "Rejeté par IA"
+  timestamp   DateTime @default(now())
+
+  // Le dossier concerné
+  requestId   String
+  request     VerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // L'agent qui a cliqué (Optionnel si c'est l'IA qui agit)
+  agentId     String?
+  agent       User?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
 }

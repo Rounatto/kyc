@@ -243,7 +243,7 @@ export default function DashboardPage() {
                                                 <AlertCircle className="w-4 h-4" />
                                             </div>
                                             <div className="flex flex-col min-w-0 flex-1">
-                                                <p className="text-sm font-bold text-gray-900 truncate group-hover:text-blue-700 transition-colors">{profile.customerName}</p>
+                                                <p className="text-sm font-bold text-gray-700 truncate transition-colors ">{profile.customerName}</p>
                                                 <p className="text-xs text-red-600 font-medium">Risk Score: {profile.score}/100</p>
                                             </div>
                                         </Link>
