@@ -4,10 +4,19 @@ import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react"; 
 import { useRouter } from "next/navigation";
 import Image from "next/image"; 
-import { ArrowLeft, Loader2, Check, X, FileText, ShieldAlert, User, Clock, History, Maximize2, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
+import { ArrowLeft, Loader2, Check, X, FileText, ShieldAlert, User, Clock, History, Maximize2, ZoomIn, ZoomOut, RotateCcw, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
+
+// 💡 NOUVEAU : Liste des raisons de refus professionnelles
+const PREDEFINED_REASONS = [
+    "The provided ID document is blurry, pixelated or unreadable.",
+    "The edges of the document are cropped or cut off.",
+    "The face on the identification document does not match the biometric selfie.",
+    "The identification document has expired.",
+    "The name on the document does not match the registered profile name."
+];
 
 export default function CustomerReviewPage({ params }: { params: Promise<{ id: string }> }) {
     const resolvedParams = use(params);
@@ -20,10 +29,16 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-    // 💡 NOUVEAU : États pour le "Verification Studio" (Modal de comparaison et Zoom)
+    // États pour le "Verification Studio" (Modal de comparaison et Zoom)
     const [isViewerOpen, setIsViewerOpen] = useState(false);
     const [idZoom, setIdZoom] = useState(1);
     const [selfieZoom, setSelfieZoom] = useState(1);
+
+    // 💡 NOUVEAU : États pour la Modal de Rejet
+    const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+    const [selectedReason, setSelectedReason] = useState(PREDEFINED_REASONS[0]);
+    const [customReason, setCustomReason] = useState("");
+    const [isCustom, setIsCustom] = useState(false);
 
     useEffect(() => {
         async function loadCustomer() {
@@ -39,43 +54,50 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
         loadCustomer();
     }, [customerId]);
 
-    const handleDecision = async (newStatus: "verified" | "rejected") => {
-    setActionLoading(newStatus);
-
-    // 💡 Création de la promesse pour le chargement asynchrone
-    const actionPromise = new Promise(async (resolve, reject) => {
-        try {
-            const res = await fetch(`/api/customers/${customerId}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    status: newStatus,
-                    agentId: (session?.user as any)?.id 
-                }),
-            });
-            
-            if (res.ok) {
-                const updatedCustomer = await res.json();
-                setCustomer(updatedCustomer);
-                resolve(updatedCustomer);
-            } else {
-                const errData = await res.json();
-                reject(errData.message || "Failed to update profile status.");
-            }
-        } catch (err) {
-            reject("Network error. Please try again.");
-        } finally {
-            setActionLoading(null);
+    // 💡 MODIFIÉ : handleDecision accepte maintenant une raison (reasonText)
+    const handleDecision = async (newStatus: "verified" | "rejected", reasonText?: string) => {
+        setActionLoading(newStatus);
+        
+        // On ferme la modale si c'est un rejet
+        if (newStatus === "rejected") {
+            setIsRejectModalOpen(false);
         }
-    });
 
-    // 💡 Déclenchement du Toast interactif
-    toast.promise(actionPromise, {
-        loading: `Updating compliance record to ${newStatus}...`,
-        success: () => `Profile successfully ${newStatus === "verified" ? "approved" : "rejected"}!`,
-        error: (err) => `${err}`,
-    });
-};
+        // Création de la promesse pour le chargement asynchrone
+        const actionPromise = new Promise(async (resolve, reject) => {
+            try {
+                const res = await fetch(`/api/customers/${customerId}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        status: newStatus,
+                        agentId: (session?.user as any)?.id,
+                        rejectionReason: reasonText // 💡 Envoi de la raison au backend
+                    }),
+                });
+                
+                if (res.ok) {
+                    const updatedCustomer = await res.json();
+                    setCustomer(updatedCustomer);
+                    resolve(updatedCustomer);
+                } else {
+                    const errData = await res.json();
+                    reject(errData.message || "Failed to update profile status.");
+                }
+            } catch (err) {
+                reject("Network error. Please try again.");
+            } finally {
+                setActionLoading(null);
+            }
+        });
+
+        // Déclenchement du Toast interactif
+        toast.promise(actionPromise, {
+            loading: `Updating compliance record to ${newStatus}...`,
+            success: () => `Profile successfully ${newStatus === "verified" ? "approved" : "rejected"}!`,
+            error: (err) => `${err}`,
+        });
+    };
 
     if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /></div>;
     if (!customer) return <div className="min-h-screen flex items-center justify-center text-gray-500">Customer not found.</div>;
@@ -132,7 +154,6 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                         <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-5">
                             <div className="flex justify-between items-center">
                                 <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800"><FileText className="w-4 h-4 text-blue-600" /> Provided Documents</h3>
-                                {/* 💡 Bouton pour ouvrir le Verification Studio */}
                                 {(customer.idCardUrl || customer.selfieUrl) && (
                                     <button onClick={() => setIsViewerOpen(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 bg-blue-50 px-3 py-1.5 rounded-lg transition-colors">
                                         <Maximize2 className="w-3.5 h-3.5" /> Compare & Verify
@@ -237,10 +258,19 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                         <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-5 sticky top-6">
                             <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">Compliance Decision</h3>
                             <div className="flex flex-col gap-3">
-                                <button onClick={() => handleDecision("verified")} disabled={actionLoading !== null || customer.status === "verified"} className="w-full bg-green-600 text-white font-bold py-3.5 rounded-xl hover:bg-green-700 transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm border border-transparent hover:border-green-800">
+                                <button 
+                                    onClick={() => handleDecision("verified")} 
+                                    disabled={actionLoading !== null || customer.status === "verified"} 
+                                    className="w-full bg-green-600 text-white font-bold py-3.5 rounded-xl hover:bg-green-700 transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm border border-transparent hover:border-green-800"
+                                >
                                     {actionLoading === "verified" ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />} Approve Profile
                                 </button>
-                                <button onClick={() => handleDecision("rejected")} disabled={actionLoading !== null || customer.status === "rejected"} className="w-full bg-white border-2 border-red-100 text-red-600 font-bold py-3.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                {/* 💡 MODIFIÉ : Ce bouton ouvre maintenant la modal au lieu de rejeter directement */}
+                                <button 
+                                    onClick={() => setIsRejectModalOpen(true)} 
+                                    disabled={actionLoading !== null || customer.status === "rejected"} 
+                                    className="w-full bg-white border-2 border-red-100 text-red-600 font-bold py-3.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                                >
                                     {actionLoading === "rejected" ? <Loader2 className="w-5 h-5 animate-spin" /> : <X className="w-5 h-5" />} Reject Profile
                                 </button>
                             </div>
@@ -250,83 +280,120 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                 </div>
             </div>
 
-            {/* 💡 LE VERIFICATION STUDIO (MODAL PLEIN ÉCRAN) */}
+            {/* 💡 NOUVEAU : LA FENÊTRE MODALE DE SÉLECTION DE LA RAISON DU REJET */}
+            {isRejectModalOpen && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl max-w-lg w-full border border-gray-200 shadow-2xl p-6 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex items-center gap-3 text-red-600 border-b border-gray-100 pb-3">
+                            <AlertCircle className="w-6 h-6" />
+                            <h3 className="text-lg font-bold text-gray-900">Specify Rejection Reason</h3>
+                        </div>
+                        <p className="text-sm text-gray-500">Select the non-compliance marker. This precise text will be sent to the client via an automated email notification.</p>
+                        
+                        <div className="flex flex-col gap-3 my-2">
+                            {PREDEFINED_REASONS.map((reason, idx) => (
+                                <label key={idx} className="flex items-start gap-3 p-3 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors">
+                                    <input 
+                                        type="radio" 
+                                        name="rejection_reason" 
+                                        checked={!isCustom && selectedReason === reason} 
+                                        onChange={() => { setIsCustom(false); setSelectedReason(reason); }} 
+                                        className="mt-1 accent-blue-600" 
+                                    />
+                                    <span className="text-sm text-gray-700 font-medium">{reason}</span>
+                                </label>
+                            ))}
+                            <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors">
+                                <input 
+                                    type="radio" 
+                                    name="rejection_reason" 
+                                    checked={isCustom} 
+                                    onChange={() => setIsCustom(true)} 
+                                    className="mt-1 accent-blue-600" 
+                                />
+                                <span className="text-sm text-gray-700 font-bold">Custom Reason...</span>
+                            </label>
+                        </div>
+
+                        {isCustom && (
+                            <textarea 
+                                value={customReason} 
+                                onChange={(e) => setCustomReason(e.target.value)} 
+                                placeholder="Type the specific regulatory compliance failure reason..." 
+                                className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-600 h-24 text-gray-800 transition-all resize-none shadow-inner" 
+                            />
+                        )}
+
+                        <div className="flex gap-3 justify-end border-t border-gray-100 pt-4 mt-2">
+                            <button 
+                                onClick={() => setIsRejectModalOpen(false)} 
+                                className="px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={() => handleDecision("rejected", isCustom ? customReason : selectedReason)} 
+                                disabled={isCustom && !customReason.trim()} 
+                                className="px-5 py-2 text-sm font-bold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
+                            >
+                                Confirm Rejection
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* LE VERIFICATION STUDIO (MODAL PLEIN ÉCRAN) */}
             {isViewerOpen && (
                 <div className="fixed inset-0 z-50 bg-black/95 flex flex-col backdrop-blur-md">
-                    {/* Header du Studio */}
                     <div className="h-16 border-b border-white/10 flex justify-between items-center px-6 shrink-0">
                         <div className="flex items-center gap-3">
                             <ShieldAlert className="w-5 h-5 text-blue-400" />
                             <h2 className="font-bold tracking-widest uppercase text-sm text-white">Verification Studio : Face Matching</h2>
                         </div>
-                        <button 
-                            onClick={() => { setIsViewerOpen(false); setIdZoom(1); setSelfieZoom(1); }} 
-                            className="p-2 text-gray-400 hover:text-white hover:bg-red-500 rounded-full transition-all"
-                            title="Close Studio"
-                        >
+                        <button onClick={() => { setIsViewerOpen(false); setIdZoom(1); setSelfieZoom(1); }} className="p-2 text-gray-400 hover:text-white hover:bg-red-500 rounded-full transition-all cursor-pointer">
                             <X className="w-6 h-6" />
                         </button>
                     </div>
 
-                    {/* Zone de comparaison (Flexbox) */}
                     <div className="flex-1 flex flex-col md:flex-row p-4 gap-4 overflow-hidden">
-                        
-                        {/* Panneau Gauche : Document d'Identité */}
                         <div className="flex-1 bg-gray-900 rounded-2xl border border-white/10 flex flex-col relative overflow-hidden">
-                            {/* Barre d'outils de Zoom */}
                             <div className="absolute top-4 left-4 z-10 bg-black/70 backdrop-blur-md px-3 py-2 rounded-xl border border-white/10 flex items-center gap-4 shadow-xl">
                                 <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Front ID</span>
                                 <div className="w-px h-4 bg-white/20"></div>
-                                <button onClick={() => setIdZoom(z => Math.max(0.5, z - 0.5))} className="text-gray-400 hover:text-white"><ZoomOut className="w-4 h-4"/></button>
+                                <button onClick={() => setIdZoom(z => Math.max(0.5, z - 0.5))} className="text-gray-400 hover:text-white cursor-pointer"><ZoomOut className="w-4 h-4"/></button>
                                 <span className="text-xs font-mono text-white w-8 text-center">{Math.round(idZoom * 100)}%</span>
-                                <button onClick={() => setIdZoom(z => Math.min(4, z + 0.5))} className="text-gray-400 hover:text-white"><ZoomIn className="w-4 h-4"/></button>
+                                <button onClick={() => setIdZoom(z => Math.min(4, z + 0.5))} className="text-gray-400 hover:text-white cursor-pointer"><ZoomIn className="w-4 h-4"/></button>
                                 <div className="w-px h-4 bg-white/20"></div>
-                                <button onClick={() => setIdZoom(1)} className="text-gray-400 hover:text-white" title="Reset Zoom"><RotateCcw className="w-4 h-4"/></button>
+                                <button onClick={() => setIdZoom(1)} className="text-gray-400 hover:text-white cursor-pointer"><RotateCcw className="w-4 h-4"/></button>
                             </div>
-                            
-                            {/* Zone Image avec défilement si zoomée */}
                             <div className="flex-1 overflow-auto flex items-center justify-center p-4">
                                 {customer.idCardUrl ? (
-                                    <img 
-                                        src={customer.idCardUrl} 
-                                        alt="ID Document" 
-                                        className="max-w-full max-h-full object-contain transition-transform duration-200" 
-                                        style={{ transform: `scale(${idZoom})`, transformOrigin: 'center' }} 
-                                    />
+                                    <img src={customer.idCardUrl} alt="ID Document" className="max-w-full max-h-full object-contain transition-transform duration-200" style={{ transform: `scale(${idZoom})`, transformOrigin: 'center' }} />
                                 ) : (
                                     <p className="text-gray-600 font-medium">No document provided</p>
                                 )}
                             </div>
                         </div>
 
-                        {/* Panneau Droit : Selfie */}
                         <div className="flex-1 bg-gray-900 rounded-2xl border border-white/10 flex flex-col relative overflow-hidden">
-                            {/* Barre d'outils de Zoom */}
                             <div className="absolute top-4 left-4 z-10 bg-black/70 backdrop-blur-md px-3 py-2 rounded-xl border border-white/10 flex items-center gap-4 shadow-xl">
                                 <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Live Selfie</span>
                                 <div className="w-px h-4 bg-white/20"></div>
-                                <button onClick={() => setSelfieZoom(z => Math.max(0.5, z - 0.5))} className="text-gray-400 hover:text-white"><ZoomOut className="w-4 h-4"/></button>
+                                <button onClick={() => setSelfieZoom(z => Math.max(0.5, z - 0.5))} className="text-gray-400 hover:text-white cursor-pointer"><ZoomOut className="w-4 h-4"/></button>
                                 <span className="text-xs font-mono text-white w-8 text-center">{Math.round(selfieZoom * 100)}%</span>
-                                <button onClick={() => setSelfieZoom(z => Math.min(4, z + 0.5))} className="text-gray-400 hover:text-white"><ZoomIn className="w-4 h-4"/></button>
+                                <button onClick={() => setSelfieZoom(z => Math.min(4, z + 0.5))} className="text-gray-400 hover:text-white cursor-pointer"><ZoomIn className="w-4 h-4"/></button>
                                 <div className="w-px h-4 bg-white/20"></div>
-                                <button onClick={() => setSelfieZoom(1)} className="text-gray-400 hover:text-white" title="Reset Zoom"><RotateCcw className="w-4 h-4"/></button>
+                                <button onClick={() => setSelfieZoom(1)} className="text-gray-400 hover:text-white cursor-pointer"><RotateCcw className="w-4 h-4"/></button>
                             </div>
-                            
-                            {/* Zone Image avec défilement si zoomée */}
                             <div className="flex-1 overflow-auto flex items-center justify-center p-4">
                                 {customer.selfieUrl ? (
-                                    <img 
-                                        src={customer.selfieUrl} 
-                                        alt="Selfie" 
-                                        className="max-w-full max-h-full object-contain transition-transform duration-200" 
-                                        style={{ transform: `scale(${selfieZoom})`, transformOrigin: 'center' }} 
-                                    />
+                                    <img src={customer.selfieUrl} alt="Selfie" className="max-w-full max-h-full object-contain transition-transform duration-200" style={{ transform: `scale(${selfieZoom})`, transformOrigin: 'center' }} />
                                 ) : (
                                     <p className="text-gray-600 font-medium">No selfie provided</p>
                                 )}
                             </div>
                         </div>
-
                     </div>
                 </div>
             )}

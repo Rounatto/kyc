@@ -1,12 +1,5 @@
 import nodemailer from "nodemailer";
 
-/**
- * Envoie un e-mail transactionnel de conformité KYC au client
- * @param to Adresse email du client
- * @param status Nouveau statut ("verified" ou "rejected")
- * @param name Nom complet du client
- * @param rejectionReason Raison du refus (optionnel)
- */
 export const sendKYCEmail = async (
   to: string, 
   status: string, 
