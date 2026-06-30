@@ -85,6 +85,7 @@ export default function VerificationLogTable({
                             <th className="px-6 py-4">Customer</th>
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">AI Risk Level</th>
+                            <th className="px-6 py-4">Score</th>
                             <th className="px-6 py-4">Submitted At</th>
                             <th className="px-6 py-4 text-right">Actions</th>
                         </tr>
@@ -129,6 +130,15 @@ export default function VerificationLogTable({
                                                   'bg-yellow-500'}`}
                                             ></span>
                                             {item.RiskLevel} Risk
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-sm text-gray-600 font-medium">
+                                        <span className={`inline-flex items-center gap-1.5 text-xs font-bold
+                                            ${parseInt(item.Score) >= 80 ? 'text-green-600' : 
+                                              parseInt(item.Score) < 50 ? 'text-red-600' : 
+                                              'text-yellow-600'}`}
+                                        >
+                                            {item.Score}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-sm text-gray-600 font-medium">

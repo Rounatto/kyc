@@ -16,10 +16,10 @@ export default function CustomerPage() {
     const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
 
     const [isFilterOpen, setIsFilterOpen] = useState(false);
-    const [draftFilters, setDraftFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
-    const [activeFilters, setActiveFilters] = useState({ status: 'all', risk: 'all', sort: 'newest' });
+    const [draftFilters, setDraftFilters] = useState({ status: 'all', risk: 'all', sort: 'oldest' });
+    const [activeFilters, setActiveFilters] = useState({ status: 'all', risk: 'all', sort: 'oldest' });
 
-    const hasActiveFilters = activeFilters.status !== 'all' || activeFilters.risk !== 'all' || activeFilters.sort !== 'newest';
+    const hasActiveFilters = activeFilters.status !== 'all' || activeFilters.risk !== 'all' || activeFilters.sort !== 'oldest';
 
     useEffect(() => {
         async function fetchCustomers() {
@@ -50,7 +50,7 @@ export default function CustomerPage() {
                         }
                         if (!isNaN(parsedScore)) {
                             if (parsedScore >= 80) risk = "Low";
-                            else if (parsedScore <= 50) risk = "High";
+                            else if (parsedScore < 50) risk = "High";
                         }
 
                         return {
@@ -59,6 +59,7 @@ export default function CustomerPage() {
                             Nom: req.customerName,
                             Email: req.email,
                             Status: req.status ? req.status.toLowerCase() : "pending",
+                            Score: req.score ? `${parsedScore}/100` : "N/A",
                             RiskLevel: risk,
                             DateAdded: dateFormatted,
                         };
@@ -126,7 +127,7 @@ export default function CustomerPage() {
     };
 
     const handleResetFilters = () => {
-        const defaultFilters = { status: 'all', risk: 'all', sort: 'newest' };
+        const defaultFilters = { status: 'all', risk: 'all', sort: 'oldest' };
         setDraftFilters(defaultFilters);
         setActiveFilters(defaultFilters);
         setCurrentPage(1);
@@ -215,8 +216,8 @@ export default function CustomerPage() {
                                                 onChange={(e) => setDraftFilters({...draftFilters, sort: e.target.value})}
                                                 className="w-full border border-gray-300 bg-white rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer"
                                             >
-                                                <option value="newest">Newest First (SLA)</option>
                                                 <option value="oldest">Oldest First (SLA)</option>
+                                                <option value="newest">Newest First (SLA)</option>
                                                 <option value="highest_score">Safest Profiles (High Score)</option>
                                                 <option value="lowest_score">Riskiest Profiles (Low Score)</option>
                                             </select>

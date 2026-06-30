@@ -12,7 +12,7 @@ export async function GET(req: Request) {
         const limit = parseInt(searchParams.get("limit") || "5");
         const status = searchParams.get("status") || "all";
         const risk = searchParams.get("risk") || "all";
-        const sort = searchParams.get("sort") || "newest";
+        const sort = searchParams.get("sort") || "oldest";
         const skip = (page - 1) * limit;
 
         const whereCondition: any = {};
@@ -32,19 +32,25 @@ export async function GET(req: Request) {
         
         if (risk === "high") whereCondition.riskLevel = "High";
         else if (risk === "medium") whereCondition.riskLevel = "Medium";
-        else if (risk === "low") whereCondition.riskLevel = "Low";
+        else if (risk === "low") whereCondition.riskLevel = "Low"; 
 
-        let orderByCondition: any = { submittedAt: 'desc' };
-        if (sort === "oldest") orderByCondition = { submittedAt: 'asc' };
-        if (sort === "highest_score") orderByCondition = { score: 'desc' };
-        if (sort === "lowest_score") orderByCondition = { score: 'asc' };
+        let orderByCondition: any = { submittedAt: 'asc' }; // Défaut
 
+        if (sort === "newest") {
+            orderByCondition = { submittedAt: 'desc' };
+        } else if (sort === "highest_score") {
+            orderByCondition = { score: 'desc' }; // Ton padStart("005") rend ceci efficace
+        } else if (sort === "lowest_score") {
+            orderByCondition = { score: 'asc' };
+        }
+
+        // 2. Requête unique et propre
         const [requests, filteredTotal] = await Promise.all([
             prisma.verificationRequest.findMany({
                 where: whereCondition,
                 take: limit,
                 skip: skip,
-                orderBy: orderByCondition
+                orderBy: orderByCondition 
             }),
             prisma.verificationRequest.count({ where: whereCondition })
         ]);
