@@ -2,20 +2,34 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import VerificationTable from "@/components/VerificationTable";
-import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2 } from "lucide-react";import Header from "@/components/header";
+import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import Header from "@/components/header";
 import NewVerificationButton from "@/components/NewVerificationButton"; 
 
 export default function DashboardPage() {
+    const router = useRouter();
     const [requestsData, setRequestsData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
-    const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
     const [highRiskProfiles, setHighRiskProfiles] = useState<any[]>([]);
+    
+    // États dynamiques du Dashboard
+    const [timeRange, setTimeRange] = useState("30d");
+    const [stats, setStats] = useState({ total: 0, verified: 0, pending: 0, highRisk: 0 });
+    const [trends, setTrends] = useState({ totalDelta: 0, verifiedDelta: 0, pendingDelta: 0, highRiskDelta: 0 });
 
     useEffect(() => {
         async function fetchDashboardData() {
+            setLoading(true);
             try {
-                // On récupère les 10 dernières requêtes pour l'aperçu du Dashboard
+                const statsRes = await fetch(`/api/dashboard/stats?range=${timeRange}`);
+                if (statsRes.ok) {
+                    const statsData = await statsRes.json();
+                    setStats(statsData.stats);
+                    setTrends(statsData.trends);
+                }
+
                 const response = await fetch("/api/customers?limit=10&sort=newest");
                 const data = await response.json();
 
@@ -34,33 +48,26 @@ export default function DashboardPage() {
                             }
                         }
 
-                        // Définition propre du risque basée sur le score
                         let parsedScore = parseInt(String(req.score).match(/\d+/)?.[0] || "0", 10);
 
                         return {
                             id: req.id,
                             Avatar: initials,
-                            Nom: req.customerName, // Mappé pour le tableau
-                            Email: req.email,      // Mappé pour le tableau
+                            Nom: req.customerName,
+                            Email: req.email,
                             Type: req.type,
                             Submitted: dateFormatted, 
                             Status: req.status ? req.status.toLowerCase() : "pending",
                             Score: req.score || "--",
                             rawDate: req.submittedAt,
-                            parsedScore // Ajouté pour faciliter le filtrage ci-dessous
+                            parsedScore
                         };
                     });
 
-                    // On affiche les 5 plus récents dans le grand tableau
                     setRequestsData(formattedData.slice(0, 5));
-
-                    // On extrait les vrais profils à haut risque (< 50) pour le widget de droite
+                    
                     const criticalProfiles = formattedData.filter((req: any) => req.parsedScore <= 50);
                     setHighRiskProfiles(criticalProfiles.slice(0, 3));
-
-                    if (data.stats) {
-                        setStats(data.stats);
-                    }
                 }
             } catch (error) {
                 console.error("Error fetching requests:", error);
@@ -69,13 +76,11 @@ export default function DashboardPage() {
             }
         }
         fetchDashboardData();
-    }, []);
+    }, [timeRange]);
 
-    // --- ENGIN DE GÉNÉRATION DE RAPPORT EXÉCUTIF (DASHBOARD) ---
     const handleExportDashboardReport = () => {
         const timestamp = new Date().toLocaleString();
         
-        // 1. Construction d'une entête de rapport d'audit financier/conformité
         const reportSections = [
             "==================================================",
             "   KYC/AML COMPLIANCE PLATFORM EXECUTIVE REPORT   ",
@@ -83,9 +88,9 @@ export default function DashboardPage() {
             "==================================================",
             "",
             "1. GLOBAL PLATFORM METRICS (KPIs)",
-            `- Total Identity Check Inventions: ${stats.totalCustomers}`,
-            `- Total Verified Profiles Today: ${stats.verifiedToday}`,
-            `- Current Active Pending Review Queue: ${stats.pendingReviews}`,
+            `- Total Identity Check Inventions: ${stats.total}`,
+            `- Total Verified Profiles: ${stats.verified}`,
+            `- Current Active Pending Review Queue: ${stats.pending}`,
             `- Critical High Risk Flagged Alerts: ${stats.highRisk}`,
             "",
             "2. LIVE CRITICAL ANOMALIES DETECTED",
@@ -97,7 +102,6 @@ export default function DashboardPage() {
             "ID,Customer Name,Email,Procedure Type,Status,AI Score,Date Submitted"
         ];
         
-        // 2. Injection des lignes de données du tableau (en utilisant les clés mappées)
         const tableRows = requestsData.map((req: any) => {
             return [
                 req.id,
@@ -110,9 +114,7 @@ export default function DashboardPage() {
             ].join(",");
         });
 
-        // 3. Assemblage final (Le \uFEFF force Excel à s'ouvrir proprement sans casser les accents)
         const finalReportString = "\uFEFF" + [...reportSections, ...tableRows].join("\n");
-        
         const blob = new Blob([finalReportString], { type: "text/plain;charset=utf-8;" });
         const link = document.createElement("a");
         const urlObj = URL.createObjectURL(blob);
@@ -124,10 +126,33 @@ export default function DashboardPage() {
         document.body.removeChild(link);
     };
 
+    const TrendIndicator = ({ value, invertColors = false, neutral = false }: { value: number, invertColors?: boolean, neutral?: boolean }) => {
+        const isPositive = value > 0;
+        const isZero = value === 0;
+        
+        let colorClass = "text-gray-500 bg-gray-100";
+        if (!isZero) {
+            if (neutral) {
+                // Ta couleur d'origine pour Pending
+                colorClass = "text-orange-700 bg-yellow-300/40"; 
+            } else if (invertColors) {
+                colorClass = isPositive ? "text-red-700 bg-red-100" : "text-green-700 bg-green-100";
+            } else {
+                colorClass = isPositive ? "text-green-700 bg-green-100" : "text-red-700 bg-red-100";
+            }
+        }
+
+        return (
+            <div className={`flex justify-center items-center rounded-sm px-2 py-1 text-[10px] font-bold gap-1 ${colorClass}`}>
+                {isPositive ? <TrendingUp className="w-3 h-3" /> : isZero ? <Minus className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                {isPositive ? '+' : ''}{value.toFixed(1)}%
+            </div>
+        );
+    };
+
     return (
         <div className="w-full">
             <Header />
-            
             <NewVerificationButton mobileOnly />
 
             <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8 ">
@@ -137,10 +162,18 @@ export default function DashboardPage() {
                         <p className="text-sm text-gray-500">Real-time status of your compliance network.</p>
                     </div>
                     <div className="flex flex-row gap-3 w-full lg:w-auto">
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 cursor-pointer lg:w-36 h-12 justify-center">
-                            <Calendar className="w-4 h-4 text-gray-500" />
-                            <p className="text-xs md:text-sm font-medium text-gray-700 whitespace-nowrap">Last 30 days</p>
-                        </button>
+                        <div className="relative flex-1 lg:flex-none">
+                            <select 
+                                value={timeRange}
+                                onChange={(e) => setTimeRange(e.target.value)}
+                                className="w-full lg:w-40 appearance-none flex items-center gap-2 px-10 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer h-12 outline-none shadow-sm"
+                            >
+                                <option value="30d">Last 30 Days</option>
+                                <option value="90d">Last Quarter</option>
+                                <option value="1y">Last Year</option>
+                            </select>
+                            <Calendar className="w-4 h-4 text-gray-500 absolute left-4 top-4 pointer-events-none" />
+                        </div>
                         
                         <button 
                             onClick={handleExportDashboardReport}
@@ -152,18 +185,17 @@ export default function DashboardPage() {
                     </div>
                 </div>
                 
-                {/* Widgets statistiques */}
                 <div className="flex flex-col sm:flex-row sm:flex-wrap lg:flex-nowrap gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full sm:w-[calc(50%-12px)] lg:flex-1 bg-white p-5 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between h-36 hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start gap-1">
                             <div className="bg-blue-600/20 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <UserRoundCheck className="text-blue-800" />
                             </div>
-                            <div className="bg-green-500/20 flex justify-center items-center rounded-sm px-2 py-1 text-green-700 text-[10px] font-bold">+12%</div>
+                            <TrendIndicator value={trends.totalDelta} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Total Verifications</p>
-                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.totalCustomers}</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.total}</p>
                         </div>
                     </div>
                     
@@ -172,11 +204,11 @@ export default function DashboardPage() {
                             <div className="bg-yellow-400/30 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <ClipboardClock className="text-orange-600" />
                             </div>
-                            <div className="bg-yellow-400/30 flex justify-center items-center rounded-sm px-2 py-1 text-orange-600 text-[10px] font-bold"><Clock className="w-3 h-3 inline mr-1" />8m avg</div>
+                            <TrendIndicator value={trends.pendingDelta} neutral={true} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Review</p>
-                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pendingReviews}</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pending}</p>
                         </div>
                     </div>
                     
@@ -185,11 +217,11 @@ export default function DashboardPage() {
                             <div className="bg-green-500/20 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <ShieldCheck className="text-green-700" />
                             </div>
-                            <div className="bg-green-500/20 flex justify-center items-center rounded-sm px-2 py-1 text-green-700 text-[10px] font-bold">99.2% Rate</div>
+                            <TrendIndicator value={trends.verifiedDelta} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Approved Today</p>
-                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verifiedToday}</p>
+                            <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verified}</p>
                         </div>
                     </div>
                     
@@ -198,7 +230,7 @@ export default function DashboardPage() {
                             <div className="bg-red-600/20 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <TriangleAlert className="text-red-700" />
                             </div>
-                            <div className="bg-red-600/20 flex justify-center items-center rounded-sm px-2 py-1 text-red-700 text-[10px] font-bold truncate">High Priority</div>
+                            <TrendIndicator value={trends.highRiskDelta} invertColors={true} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Risk Alerts</p>
@@ -208,7 +240,6 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="flex flex-col lg:flex-row justify-between gap-4 mt-7">
-                    {/* Graphique de Vélocité */}
                     <div className="flex flex-col w-full lg:w-[65%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">
                         <div className="flex flex-row justify-between items-center mb-4">
                             <h2 className="font-bold">Verification Activity</h2>
@@ -221,55 +252,37 @@ export default function DashboardPage() {
                                 </span>
                             </div>
                         </div>
-                        <div className="flex flex-row justify-between w-full px-2 mt-auto text-xs font-bold text-gray-400">
-                            <p>Monday</p><p>Tuesday</p><p>Wednesday</p><p>Thursday</p><p>Friday</p><p>Saturday</p><p>Sunday</p>
+                        <div className="w-full bg-slate-50/50 rounded-lg h-[200px] flex items-center justify-center relative overflow-hidden border border-gray-100">
+                            <svg viewBox="0 0 500 150" className="w-full h-full absolute inset-0 preserve-aspect-ratio-none" preserveAspectRatio="none">
+                                <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100 L510,160 L-10,160 Z" fill="#eff6ff" opacity="0.6" />
+                                <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100" fill="none" stroke="#2563eb" strokeWidth="3.5" strokeLinecap="round" />
+                            </svg>
+                            <span className="text-xs md:text-sm text-gray-600 italic relative z-10 font-medium">Reporting engine running on {timeRange} projection</span>
                         </div>
                     </div>
                     
-                    {/* Widget High Risk Profiles */}
-                    <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between gap-6 hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">
-                        <div>
-                            <div className="flex flex-row items-center mb-4">
-                                <h2 className="font-bold text-gray-900">Live Critical Risks</h2>
-                                <Link href="/dashboard/customers?risk=high" className="text-xs font-bold text-blue-700 ml-auto hover:underline flex items-center gap-1">
-                                    View All <ArrowRight className="w-3 h-3" />
-                                </Link>
-                            </div>
-                            <div className="flex flex-col gap-3">
-                                {highRiskProfiles.length > 0 ? (
-                                    highRiskProfiles.map((profile) => (
-                                        <Link 
-                                            href={`/dashboard/customers/${profile.id}`} 
-                                            key={profile.id}
-                                            className="flex flex-row items-center gap-3 p-2.5 border border-red-200 bg-red-50/40 hover:bg-red-50 transition-all rounded-lg cursor-pointer group"
-                                        >
-                                            <div className="bg-red-100 p-2 rounded-lg text-red-700 shrink-0">
-                                                <AlertCircle className="w-4 h-4" />
-                                            </div>
-                                            <div className="flex flex-col min-w-0 flex-1">
-                                                <p className="text-sm font-bold text-gray-700 truncate transition-colors ">{profile.Nom}</p>
-                                                <p className="text-xs text-red-600 font-medium">Risk Score: {profile.Score}/100</p>
-                                            </div>
-                                        </Link>
-                                    ))
-                                ) : (
-                                    <div className="text-center py-12 text-xs text-gray-400 font-medium flex flex-col items-center">
-                                        <ShieldCheck className="w-8 h-8 mb-2 opacity-30" />
-                                        No critical anomalies detected in the active pipeline.
-                                    </div>
-                                )}
-                            </div>
+                    {/* 💡 RESTAURATION DE TON BLOC BLEU AI RISK SCORING */}
+                    <div className="flex flex-col w-full lg:w-[35%] bg-blue-600 rounded-xl shadow-sm p-5 md:p-6 text-white justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300">
+                        <div className="flex flex-col gap-4">
+                            <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
+                                <path d="M11.64 5.23a.75.75 0 0 1 1.44 0l1.24 3.86a.75.75 0 0 0 .52.52l3.86 1.24a.75.75 0 0 1 0 1.44l-3.86 1.24a.75.75 0 0 0-.52.52l-1.24 3.86a.75.75 0 0 1-1.44 0l-1.24-3.86a.75.75 0 0 0-.52-.52l-3.86-1.24a.75.75 0 0 1 0-1.44l3.86-1.24a.75.75 0 0 0 .52-.52z"/>
+                                <path d="M19.32 2.68a.5.5 0 0 1 .96 0l.4 1.2a.5.5 0 0 0 .34.34l1.2.4a.5.5 0 0 1 0 .96l-1.2.4a.5.5 0 0 0-.34-.34l-.4 1.2a.5.5 0 0 1-.96 0l-.4-1.2a.5.5 0 0 0-.34-.34l-1.2-.4a.5.5 0 0 1 0-.96l1.2-.4a.5.5 0 0 0 .34-.34z"/>
+                            </svg>
+                            <h3 className="font-bold text-lg md:text-xl">AI Risk Scoring</h3>
+                            <p className="text-blue-100 text-sm md:text-base leading-relaxed">
+                                Our new neural engine has flagged <span className="font-bold text-white">{stats.highRisk}</span> potential anomalies. Manual review recommended.
+                            </p>
                         </div>
-                        <div className="flex flex-col gap-3 bg-gray-100 p-4 rounded-lg">
-                            <p className="text-xs font-medium text-gray-600">AI-driven risk scoring engine is monitoring active directory logs.</p>
-                            <div className="w-full bg-white h-1.5 rounded-full overflow-hidden">
-                                <div className="bg-blue-700 h-full w-[75%] rounded-full animate-pulse" ></div>
-                            </div>
-                        </div>
-                    </div> 
+                        {/* 💡 LE BOUTON EST CONNECTÉ ET TE REDIRIGE AU BON ENDROIT */}
+                        <button 
+                            onClick={() => router.push('/dashboard/customers?risk=high')}
+                            className="mt-6 w-full py-2.5 bg-blue-500 hover:bg-blue-400 transition-colors border border-blue-400 rounded-lg font-medium text-sm cursor-pointer"
+                        >
+                            Review Anomalies
+                        </button>
+                    </div>
                 </div>
 
-                {/* Tableau principal */}
                 {loading ? (
                     <div className="w-full bg-white border border-gray-400 rounded-md p-8 text-center flex flex-col items-center justify-center h-64">
                         <Loader2 className="w-8 h-8 text-blue-600 animate-spin mb-4" />

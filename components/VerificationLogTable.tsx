@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { MoreVertical, Eye, Copy, Mail, Flag, ChevronLeft, ChevronRight, Check } from "lucide-react";
+import { toast } from "sonner";
 
 interface VerificationLogTableProps {
     data: any[];
@@ -59,6 +60,31 @@ export default function VerificationLogTable({
         setOpenMenuId(openMenuId === id ? null : id);
     };
 
+    const handleFlagAudit = async (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        setOpenMenuId(null);
+
+        const flagPromise = new Promise(async (resolve, reject) => {
+            try {
+                const res = await fetch(`/api/customers/${id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "FLAG_AUDIT" })
+                });
+                if (res.ok) resolve("Success");
+                else reject("Failure");
+            } catch (error) {
+                reject("Network Error");
+            }
+        });
+
+        toast.promise(flagPromise, {
+            loading: "Flagging profile for security audit...",
+            success: "Profile successfully flagged! Audit trail updated.",
+            error: "Failed to flag profile. Please try again."
+        });
+    };
+
     return (
         <div className="w-full bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
             <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-white">
@@ -85,7 +111,7 @@ export default function VerificationLogTable({
                             <th className="px-6 py-4">Customer</th>
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">AI Risk Level</th>
-                            <th className="px-6 py-4">Score</th>
+                            <th className="px-6 py-4">AI Score</th>
                             <th className="px-6 py-4">Submitted At</th>
                             <th className="px-6 py-4 text-right">Actions</th>
                         </tr>
@@ -179,8 +205,8 @@ export default function VerificationLogTable({
                                                 <div className="h-[1px] bg-gray-100 my-1 w-full"></div>
 
                                                 <button 
-                                                    onClick={(e) => { e.stopPropagation(); alert("Profile flagged for internal audit."); setOpenMenuId(null); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors font-medium"
+                                                    onClick={(e) => handleFlagAudit(e, item.id)}
+                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors font-medium cursor-pointer"
                                                 >
                                                     <Flag className="w-4 h-4" /> Flag for Audit
                                                 </button>
@@ -200,7 +226,6 @@ export default function VerificationLogTable({
                 </table>
             </div>
 
-            {/* PAGINATION */}
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between mt-auto">
                 <p className="text-sm text-gray-500 font-medium">
                     Showing <span className="font-bold text-gray-900">{data.length === 0 ? 0 : (currentPage - 1) * currentLimit + 1}</span> to <span className="font-bold text-gray-900">{Math.min(currentPage * currentLimit, totalItems)}</span> of <span className="font-bold text-gray-900">{totalItems}</span> entries

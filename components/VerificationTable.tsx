@@ -3,18 +3,14 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { MoreVertical, Eye, Copy, Mail, Flag, Check } from "lucide-react";
+import { toast } from "sonner";
 
 export default function VerificationTable({ data }: { data: any[] }) {
     const router = useRouter();
-    
-    // Les états pour gérer quel menu est ouvert et quel ID a été copié
     const [openMenuId, setOpenMenuId] = useState<string | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
-    
-    // La fameuse "balise" invisible pour détecter les clics à l'extérieur
     const menuRef = useRef<HTMLDivElement>(null);
 
-    // Le détecteur de clic extérieur
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -25,25 +21,47 @@ export default function VerificationTable({ data }: { data: any[] }) {
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
-    // --- LES FONCTIONS D'ACTIONS ---
-    
     const handleCopyId = (e: React.MouseEvent, id: string) => {
-        e.stopPropagation(); // On bloque la redirection de la ligne
-        navigator.clipboard.writeText(id); // On copie l'ID
-        setCopiedId(id); // On déclenche l'animation "Copié!"
-        setTimeout(() => setCopiedId(null), 2000); // On remet à zéro après 2s
+        e.stopPropagation(); 
+        navigator.clipboard.writeText(id); 
+        setCopiedId(id); 
+        setTimeout(() => setCopiedId(null), 2000); 
     };
 
     const handleMailTo = (e: React.MouseEvent, email: string) => {
-        e.stopPropagation(); // On bloque la redirection
-        window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${email}`, '_blank'); // On ouvre la boîte mail
-        setOpenMenuId(null); // On ferme le menu
+        e.stopPropagation(); 
+        window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${email}`, '_blank'); 
+        setOpenMenuId(null); 
     };
 
     const toggleMenu = (e: React.MouseEvent, id: string) => {
-        e.stopPropagation(); // On bloque la redirection
-        // Si le menu de cet ID est déjà ouvert, on le ferme. Sinon, on l'ouvre.
+        e.stopPropagation(); 
         setOpenMenuId(openMenuId === id ? null : id);
+    };
+
+    const handleFlagAudit = async (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        setOpenMenuId(null);
+
+        const flagPromise = new Promise(async (resolve, reject) => {
+            try {
+                const res = await fetch(`/api/customers/${id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "FLAG_AUDIT" })
+                });
+                if (res.ok) resolve("Success");
+                else reject("Failure");
+            } catch (error) {
+                reject("Network Error");
+            }
+        });
+
+        toast.promise(flagPromise, {
+            loading: "Flagging profile for security audit...",
+            success: "Profile successfully flagged! Audit trail updated.",
+            error: "Failed to flag profile. Please try again."
+        });
     };
 
     return (
@@ -104,7 +122,6 @@ export default function VerificationTable({ data }: { data: any[] }) {
                                         {item.Submitted}
                                     </td>
                                     <td className="px-6 py-4 text-right relative">
-                                        {/* LE BOUTON DES 3 POINTS */}
                                         <button 
                                             onClick={(e) => toggleMenu(e, item.id)}
                                             className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
@@ -112,7 +129,6 @@ export default function VerificationTable({ data }: { data: any[] }) {
                                             <MoreVertical className="w-5 h-5" />
                                         </button>
 
-                                        {/* LE MENU DÉROULANT DES ACTIONS */}
                                         {openMenuId === item.id && (
                                             <div className="absolute right-8 top-10 w-48 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-2 flex flex-col text-left overflow-hidden">
                                                 <button 
@@ -140,8 +156,8 @@ export default function VerificationTable({ data }: { data: any[] }) {
                                                 <div className="h-[1px] bg-gray-100 my-1 w-full"></div>
 
                                                 <button 
-                                                    onClick={(e) => { e.stopPropagation(); alert("Profile flagged for internal audit."); setOpenMenuId(null); }}
-                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors font-medium"
+                                                    onClick={(e) => handleFlagAudit(e, item.id)}
+                                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors font-medium cursor-pointer"
                                                 >
                                                     <Flag className="w-4 h-4" /> Flag for Audit
                                                 </button>

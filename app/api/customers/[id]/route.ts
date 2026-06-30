@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { sendKYCEmail } from "@/lib/mail"; // 💡 NOUVEAU : Import de l'utilitaire de mail
+import { sendKYCEmail } from "@/lib/mail";
 
 export async function GET(
     req: Request, 
@@ -24,7 +24,6 @@ export async function GET(
         }
         
         return NextResponse.json(customer);
-        
     } catch (error: any) {
         console.error("GET Error:", error);
         return NextResponse.json({ message: "Internal server error." }, { status: 500 });
@@ -40,14 +39,30 @@ export async function PATCH(
         const customerId = resolvedParams.id;
 
         const body = await req.json();
-        // 💡 NOUVEAU : Récupération de la raison de rejet optionnelle depuis le body
+        
+        // 💡 Logique de gestion du Flag pour Audit
+        if (body.action === "FLAG_AUDIT") {
+            const flaggedCustomer = await prisma.verificationRequest.update({
+                where: { id: customerId },
+                data: {
+                    auditLogs: {
+                        create: {
+                            action: "FLAGGED",
+                            details: `Profile manually flagged for internal security audit. Immediate attention required.`,
+                        }
+                    }
+                }
+            });
+            return NextResponse.json(flaggedCustomer);
+        }
+
+        // --- Logique Standard Approve/Reject ---
         const { status, agentId, rejectionReason } = body;
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
             return NextResponse.json({ message: "Invalid status value." }, { status: 400 });
         }
 
-        // Récupération de l'identité de l'agent
         let agentName = "System";
         if (agentId) {
             const agent = await prisma.user.findUnique({ where: { id: agentId } });
@@ -65,7 +80,6 @@ export async function PATCH(
             logDetails = `KYC Profile rejected by ${agentName}.${rejectionReason ? ` Reason: ${rejectionReason}` : ""}`;
         }
         
-        // Mise à jour de la BDD et écriture de l'Audit Log
         const updatedCustomer = await prisma.verificationRequest.update({
             where: { id: customerId },
             data: { 
@@ -85,10 +99,8 @@ export async function PATCH(
             }
         });
 
-        // 💡 NOUVEAU : Envoi de l'e-mail transactionnel automatique
         if (status === "verified" || status === "rejected") {
             try {
-                // On lance l'envoi en tâche de fond pour ne pas ralentir la réponse de l'API
                 sendKYCEmail(
                     updatedCustomer.email, 
                     status, 
@@ -101,7 +113,6 @@ export async function PATCH(
         }
 
         return NextResponse.json(updatedCustomer);
-
     } catch (error: any) {
         console.error("PATCH Error:", error);
         return NextResponse.json({ message: "Failed to update customer status." }, { status: 500 });
