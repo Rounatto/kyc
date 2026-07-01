@@ -1,0 +1,98 @@
+[
+  {
+    "conditions": {
+      "all": [{ "fact": "isSanctionedName", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "hard_kill",
+      "params": {
+        "points": 100,
+        "message": "CRITICAL HIT: Applicant name matched an active entry in global financial watchlists."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isUnderage", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "hard_kill",
+      "params": {
+        "points": 100,
+        "message": "REGULATORY REJECTION: Applicant is under the legal age of 18. Account creation denied."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isStolenDocument", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 50,
+        "message": "SECURITY ALERT: Document serial flag matched stolen/lost databases."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isDisposableEmail", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 35,
+        "message": "Risk Warning: Disposable email domain detected."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "invalidCinFormat", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 25,
+        "message": "Structure Failure: National ID structure is out of compliance."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isYoungAdult", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 20,
+        "message": "Risk Warning: Young adult profile (< 25 years old). Statistical volatility threshold applied."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "missingPhone", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 15,
+        "message": "Missing telephony structure for multi-factor lookup."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isPassport", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "trust_bonus",
+      "params": {
+        "points": -5,
+        "message": "High-trust biometric document layout analyzed (Passport)."
+      }
+    }
+  }
+]

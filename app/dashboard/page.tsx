@@ -7,6 +7,7 @@ import VerificationTable from "@/components/VerificationTable";
 import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import Header from "@/components/header";
 import NewVerificationButton from "@/components/NewVerificationButton"; 
+import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function DashboardPage() {
     const router = useRouter();
@@ -18,6 +19,7 @@ export default function DashboardPage() {
     const [timeRange, setTimeRange] = useState("30d");
     const [stats, setStats] = useState({ total: 0, verified: 0, pending: 0, highRisk: 0 });
     const [trends, setTrends] = useState({ totalDelta: 0, verifiedDelta: 0, pendingDelta: 0, highRiskDelta: 0 });
+    const [chartData, setChartData] = useState<any[]>([]);
 
     useEffect(() => {
         async function fetchDashboardData() {
@@ -28,6 +30,7 @@ export default function DashboardPage() {
                     const statsData = await statsRes.json();
                     setStats(statsData.stats);
                     setTrends(statsData.trends);
+                    setChartData(statsData.chartData || []);
                 }
 
                 const response = await fetch("/api/customers?limit=10&sort=newest");
@@ -66,7 +69,8 @@ export default function DashboardPage() {
 
                     setRequestsData(formattedData.slice(0, 5));
                     
-                    const criticalProfiles = formattedData.filter((req: any) => req.parsedScore <= 50);
+                    // 💡 CORRECTION DU FILTRE: Un haut risque est maintenant >= 50
+                    const criticalProfiles = formattedData.filter((req: any) => req.parsedScore >= 50);
                     setHighRiskProfiles(criticalProfiles.slice(0, 3));
                 }
             } catch (error) {
@@ -133,7 +137,6 @@ export default function DashboardPage() {
         let colorClass = "text-gray-500 bg-gray-100";
         if (!isZero) {
             if (neutral) {
-                // Ta couleur d'origine pour Pending
                 colorClass = "text-orange-700 bg-yellow-300/40"; 
             } else if (invertColors) {
                 colorClass = isPositive ? "text-red-700 bg-red-100" : "text-green-700 bg-green-100";
@@ -220,7 +223,7 @@ export default function DashboardPage() {
                             <TrendIndicator value={trends.verifiedDelta} />
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <p className="text-sm font-semibold text-gray-500 truncate">Approved Today</p>
+                            <p className="text-sm font-semibold text-gray-500 truncate">Approved Profiles</p>
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verified}</p>
                         </div>
                     </div>
@@ -242,7 +245,7 @@ export default function DashboardPage() {
                 <div className="flex flex-col lg:flex-row justify-between gap-4 mt-7">
                     <div className="flex flex-col w-full lg:w-[65%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">
                         <div className="flex flex-row justify-between items-center mb-4">
-                            <h2 className="font-bold">Verification Activity</h2>
+                            <h2 className="font-bold">Verification Activity (Last 7 Days)</h2>
                             <div className="flex flex-row text-xs font-semibold gap-3 text-gray-600">
                                 <span className="flex items-center gap-1">
                                     <span className="w-2.5 h-2.5 bg-blue-600 rounded-full"></span> Approved
@@ -252,16 +255,28 @@ export default function DashboardPage() {
                                 </span>
                             </div>
                         </div>
-                        <div className="w-full bg-slate-50/50 rounded-lg h-[200px] flex items-center justify-center relative overflow-hidden border border-gray-100">
-                            <svg viewBox="0 0 500 150" className="w-full h-full absolute inset-0 preserve-aspect-ratio-none" preserveAspectRatio="none">
-                                <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100 L510,160 L-10,160 Z" fill="#eff6ff" opacity="0.6" />
-                                <path d="M-10,120 C40,120 70,70 120,60 C170,50 200,100 250,110 C300,120 340,30 380,20 C420,10 470,80 510,100" fill="none" stroke="#2563eb" strokeWidth="3.5" strokeLinecap="round" />
-                            </svg>
-                            <span className="text-xs md:text-sm text-gray-600 italic relative z-10 font-medium">Reporting engine running on {timeRange} projection</span>
+                        <div className="w-full h-[250px] mt-2">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={chartData} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
+                                    <defs>
+                                        <linearGradient id="colorApprove" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3}/>
+                                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
+                                        </linearGradient>
+                                        <linearGradient id="colorRisk" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#dc2626" stopOpacity={0.3}/>
+                                            <stop offset="95%" stopColor="#dc2626" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
+                                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9ca3af'}} />
+                                    <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                                    <Area type="monotone" dataKey="Approved" stroke="#2563eb" strokeWidth={3} fillOpacity={1} fill="url(#colorApprove)" />
+                                    <Area type="monotone" dataKey="Risk" stroke="#dc2626" strokeWidth={3} fillOpacity={1} fill="url(#colorRisk)" />
+                                </AreaChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
                     
-                    {/* 💡 RESTAURATION DE TON BLOC BLEU AI RISK SCORING */}
                     <div className="flex flex-col w-full lg:w-[35%] bg-blue-600 rounded-xl shadow-sm p-5 md:p-6 text-white justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-col gap-4">
                             <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
@@ -270,10 +285,9 @@ export default function DashboardPage() {
                             </svg>
                             <h3 className="font-bold text-lg md:text-xl">AI Risk Scoring</h3>
                             <p className="text-blue-100 text-sm md:text-base leading-relaxed">
-                                Our new neural engine has flagged <span className="font-bold text-white">{stats.highRisk}</span> potential anomalies. Manual review recommended.
+                                Our new neural engine has flagged <span className="font-bold text-white">{stats.highRisk}</span> potential anomalies in the system. Manual review recommended.
                             </p>
                         </div>
-                        {/* 💡 LE BOUTON EST CONNECTÉ ET TE REDIRIGE AU BON ENDROIT */}
                         <button 
                             onClick={() => router.push('/dashboard/customers?risk=high')}
                             className="mt-6 w-full py-2.5 bg-blue-500 hover:bg-blue-400 transition-colors border border-blue-400 rounded-lg font-medium text-sm cursor-pointer"

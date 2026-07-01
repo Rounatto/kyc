@@ -11,6 +11,15 @@ export default function VerificationTable({ data }: { data: any[] }) {
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
 
+    const formatScore = (score: unknown) => {
+        const rawScore = String(score ?? "").trim();
+        if (!rawScore || rawScore === "--") return "--";
+        if (rawScore.includes("/100")) return rawScore;
+
+        const match = rawScore.match(/\d+/);
+        return match ? `${parseInt(match[0], 10)}/100` : rawScore;
+    };
+
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -114,8 +123,9 @@ export default function VerificationTable({ data }: { data: any[] }) {
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">
-                                        <span className={`font-bold text-sm ${item.Score === '--' ? 'text-gray-400' : parseInt(item.Score) >= 80 ? 'text-green-600' : parseInt(item.Score) <= 50 ? 'text-red-600' : 'text-yellow-600'}`}>
-                                            {item.Score !== '--' ? `${item.Score}/100` : item.Score}
+                                        {/* 💡 CORRECTION DES COULEURS : >= 50 Rouge, >= 20 Jaune, < 20 Vert */}
+                                        <span className={`font-bold text-sm ${item.Score === '--' ? 'text-gray-400' : parseInt(String(item.Score)) >= 50 ? 'text-red-600' : parseInt(String(item.Score)) >= 20 ? 'text-yellow-600' : 'text-green-600'}`}>
+                                            {formatScore(item.Score)}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-sm text-gray-600 font-medium">

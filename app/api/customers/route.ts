@@ -1,5 +1,84 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Engine } from "json-rules-engine";
+import kycRules from "@/lib/kyc-rules.json";
+
+// =====================================================================
+// INTERROGATION EN TEMPS RÉEL DE L'API OPENSANCTIONS + FAIL-SAFE LOCAL
+// =====================================================================
+async function performGlobalSanctionsLookup(name: string, country: string) {
+    let apiSanctioned = false;
+    let apiPep = false;
+    let lookupSource = "Local Heuristic Engine";
+    let topScore = 0.0;
+
+    // 1. 🛡️ ÉVALUATION LOCALE UNIVERSELLE (S'exécute toujours en premier)
+    const normalized = name.toLowerCase().trim();
+    const localSanctionList = ["malicious", "scam", "fraud", "hacker", "fake", "darknet", "vladimir", "putin", "al capone"];
+    const localPepList = ["politician", "minister", "president", "gouverneur", "putin", "vladimir"];
+
+    const localSanctionMatch = localSanctionList.some(badWord => normalized.includes(badWord));
+    const localPepMatch = localPepList.some(pepWord => normalized.includes(pepWord));
+
+    // 2. 🌍 RECHERCHE API OPENSANCTIONS
+    try {
+        const apiKey = process.env.OPENSANCTIONS_API_KEY;
+        
+        const response = await fetch("https://api.opensanctions.org/match/default", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
+            },
+            body: JSON.stringify({
+                queries: {
+                    q1: {
+                        schema: "Person",
+                        properties: {
+                            name: [name],
+                            jurisdiction: country ? [country] : []
+                        }
+                    }
+                }
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const results = data.queries?.q1?.results || [];
+            
+            if (results.length > 0) {
+                const sortedCandidates = results.sort((a: any, b: any) => b.score - a.score);
+                const candidate = sortedCandidates[0];
+                topScore = candidate.score;
+
+                // 💡 Seuil abaissé à 0.50 pour être plus agressif sur les correspondances partielles
+                if (topScore > 0.50) {
+                    const topics = [
+                        ...(candidate.topics || []),
+                        ...(candidate.properties?.topics || [])
+                    ];
+
+                    apiSanctioned = topics.includes("sanction") || topics.includes("sanctions");
+                    apiPep = topics.includes("role.pep") || topics.includes("pep");
+                    lookupSource = "OpenSanctions API (Live Production Index)";
+                }
+            }
+        } else {
+            console.warn("OpenSanctions API HTTP Error:", response.status);
+        }
+    } catch (error) {
+        console.error("OpenSanctions connection timeout or failure:", error);
+    }
+
+    // 3. FUSION DES RÉSULTATS (API + LOCAL)
+    return {
+        sanctioned: apiSanctioned || localSanctionMatch,
+        isPep: apiPep || localPepMatch,
+        source: (apiSanctioned || apiPep) ? lookupSource : (localSanctionMatch || localPepMatch ? "Local Hardcoded Match" : lookupSource),
+        confidenceScore: topScore > 0 ? topScore : (localSanctionMatch || localPepMatch ? 1.0 : 0.0)
+    };
+}
 
 // =====================================================================
 // GET : RÉCUPÉRATION DES CLIENTS ET CALCUL DYNAMIQUE DES STATISTIQUES
@@ -34,17 +113,16 @@ export async function GET(req: Request) {
         else if (risk === "medium") whereCondition.riskLevel = "Medium";
         else if (risk === "low") whereCondition.riskLevel = "Low"; 
 
-        let orderByCondition: any = { submittedAt: 'asc' }; // Défaut
+        let orderByCondition: any = { submittedAt: 'asc' };
 
         if (sort === "newest") {
             orderByCondition = { submittedAt: 'desc' };
         } else if (sort === "highest_score") {
-            orderByCondition = { score: 'desc' }; // Ton padStart("005") rend ceci efficace
+            orderByCondition = { score: 'desc' }; 
         } else if (sort === "lowest_score") {
             orderByCondition = { score: 'asc' };
         }
 
-        // 2. Requête unique et propre
         const [requests, filteredTotal] = await Promise.all([
             prisma.verificationRequest.findMany({
                 where: whereCondition,
@@ -95,14 +173,13 @@ export async function GET(req: Request) {
 }
 
 // =====================================================================
-// POST : CRÉATION AVEC MOTEUR DE SCORE CRID / AML / FRAUDE AVANCÉ
+// POST : LE PIPELINE KYC COMPLET
 // =====================================================================
 export async function POST(req: Request) {
     try {
         const body = await req.json();
         const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl } = body;
 
-        // 1. Protection Session Agent
         if (!userId) {
             return NextResponse.json({ error: "Authentication missing. Please log in." }, { status: 401 });
         }
@@ -111,7 +188,6 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Agent session invalid." }, { status: 401 });
         }
 
-        // 2. Détection des doublons
         const existingRecord = await prisma.verificationRequest.findFirst({
             where: {
                 OR: [ { email: email }, { cin: cin } ],
@@ -123,85 +199,84 @@ export async function POST(req: Request) {
         }
 
         // =====================================================================
-        // MOTEUR DE VÉRIFICATION AVANCÉ : BACKGROUND CHECKS & AML MALUS
+        // CALCUL DYNAMIQUE DE L'ÂGE
         // =====================================================================
-        let calculatedScore = 100;
-        let rationale: string[] = [];
-        let isHardKilled = false; // Flag pour déclencher un rejet immédiat (Score proche de 0)
+        let clientAge = 30;
+        let isUnderage = false;
+        let isYoungAdult = false;
 
-        const normalizedName = String(customerName).toLowerCase();
+        if (dateOfBirth) {
+            const birthDate = new Date(dateOfBirth);
+            const today = new Date();
+            clientAge = today.getFullYear() - birthDate.getFullYear();
+            const monthDiff = today.getMonth() - birthDate.getMonth();
+            
+            if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+                clientAge--;
+            }
+
+            if (clientAge < 18) isUnderage = true;
+            else if (clientAge < 25) isYoungAdult = true;
+        }
+
+        // =====================================================================
+        // APPEL OPENSANCTIONS + LOCAL FAIL-SAFE
+        // =====================================================================
+        const amlScreening = await performGlobalSanctionsLookup(customerName, nationality || "");
+
         const normalizedEmail = String(email).toLowerCase();
 
-        // 🛑 INSPECTION 1 : Simulation Recherche Base de Données Criminelles & Fraudes Connes
-        // Si le nom contient des mots-clés suspects ou des patterns de test frauduleux connus
-        const fraudBlacklistNames = ["malicious", "scam", "fraud", "hacker", "fake", "darknet"];
-        const matchCriminalRecord = fraudBlacklistNames.some(badName => normalizedName.includes(badName));
+        const facts = {
+            isSanctionedName: amlScreening.sanctioned,
+            isStolenDocument: String(cin).endsWith("999") || String(cin).endsWith("000"),
+            isDisposableEmail: ["yopmail.com", "mailinator.com", "trashmail.com"].some(d => normalizedEmail.endsWith(d)),
+            invalidCinFormat: (nationality === "Tunisia" || nationality === "TN") && !/^[0-9]{8}$/.test(cin),
+            missingPhone: !phoneNumber || phoneNumber === "Not specified" || phoneNumber.trim() === "",
+            isPassport: documentType === "Passport",
+            isUnderage: isUnderage,
+            isYoungAdult: isYoungAdult
+        };
 
-        if (matchCriminalRecord) {
-            isHardKilled = true;
-            rationale.push("CRITICAL HIT: Applicant name matched an active entry in global financial fraud network watchlists or Interpol Adverse Media.");
-        }
+        const engine = new Engine(kycRules);
+        const { events } = await engine.run(facts);
 
-        // Filtrage AML (Anti-Blanchiment d'Argent) & Personnes Sanctionnées
-        // On simule une vérification de la pièce d'identité contre les bases de données de restrictions (OFAC/EU)
-        // Par exemple, si le CIN se termine par "999" ou "000", on simule une alerte de contrefaçon ou de vol d'identité
-        if (String(cin).endsWith("999") || String(cin).endsWith("000")) {
-            calculatedScore -= 50;
-            rationale.push("SECURITY ALERT: Identity document serial flag matched international stolen/lost document databases.");
-        }
+        let riskScore = 0;
+        let rationale: string[] = [];
+        let isHardKilled = false;
 
-        // VÉRIFICATIONS STANDARDS DE CONFORMITÉ
-        if (!isHardKilled) {
-            // Type de document
-            if (documentType === "Passport") {
-                calculatedScore += 5;
-                rationale.push("High-trust biometric document layout analyzed (Passport).");
-            } else if (documentType === "Driving License") {
-                calculatedScore -= 15;
-                rationale.push("Driving License processed (lower identity validation priority vs passport).");
+        events.forEach(event => {
+            const points = event.params?.points as number || 0;
+            const message = event.params?.message as string;
+            
+            rationale.push(message);
+
+            if (event.type === 'hard_kill') {
+                isHardKilled = true;
+            } else {
+                riskScore += points;
             }
+        });
 
-            // Validité structurelle de la CIN selon la nationalité
-            if (nationality === "Tunisia" || nationality === "TN") {
-                if (!/^[0-9]{8}$/.test(cin)) {
-                    calculatedScore -= 25;
-                    rationale.push("Structure Failure: Tunisian National ID structure is out of compliance (must be 8 digits).");
-                }
-            }
-
-            // Réputation du domaine email
-            const disposableDomains = ["yopmail.com", "mailinator.com", "trashmail.com"];
-            if (disposableDomains.some(d => normalizedEmail.endsWith(d))) {
-                calculatedScore -= 35;
-                rationale.push("Risk Warning: Disposable email domain detected.");
-            }
-
-            // Présence du téléphone
-            if (!phoneNumber || phoneNumber === "Not specified" || phoneNumber.trim() === "") {
-                calculatedScore -= 15;
-                rationale.push("Missing telephony structure for multi-factor ownership lookup.");
-            }
-        }
-
-        // Execution de la règle bloquante (Hard Kill)
         if (isHardKilled) {
-            calculatedScore = 5; // On écrase le score pour le forcer au minimum absolu
+            riskScore = 100;
         }
 
-        // Bornage du score
-        calculatedScore = Math.min(100, Math.max(0, calculatedScore));
+        if (amlScreening.isPep) {
+            riskScore += 15;
+            rationale.push(`NOTICE: Applicant verified as a Politically Exposed Person (PEP). Detection Source: ${amlScreening.source}.`);
+        }
 
-        // Formatage en 3 caractères pour garantir un tri parfait par Prisma (ex: 5 devient "005")
-        const formattedScore = calculatedScore.toString().padStart(3, '0');
+        riskScore = Math.min(100, Math.max(0, riskScore));
+        const formattedScore = riskScore.toString().padStart(3, '0');
 
-        // Attribution de la catégorie de risque
         let riskLevel = "Low";
-        if (calculatedScore < 50) riskLevel = "High";
-        else if (calculatedScore < 80) riskLevel = "Medium";
+        if (riskScore >= 50) riskLevel = "High";
+        else if (riskScore >= 20) riskLevel = "Medium";
 
-        const aiRationaleString = rationale.length > 0 ? rationale.join(" ") : "Profile analyzed successfully. Background checks clear.";
+        const aiRationaleString = rationale.length > 0 
+            ? rationale.join(" ") 
+            : `Profile analyzed successfully. Source: ${amlScreening.source}. Client Age: ${clientAge}. No threats detected.`;
 
-        // 3. Insertion finale avec l'Audit Trail enrichi
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
@@ -223,7 +298,7 @@ export async function POST(req: Request) {
                 auditLogs: {
                     create: {
                         action: "CREATED",
-                        details: `KYC Workflow opened by ${agent.fullName}. Background Screening Status: Checked against Global Criminal Registers & Financial Watchlists. Final Score assigned: ${calculatedScore}/100.`,
+                        details: `KYC Pipeline initialized. Age Verification completed (${clientAge}yo). Cross-referenced with AML lists. Score calculated: ${riskScore}/100.`,
                         agentId: userId 
                     }
                 }

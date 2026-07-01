@@ -111,7 +111,7 @@ export default function VerificationLogTable({
                             <th className="px-6 py-4">Customer</th>
                             <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4">AI Risk Level</th>
-                            <th className="px-6 py-4">AI Score</th>
+                            <th className="px-6 py-4">Score</th>
                             <th className="px-6 py-4">Submitted At</th>
                             <th className="px-6 py-4 text-right">Actions</th>
                         </tr>
@@ -159,10 +159,11 @@ export default function VerificationLogTable({
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-sm text-gray-600 font-medium">
+                                        {/* 💡 CORRECTION DES COULEURS : >= 50 Rouge, >= 20 Jaune, < 20 Vert */}
                                         <span className={`inline-flex items-center gap-1.5 text-xs font-bold
-                                            ${parseInt(item.Score) >= 80 ? 'text-green-600' : 
-                                              parseInt(item.Score) < 50 ? 'text-red-600' : 
-                                              'text-yellow-600'}`}
+                                            ${parseInt(item.Score) >= 50 ? 'text-red-600' : 
+                                              parseInt(item.Score) >= 20 ? 'text-yellow-600' : 
+                                              'text-green-600'}`}
                                         >
                                             {item.Score}
                                         </span>
