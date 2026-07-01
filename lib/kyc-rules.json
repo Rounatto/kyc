@@ -37,6 +37,30 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "ocrNameMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "OCR ALERT: Applicant name could not be verified on the provided Identity Document image."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "ocrCinMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "OCR ALERT: ID Number (CIN) does not match the text extracted from the document."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "isDisposableEmail", "operator": "equal", "value": true }]
     },
     "event": {

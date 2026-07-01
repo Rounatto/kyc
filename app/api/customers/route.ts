@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
 import kycRules from "@/lib/kyc-rules.json";
+import Tesseract from "tesseract.js";
 
 // =====================================================================
 // INTERROGATION EN TEMPS RÉEL DE L'API OPENSANCTIONS + FAIL-SAFE LOCAL
@@ -12,7 +13,6 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
     let lookupSource = "Local Heuristic Engine";
     let topScore = 0.0;
 
-    // 1. 🛡️ ÉVALUATION LOCALE UNIVERSELLE (S'exécute toujours en premier)
     const normalized = name.toLowerCase().trim();
     const localSanctionList = ["malicious", "scam", "fraud", "hacker", "fake", "darknet", "vladimir", "putin", "al capone"];
     const localPepList = ["politician", "minister", "president", "gouverneur", "putin", "vladimir"];
@@ -20,7 +20,6 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
     const localSanctionMatch = localSanctionList.some(badWord => normalized.includes(badWord));
     const localPepMatch = localPepList.some(pepWord => normalized.includes(pepWord));
 
-    // 2. 🌍 RECHERCHE API OPENSANCTIONS
     try {
         const apiKey = process.env.OPENSANCTIONS_API_KEY;
         
@@ -52,7 +51,6 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
                 const candidate = sortedCandidates[0];
                 topScore = candidate.score;
 
-                // 💡 Seuil abaissé à 0.50 pour être plus agressif sur les correspondances partielles
                 if (topScore > 0.50) {
                     const topics = [
                         ...(candidate.topics || []),
@@ -71,7 +69,6 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
         console.error("OpenSanctions connection timeout or failure:", error);
     }
 
-    // 3. FUSION DES RÉSULTATS (API + LOCAL)
     return {
         sanctioned: apiSanctioned || localSanctionMatch,
         isPep: apiPep || localPepMatch,
@@ -173,7 +170,7 @@ export async function GET(req: Request) {
 }
 
 // =====================================================================
-// POST : LE PIPELINE KYC COMPLET
+// POST : LE PIPELINE KYC COMPLET AVEC VISION INTELLIGENTE (OCR)
 // =====================================================================
 export async function POST(req: Request) {
     try {
@@ -220,10 +217,44 @@ export async function POST(req: Request) {
         }
 
         // =====================================================================
+        // LECTURE OPTIQUE DE LA CARTE D'IDENTITÉ (OCR - TESSERACT.JS)
+        // =====================================================================
+        let ocrText = "";
+        let ocrFailed = false;
+        let isNameOnDoc = false;
+        let isCinOnDoc = false;
+
+        try {
+            if (idCardUrl && idCardUrl.trim() !== "") {
+                console.log("Starting OCR scan for uploaded document...");
+                // L'IA lit l'image de la pièce d'identité avec les modèles Anglais et Français
+                const { data } = await Tesseract.recognize(idCardUrl, 'eng+fra+arab');
+                ocrText = data.text.toLowerCase();
+
+                // Validation : Chaque partie du nom doit exister dans le texte lu
+                const nameParts = String(customerName).toLowerCase().split(" ");
+                isNameOnDoc = nameParts.every((part: string) => ocrText.includes(part));
+                
+                // Validation : Le numéro de CIN doit exister dans le texte lu
+                isCinOnDoc = ocrText.includes(String(cin).toLowerCase());
+                
+                console.log("OCR Match Results - Name:", isNameOnDoc, "CIN:", isCinOnDoc);
+            } else {
+                ocrFailed = true;
+            }
+        } catch (error) {
+            console.error("Critical OCR Extraction failed. Falling back to manual review:", error);
+            ocrFailed = true; // L'image est corrompue ou introuvable, on ne pénalise pas par défaut
+        }
+
+        // =====================================================================
         // APPEL OPENSANCTIONS + LOCAL FAIL-SAFE
         // =====================================================================
         const amlScreening = await performGlobalSanctionsLookup(customerName, nationality || "");
 
+        // =====================================================================
+        // PRÉPARATION DES FAITS POUR LE MOTEUR
+        // =====================================================================
         const normalizedEmail = String(email).toLowerCase();
 
         const facts = {
@@ -234,9 +265,14 @@ export async function POST(req: Request) {
             missingPhone: !phoneNumber || phoneNumber === "Not specified" || phoneNumber.trim() === "",
             isPassport: documentType === "Passport",
             isUnderage: isUnderage,
-            isYoungAdult: isYoungAdult
+            isYoungAdult: isYoungAdult,
+            ocrNameMismatch: !ocrFailed && !isNameOnDoc,
+            ocrCinMismatch: !ocrFailed && !isCinOnDoc
         };
 
+        // =====================================================================
+        // EXÉCUTION DU MOTEUR DE RÈGLES
+        // =====================================================================
         const engine = new Engine(kycRules);
         const { events } = await engine.run(facts);
 
@@ -266,6 +302,15 @@ export async function POST(req: Request) {
             rationale.push(`NOTICE: Applicant verified as a Politically Exposed Person (PEP). Detection Source: ${amlScreening.source}.`);
         }
 
+        // Syntèse textuelle de l'OCR pour l'agent de conformité
+        if (ocrFailed) {
+            rationale.push("NOTICE: Image parsing skipped or image unreadable. Manual document verification required.");
+        } else if (facts.ocrNameMismatch || facts.ocrCinMismatch) {
+            rationale.push("⚠️ OCR COMPLETED: Structural inconsistencies found. Form metadata does not match document text extraction.");
+        } else {
+            rationale.push("✅ OCR COMPLETED: High correspondence. Form data matches document text extraction.");
+        }
+
         riskScore = Math.min(100, Math.max(0, riskScore));
         const formattedScore = riskScore.toString().padStart(3, '0');
 
@@ -275,8 +320,11 @@ export async function POST(req: Request) {
 
         const aiRationaleString = rationale.length > 0 
             ? rationale.join(" ") 
-            : `Profile analyzed successfully. Source: ${amlScreening.source}. Client Age: ${clientAge}. No threats detected.`;
+            : `Profile analyzed successfully. Source: ${amlScreening.source}. Client Age: ${clientAge}. Document validation successful.`;
 
+        // =====================================================================
+        // SAUVEGARDE FINALE
+        // =====================================================================
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
@@ -298,7 +346,7 @@ export async function POST(req: Request) {
                 auditLogs: {
                     create: {
                         action: "CREATED",
-                        details: `KYC Pipeline initialized. Age Verification completed (${clientAge}yo). Cross-referenced with AML lists. Score calculated: ${riskScore}/100.`,
+                        details: `KYC Pipeline initialized. Modules processed: Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
                         agentId: userId 
                     }
                 }
