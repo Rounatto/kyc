@@ -4,12 +4,12 @@ import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react"; 
 import { useRouter } from "next/navigation";
 import Image from "next/image"; 
-import { ArrowLeft, Loader2, Check, X, FileText, ShieldAlert, User, Clock, History, Maximize2, ZoomIn, ZoomOut, RotateCcw, AlertCircle } from "lucide-react";
+import { ArrowLeft, Loader2, Check, X, FileText, ShieldAlert, User, Clock, History, Maximize2, ZoomIn, ZoomOut, RotateCcw, AlertCircle, ShieldCheck, Mail, Phone, Calendar, Flag, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
 
-// 💡 NOUVEAU : Liste des raisons de refus professionnelles
+// 💡 Raisons de refus professionnelles
 const PREDEFINED_REASONS = [
     "The provided ID document is blurry, pixelated or unreadable.",
     "The edges of the document are cropped or cut off.",
@@ -22,6 +22,7 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
     const resolvedParams = use(params);
     const customerId = resolvedParams.id;
     
+    // 💡 Session Next-Auth pour identifier l'agent qui fait l'action
     const { data: session } = useSession(); 
     const router = useRouter();
 
@@ -29,12 +30,12 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-    // États pour le "Verification Studio" (Modal de comparaison et Zoom)
+    // États pour le "Verification Studio"
     const [isViewerOpen, setIsViewerOpen] = useState(false);
     const [idZoom, setIdZoom] = useState(1);
     const [selfieZoom, setSelfieZoom] = useState(1);
 
-    // 💡 NOUVEAU : États pour la Modal de Rejet
+    // États pour la Modal de Rejet
     const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
     const [selectedReason, setSelectedReason] = useState(PREDEFINED_REASONS[0]);
     const [customReason, setCustomReason] = useState("");
@@ -45,25 +46,23 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
             try {
                 const res = await fetch(`/api/customers/${customerId}`);
                 if (res.ok) setCustomer(await res.json());
+                else router.push("/dashboard/customers"); // Redirection si ID invalide
             } catch (err) { 
-                console.error("Loading error"); 
+                console.error("Loading error", err); 
             } finally { 
                 setLoading(false); 
             }
         }
         loadCustomer();
-    }, [customerId]);
+    }, [customerId, router]);
 
-    // 💡 MODIFIÉ : handleDecision accepte maintenant une raison (reasonText)
     const handleDecision = async (newStatus: "verified" | "rejected", reasonText?: string) => {
         setActionLoading(newStatus);
         
-        // On ferme la modale si c'est un rejet
         if (newStatus === "rejected") {
             setIsRejectModalOpen(false);
         }
 
-        // Création de la promesse pour le chargement asynchrone
         const actionPromise = new Promise(async (resolve, reject) => {
             try {
                 const res = await fetch(`/api/customers/${customerId}`, {
@@ -71,8 +70,9 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         status: newStatus,
-                        agentId: (session?.user as any)?.id,
-                        rejectionReason: reasonText // 💡 Envoi de la raison au backend
+                        // 💡 Sécurité : on envoie l'ID de l'agent seulement s'il est connecté
+                        agentId: session?.user?.id || null, 
+                        rejectionReason: reasonText
                     }),
                 });
                 
@@ -91,7 +91,6 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
             }
         });
 
-        // Déclenchement du Toast interactif
         toast.promise(actionPromise, {
             loading: `Updating compliance record to ${newStatus}...`,
             success: () => `Profile successfully ${newStatus === "verified" ? "approved" : "rejected"}!`,
@@ -99,7 +98,7 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
         });
     };
 
-    if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /></div>;
+    if (loading) return <div className="h-screen flex items-center justify-center flex-col gap-4"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /><p className="text-gray-500 font-medium">Loading compliance file...</p></div>;
     if (!customer) return <div className="min-h-screen flex items-center justify-center text-gray-500">Customer not found.</div>;
 
     const riskColors = {
@@ -108,179 +107,202 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
         Low: "bg-green-50 border-green-200 text-green-700"
     };
     const currentRiskColor = riskColors[customer.riskLevel as keyof typeof riskColors] || riskColors.Medium;
+    const isHighRisk = customer.riskLevel === "High";
+    const isMediumRisk = customer.riskLevel === "Medium";
 
     return (
         <div className="min-h-screen bg-gray-50 pb-20">
             <Header />
-            <div className="max-w-6xl mx-auto px-4 py-8 relative">
-                <Link href="/dashboard/customers" className="flex items-center gap-2 text-sm text-gray-600 hover:text-blue-700 font-medium mb-6 transition-colors">
-                    <ArrowLeft className="w-4 h-4" /> Back to Directory
-                </Link>
+            
+            {/* EN-TÊTE FIXE POUR LES ACTIONS D'URGENCE */}
+            <div className="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+                <div className="flex items-center gap-4">
+                    <button onClick={() => router.back()} className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors cursor-pointer">
+                        <ArrowLeft className="w-5 h-5 text-gray-700" />
+                    </button>
+                    <div>
+                        <h1 className="text-xl font-bold text-gray-900 flex items-center gap-3">
+                            {customer.customerName}
+                            <span className={`text-xs px-2.5 py-1 rounded-full uppercase tracking-wider font-bold ${
+                                customer.status === "verified" ? "bg-green-100 text-green-700" :
+                                customer.status === "rejected" ? "bg-red-100 text-red-700" :
+                                "bg-yellow-100 text-yellow-700"
+                            }`}>
+                                {customer.status}
+                            </span>
+                        </h1>
+                        <p className="text-sm text-gray-500 font-mono">Case ID: {customer.id}</p>
+                    </div>
+                </div>
 
-                <div className="flex flex-wrap items-start gap-6">
+                {customer.status === "pending" && (
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={() => setIsRejectModalOpen(true)}
+                            disabled={actionLoading !== null}
+                            className="flex items-center gap-2 px-6 py-2.5 bg-white border-2 border-red-200 text-red-700 font-bold rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 cursor-pointer"
+                        >
+                            {actionLoading === "rejected" ? <Loader2 className="w-5 h-5 animate-spin" /> : <XCircle className="w-5 h-5" />}
+                            Reject
+                        </button>
+                        <button 
+                            onClick={() => handleDecision("verified")}
+                            disabled={actionLoading !== null}
+                            className="flex items-center gap-2 px-6 py-2.5 bg-blue-700 text-white font-bold rounded-lg hover:bg-blue-800 transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
+                        >
+                            {actionLoading === "verified" ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                            Approve Profile
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            <div className="max-w-6xl mx-auto px-4 py-8 relative grid grid-cols-1 lg:grid-cols-3 gap-8">
+                
+                {/* COLONNE GAUCHE (DOCUMENTS & DATA) */}
+                <div className="lg:col-span-2 flex flex-col gap-6">
                     
-                    {/* Colonne Gauche (Données) */}
-                    <div className="flex-[2_1_600px] flex flex-col gap-6">
+                    {/* Documents */}
+                    <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-5">
+                        <div className="flex justify-between items-center">
+                            <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800">
+                                <FileText className="w-4 h-4 text-blue-600" /> Provided Documents
+                            </h3>
+                            {(customer.idCardUrl || customer.selfieUrl) && (
+                                <button onClick={() => setIsViewerOpen(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 bg-blue-50 px-3 py-1.5 rounded-lg transition-colors cursor-pointer">
+                                    <Maximize2 className="w-3.5 h-3.5" /> Compare & Verify
+                                </button>
+                            )}
+                        </div>
                         
-                        {/* Section Identité */}
-                        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-6">
-                            <div className="flex flex-wrap justify-between items-start gap-4">
-                                <div className="flex items-center gap-4">
-                                    <div className="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center text-xl font-bold shrink-0 shadow-inner">
-                                        {customer.customerName?.substring(0, 2).toUpperCase()}
-                                    </div>
-                                    <div className="flex flex-col">
-                                        <h1 className="text-2xl font-bold text-gray-900">{customer.customerName}</h1>
-                                        <p className="text-sm text-gray-500 font-mono break-all mt-0.5">ID: {customer.id}</p>
-                                    </div>
-                                </div>
-                                <span className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider shadow-sm ${
-                                    customer.status === "verified" ? "bg-green-100 text-green-800 border border-green-200" :
-                                    customer.status === "rejected" ? "bg-red-100 text-red-800 border border-red-200" : "bg-yellow-100 text-yellow-800 border border-yellow-200"
-                                }`}>
-                                    {customer.status}
-                                </span>
-                            </div>
-
-                            <div className="flex flex-wrap gap-x-12 gap-y-6 pt-5 border-t border-gray-100">
-                                <div className="flex-1 min-w-[120px]"><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Document ID</p><p className="font-bold text-gray-900 text-lg">{customer.cin}</p></div>
-                                <div className="flex-1 min-w-[150px]"><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Email</p><p className="font-medium text-gray-800 break-all">{customer.email}</p></div>
-                                <div className="flex-1 min-w-[120px]"><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Nationality</p><p className="font-medium text-gray-800">{customer.nationality || "N/A"}</p></div>
-                                <div className="flex-1 min-w-[120px]"><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">Phone</p><p className="font-medium text-gray-800">{customer.phoneNumber || "N/A"}</p></div>
-                            </div>
-                        </div>
-
-                        {/* SECTION DOCUMENTS */}
-                        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-5">
-                            <div className="flex justify-between items-center">
-                                <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800"><FileText className="w-4 h-4 text-blue-600" /> Provided Documents</h3>
-                                {(customer.idCardUrl || customer.selfieUrl) && (
-                                    <button onClick={() => setIsViewerOpen(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 bg-blue-50 px-3 py-1.5 rounded-lg transition-colors">
-                                        <Maximize2 className="w-3.5 h-3.5" /> Compare & Verify
-                                    </button>
-                                )}
-                            </div>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                {/* Aperçu Carte d'identité */}
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <p className="text-xs font-bold uppercase text-gray-500 pl-1">Front ID Document</p>
-                                    <div className="border border-gray-200 rounded-xl bg-gray-50 h-48 relative overflow-hidden group">
-                                        {customer.idCardUrl ? (
-                                            <>
-                                                <Image src={customer.idCardUrl} alt="ID Card" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
-                                                <button onClick={() => setIsViewerOpen(true)} className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
-                                                    <div className="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform">
-                                                        <Maximize2 className="w-4 h-4" /> Open Studio
-                                                    </div>
-                                                </button>
-                                            </>
-                                        ) : (
-                                            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
-                                                <FileText className="w-8 h-8 mb-2 opacity-50" />
-                                                <p className="text-xs font-medium">No document</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Aperçu Selfie */}
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <p className="text-xs font-bold uppercase text-gray-500 pl-1">Biometric Selfie</p>
-                                    <div className="border border-gray-200 rounded-xl bg-gray-50 h-48 relative overflow-hidden group">
-                                        {customer.selfieUrl ? (
-                                            <>
-                                                <Image src={customer.selfieUrl} alt="Selfie" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
-                                                <button onClick={() => setIsViewerOpen(true)} className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
-                                                    <div className="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform">
-                                                        <Maximize2 className="w-4 h-4" /> Open Studio
-                                                    </div>
-                                                </button>
-                                            </>
-                                        ) : (
-                                            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
-                                                <User className="w-8 h-8 mb-2 opacity-50" />
-                                                <p className="text-xs font-medium">No selfie</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Piste d'Audit */}
-                        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-6">
-                            <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800"><History className="w-4 h-4 text-blue-600" /> Audit Trail</h3>
-                            <div className="flex flex-col gap-5 pl-2">
-                                {customer.auditLogs && customer.auditLogs.length > 0 ? (
-                                    customer.auditLogs.map((log: any, index: number) => (
-                                        <div key={log.id} className={`flex gap-5 relative border-l-2 ${index === customer.auditLogs.length - 1 ? 'border-transparent' : 'border-gray-200'} pl-6 pb-2`}>
-                                            <span className={`absolute -left-[7px] top-1.5 w-3 h-3 rounded-full ring-4 ring-white ${
-                                                log.action === "CREATED" ? "bg-blue-500" :
-                                                log.action === "APPROVED" ? "bg-green-500" :
-                                                log.action === "REJECTED" ? "bg-red-500" : "bg-gray-400"
-                                            }`}></span>
-                                            <div className="flex flex-col">
-                                                <div className="flex items-center gap-2">
-                                                    <p className="text-sm font-bold text-gray-900">{log.action}</p>
-                                                    <span className="text-[10px] text-gray-400 font-mono bg-gray-50 px-2 py-0.5 rounded border border-gray-100 flex items-center gap-1">
-                                                        <Clock className="w-3 h-3" /> {new Date(log.timestamp).toLocaleString()}
-                                                    </span>
+                        <div className="flex flex-col sm:flex-row gap-5">
+                            <div className="flex-1 flex flex-col gap-2">
+                                <p className="text-xs font-bold uppercase text-gray-500 pl-1">Front ID Document</p>
+                                <div className="border border-gray-200 rounded-xl bg-gray-50 h-48 relative overflow-hidden group">
+                                    {customer.idCardUrl ? (
+                                        <>
+                                            <Image src={customer.idCardUrl} alt="ID Card" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
+                                            <button onClick={() => setIsViewerOpen(true)} className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
+                                                <div className="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform">
+                                                    <Maximize2 className="w-4 h-4" /> Open Studio
                                                 </div>
-                                                <p className="text-sm text-gray-600 mt-1">{log.details}</p>
-                                            </div>
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                                            <FileText className="w-8 h-8 mb-2 opacity-50" />
+                                            <p className="text-xs font-medium">No document</p>
                                         </div>
-                                    ))
-                                ) : (
-                                    <p className="text-sm text-gray-500 italic bg-gray-50 p-4 rounded-lg border border-gray-100">No audit logs available for this profile.</p>
-                                )}
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex-1 flex flex-col gap-2">
+                                <p className="text-xs font-bold uppercase text-gray-500 pl-1">Biometric Selfie</p>
+                                <div className="border border-gray-200 rounded-xl bg-gray-50 h-48 relative overflow-hidden group">
+                                    {customer.selfieUrl ? (
+                                        <>
+                                            <Image src={customer.selfieUrl} alt="Selfie" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
+                                            <button onClick={() => setIsViewerOpen(true)} className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
+                                                <div className="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform">
+                                                    <Maximize2 className="w-4 h-4" /> Open Studio
+                                                </div>
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                                            <User className="w-8 h-8 mb-2 opacity-50" />
+                                            <p className="text-xs font-medium">No selfie</p>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    {/* Colonne Droite (Décision & IA) */}
-                    <div className="flex-[1_1_300px] flex flex-col gap-6">
-                        <div className={`p-6 rounded-2xl border shadow-sm flex flex-col transition-colors ${currentRiskColor}`}>
-                            <h3 className="text-sm font-bold uppercase tracking-wider mb-5 flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> AI Risk Analysis</h3>
-                            <div className="flex items-baseline gap-1 mb-1">
-                                <span className="text-6xl font-black tracking-tighter">{customer.score}</span>
-                                <span className="text-2xl opacity-50 font-bold">/100</span>
+                    {/* Metadata */}
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden p-6">
+                        <h3 className="font-bold text-gray-800 mb-6 border-b pb-2">Applicant Metadata</h3>
+                        <div className="grid grid-cols-2 gap-6">
+                            <div className="flex items-start gap-3">
+                                <User className="w-5 h-5 text-gray-400 mt-0.5" />
+                                <div><p className="text-xs text-gray-500 font-bold uppercase">Full Name</p><p className="text-gray-900 font-medium">{customer.customerName}</p></div>
                             </div>
-                            <div className="flex items-center gap-2 mb-4">
-                                <span className="w-2 h-2 rounded-full bg-current opacity-70 animate-pulse"></span>
-                                <p className="text-xs font-bold uppercase tracking-widest opacity-80">{customer.riskLevel} Risk Detected</p>
+                            <div className="flex items-start gap-3">
+                                <Mail className="w-5 h-5 text-gray-400 mt-0.5" />
+                                <div><p className="text-xs text-gray-500 font-bold uppercase">Email Address</p><p className="text-gray-900 font-medium break-all">{customer.email}</p></div>
                             </div>
-                            <div className="bg-white/60 rounded-xl p-4 border border-black/5 shadow-inner">
-                                <p className="text-sm font-medium leading-relaxed opacity-90">{customer.aiRationale}</p>
+                            <div className="flex items-start gap-3">
+                                <Calendar className="w-5 h-5 text-gray-400 mt-0.5" />
+                                <div><p className="text-xs text-gray-500 font-bold uppercase">Date of Birth</p><p className="text-gray-900 font-medium">{customer.dateOfBirth || "N/A"}</p></div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                                <Phone className="w-5 h-5 text-gray-400 mt-0.5" />
+                                <div><p className="text-xs text-gray-500 font-bold uppercase">Phone Number</p><p className="text-gray-900 font-medium">{customer.phoneNumber || "N/A"}</p></div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                                <Flag className="w-5 h-5 text-gray-400 mt-0.5" />
+                                <div><p className="text-xs text-gray-500 font-bold uppercase">Nationality</p><p className="text-gray-900 font-medium">{customer.nationality || "N/A"}</p></div>
+                            </div>
+                            <div className="flex items-start gap-3">
+                                <ShieldAlert className="w-5 h-5 text-gray-400 mt-0.5" />
+                                <div><p className="text-xs text-gray-500 font-bold uppercase">ID Number (CIN)</p><p className="text-gray-900 font-medium">{customer.cin}</p></div>
                             </div>
                         </div>
+                    </div>
 
-                        <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-5 sticky top-6">
-                            <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">Compliance Decision</h3>
-                            <div className="flex flex-col gap-3">
-                                <button 
-                                    onClick={() => handleDecision("verified")} 
-                                    disabled={actionLoading !== null || customer.status === "verified"} 
-                                    className="w-full bg-green-600 text-white font-bold py-3.5 rounded-xl hover:bg-green-700 transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm border border-transparent hover:border-green-800"
-                                >
-                                    {actionLoading === "verified" ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />} Approve Profile
-                                </button>
-                                {/* 💡 MODIFIÉ : Ce bouton ouvre maintenant la modal au lieu de rejeter directement */}
-                                <button 
-                                    onClick={() => setIsRejectModalOpen(true)} 
-                                    disabled={actionLoading !== null || customer.status === "rejected"} 
-                                    className="w-full bg-white border-2 border-red-100 text-red-600 font-bold py-3.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-                                >
-                                    {actionLoading === "rejected" ? <Loader2 className="w-5 h-5 animate-spin" /> : <X className="w-5 h-5" />} Reject Profile
-                                </button>
-                            </div>
-                            <p className="text-[10px] text-gray-400 text-center px-4 leading-tight">By clicking Approve or Reject, your identity will be permanently recorded in the immutable audit trail.</p>
+                    {/* Audit Logs */}
+                    <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-6">
+                        <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800"><History className="w-4 h-4 text-blue-600" /> System Audit Trail</h3>
+                        <div className="flex flex-col gap-5 pl-2">
+                            {customer.auditLogs && customer.auditLogs.length > 0 ? (
+                                customer.auditLogs.map((log: any, index: number) => (
+                                    <div key={log.id} className={`flex gap-5 relative border-l-2 ${index === customer.auditLogs.length - 1 ? 'border-transparent' : 'border-gray-200'} pl-6 pb-2`}>
+                                        <span className={`absolute -left-[7px] top-1.5 w-3 h-3 rounded-full ring-4 ring-white ${
+                                            log.action === "CREATED" ? "bg-blue-500" :
+                                            log.action === "APPROVED" ? "bg-green-500" :
+                                            log.action === "REJECTED" ? "bg-red-500" : "bg-gray-400"
+                                        }`}></span>
+                                        <div className="flex flex-col">
+                                            <div className="flex items-center gap-2">
+                                                <p className="text-sm font-bold text-gray-900">{log.action}</p>
+                                                <span className="text-[10px] text-gray-400 font-mono bg-gray-50 px-2 py-0.5 rounded border border-gray-100 flex items-center gap-1">
+                                                    <Clock className="w-3 h-3" /> {new Date(log.timestamp).toLocaleString()}
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-gray-600 mt-1">{log.details}</p>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <p className="text-sm text-gray-500 italic bg-gray-50 p-4 rounded-lg border border-gray-100">No audit logs available for this profile.</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* COLONNE DROITE (IA & RISQUES) */}
+                <div className="lg:col-span-1 flex flex-col gap-6">
+                    <div className={`p-6 rounded-2xl border shadow-sm flex flex-col transition-colors ${currentRiskColor}`}>
+                        <h3 className="text-sm font-bold uppercase tracking-wider mb-5 flex items-center gap-2">
+                            {isHighRisk ? <ShieldAlert className="w-4 h-4" /> : <ShieldCheck className="w-4 h-4" />} AI Risk Analysis
+                        </h3>
+                        <div className="flex items-baseline gap-1 mb-1">
+                            <span className="text-6xl font-black tracking-tighter">{parseInt(customer.score)}</span>
+                            <span className="text-2xl opacity-50 font-bold">/100</span>
+                        </div>
+                        <div className="flex items-center gap-2 mb-4">
+                            <span className="w-2 h-2 rounded-full bg-current opacity-70 animate-pulse"></span>
+                            <p className="text-xs font-bold uppercase tracking-widest opacity-80">{customer.riskLevel} Risk Detected</p>
+                        </div>
+                        <div className="bg-white/60 rounded-xl p-4 border border-black/5 shadow-inner">
+                            <p className="text-sm font-medium leading-relaxed opacity-90">{customer.aiRationale}</p>
                         </div>
                     </div>
                 </div>
             </div>
 
-            {/* 💡 NOUVEAU : LA FENÊTRE MODALE DE SÉLECTION DE LA RAISON DU REJET */}
+            {/* MODALE DE REJET */}
             {isRejectModalOpen && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl max-w-lg w-full border border-gray-200 shadow-2xl p-6 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
@@ -343,7 +365,7 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                 </div>
             )}
 
-            {/* LE VERIFICATION STUDIO (MODAL PLEIN ÉCRAN) */}
+            {/* VERIFICATION STUDIO (MODAL IMAGE) */}
             {isViewerOpen && (
                 <div className="fixed inset-0 z-50 bg-black/95 flex flex-col backdrop-blur-md">
                     <div className="h-16 border-b border-white/10 flex justify-between items-center px-6 shrink-0">
