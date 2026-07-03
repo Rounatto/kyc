@@ -224,11 +224,15 @@ export async function POST(req: Request) {
         let isNameOnDoc = false;
         let isCinOnDoc = false;
 
+        // 💡 EXPLICATION DU CHANGEMENT ICI :
+        // Le bloc try...catch permet de s'assurer que si Tesseract échoue (image corrompue, serveur injoignable),
+        // l'application ne plante pas. Elle passe juste `ocrFailed` à true et continue le processus KYC.
         try {
             if (idCardUrl && idCardUrl.trim() !== "") {
                 console.log("Starting OCR scan for uploaded document...");
-                // L'IA lit l'image de la pièce d'identité avec les modèles Anglais et Français
-                const { data } = await Tesseract.recognize(idCardUrl, 'eng+fra+arab');
+                
+                // 💡 CORRECTION DU CODE LANGUE : On passe de 'arab' (qui n'existe pas et faisait l'erreur 404) à 'ara'.
+                const { data } = await Tesseract.recognize(idCardUrl, 'eng+fra+ara');
                 ocrText = data.text.toLowerCase();
 
                 // Validation : Chaque partie du nom doit exister dans le texte lu
@@ -243,8 +247,9 @@ export async function POST(req: Request) {
                 ocrFailed = true;
             }
         } catch (error) {
+            // 💡 GRACEFUL DEGRADATION : On intercepte l'erreur proprement au lieu de faire crasher le serveur
             console.error("Critical OCR Extraction failed. Falling back to manual review:", error);
-            ocrFailed = true; // L'image est corrompue ou introuvable, on ne pénalise pas par défaut
+            ocrFailed = true; 
         }
 
         // =====================================================================
