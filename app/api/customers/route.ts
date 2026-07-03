@@ -170,13 +170,15 @@ export async function GET(req: Request) {
 }
 
 // =====================================================================
-// POST : LE PIPELINE KYC COMPLET AVEC VISION INTELLIGENTE (OCR)
+// POST : LE PIPELINE KYC COMPLET AVEC VISION INTELLIGENTE (OCR & BIOMETRIE)
 // =====================================================================
 export async function POST(req: Request) {
     try {
         const body = await req.json();
-        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl } = body;
-
+        
+        // 💡 1. NOUVEAUTÉ : On intercepte le "biometricScore" calculé par le navigateur du client
+        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl, biometricScore } = body;
+        console.log("🤖 Score Biométrique reçu du navigateur :", biometricScore);
         if (!userId) {
             return NextResponse.json({ error: "Authentication missing. Please log in." }, { status: 401 });
         }
@@ -224,22 +226,14 @@ export async function POST(req: Request) {
         let isNameOnDoc = false;
         let isCinOnDoc = false;
 
-        // 💡 EXPLICATION DU CHANGEMENT ICI :
-        // Le bloc try...catch permet de s'assurer que si Tesseract échoue (image corrompue, serveur injoignable),
-        // l'application ne plante pas. Elle passe juste `ocrFailed` à true et continue le processus KYC.
         try {
             if (idCardUrl && idCardUrl.trim() !== "") {
                 console.log("Starting OCR scan for uploaded document...");
-                
-                // 💡 CORRECTION DU CODE LANGUE : On passe de 'arab' (qui n'existe pas et faisait l'erreur 404) à 'ara'.
                 const { data } = await Tesseract.recognize(idCardUrl, 'eng+fra+ara');
                 ocrText = data.text.toLowerCase();
 
-                // Validation : Chaque partie du nom doit exister dans le texte lu
                 const nameParts = String(customerName).toLowerCase().split(" ");
                 isNameOnDoc = nameParts.every((part: string) => ocrText.includes(part));
-                
-                // Validation : Le numéro de CIN doit exister dans le texte lu
                 isCinOnDoc = ocrText.includes(String(cin).toLowerCase());
                 
                 console.log("OCR Match Results - Name:", isNameOnDoc, "CIN:", isCinOnDoc);
@@ -247,7 +241,6 @@ export async function POST(req: Request) {
                 ocrFailed = true;
             }
         } catch (error) {
-            // 💡 GRACEFUL DEGRADATION : On intercepte l'erreur proprement au lieu de faire crasher le serveur
             console.error("Critical OCR Extraction failed. Falling back to manual review:", error);
             ocrFailed = true; 
         }
@@ -261,6 +254,9 @@ export async function POST(req: Request) {
         // PRÉPARATION DES FAITS POUR LE MOTEUR
         // =====================================================================
         const normalizedEmail = String(email).toLowerCase();
+        
+        // 💡 2. NOUVEAUTÉ : Détection de la fraude faciale si le score est sous 60%
+        const faceMismatchDetected = biometricScore !== null && biometricScore < 60;
 
         const facts = {
             isSanctionedName: amlScreening.sanctioned,
@@ -272,7 +268,9 @@ export async function POST(req: Request) {
             isUnderage: isUnderage,
             isYoungAdult: isYoungAdult,
             ocrNameMismatch: !ocrFailed && !isNameOnDoc,
-            ocrCinMismatch: !ocrFailed && !isCinOnDoc
+            ocrCinMismatch: !ocrFailed && !isCinOnDoc,
+            // 💡 Injection du fait biométrique pour le kyc-rules.json
+            faceMismatch: faceMismatchDetected 
         };
 
         // =====================================================================
@@ -305,6 +303,17 @@ export async function POST(req: Request) {
         if (amlScreening.isPep) {
             riskScore += 15;
             rationale.push(`NOTICE: Applicant verified as a Politically Exposed Person (PEP). Detection Source: ${amlScreening.source}.`);
+        }
+
+        // 💡 3. NOUVEAUTÉ : REDACTION DU RAPPORT IA BIOMÉTRIQUE POUR L'AGENT
+        if (biometricScore !== null) {
+            if (faceMismatchDetected) {
+                rationale.unshift(`⛔ BIOMETRIC FAILURE: Face match score is ${biometricScore.toFixed(1)}%. The face on the Live Selfie does NOT match the ID Document photo.`);
+            } else {
+                rationale.unshift(`✅ BIOMETRIC SUCCESS: Face match verified with ${biometricScore.toFixed(1)}% similarity.`);
+            }
+        } else {
+            rationale.unshift(`⚠️ BIOMETRIC WARNING: Face detection skipped or failed to extract geometric landmarks.`);
         }
 
         // Syntèse textuelle de l'OCR pour l'agent de conformité
@@ -351,7 +360,7 @@ export async function POST(req: Request) {
                 auditLogs: {
                     create: {
                         action: "CREATED",
-                        details: `KYC Pipeline initialized. Modules processed: Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
+                        details: `KYC Pipeline initialized. Modules processed: Biometrics, Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
                         agentId: userId 
                     }
                 }

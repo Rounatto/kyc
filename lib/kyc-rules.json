@@ -37,6 +37,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "faceMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 50,
+        "message": "BIOMETRIC CRITICAL ALERT: The face on the Live Selfie does NOT match the ID Document photo."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "ocrNameMismatch", "operator": "equal", "value": true }]
     },
     "event": {

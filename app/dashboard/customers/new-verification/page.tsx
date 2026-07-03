@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react"; 
+import { useState, useRef, useEffect } from "react"; 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X } from "lucide-react"; 
@@ -10,6 +10,9 @@ import { toast } from "sonner";
 import { getCountries, getCountryCallingCode } from 'react-phone-number-input/input';
 import en from 'react-phone-number-input/locale/en';
 import { useUploadThing } from "@/utils/uploadthing";
+
+// 💡 IMPORTATION DE L'INTELLIGENCE ARTIFICIELLE
+import * as faceapi from 'face-api.js';
 
 export default function NewVerificationPage() {
     const { data: session } = useSession();
@@ -40,6 +43,71 @@ export default function NewVerificationPage() {
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
     const { startUpload } = useUploadThing("kycDocumentUploader");
 
+    // 💡 CHARGEMENT DES MODELES DE DEEP LEARNING AU MONTAGE
+    useEffect(() => {
+        const loadModels = async () => {
+            try {
+                // Les modèles doivent être placés dans un dossier 'public/models'
+                await Promise.all([
+                    faceapi.nets.ssdMobilenetv1.loadFromUri('/models'),
+                    faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
+                    faceapi.nets.faceRecognitionNet.loadFromUri('/models')
+                ]);
+                console.log("✅ Deep Learning Vision Models loaded successfully.");
+            } catch (err) {
+                console.error("⚠️ Failed to load AI models. Make sure they are in /public/models", err);
+            }
+        };
+        loadModels();
+    }, []);
+
+    // 💡 LA FONCTION MAGIQUE DE COMPARAISON BIOMÉTRIQUE
+    // 💡 3. LE MOTEUR DE COMPARAISON BIOMÉTRIQUE (FACE MATCHING) MIS À JOUR
+    const compareFaces = async (idUrl: string, selfieUrl: string): Promise<number | null> => {
+        try {
+            console.log("🔍 Démarrage de l'analyse biométrique...");
+            const idImg = new Image(); idImg.src = idUrl; idImg.crossOrigin = "anonymous";
+            const selfieImg = new Image(); selfieUrl; selfieImg.src = selfieUrl; selfieImg.crossOrigin = "anonymous";
+
+            // On attend que les images soient prêtes
+            await Promise.all([
+                new Promise((resolve, reject) => { idImg.onload = resolve; idImg.onerror = reject; }),
+                new Promise((resolve, reject) => { selfieImg.onload = resolve; selfieImg.onerror = reject; })
+            ]);
+            console.log("📸 Images chargées en mémoire avec succès.");
+
+            // 💡 L'ASTUCE ICI : On baisse la confiance requise à 30% pour lire la carte d'identité
+            const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
+
+            console.log("🤖 Scan de la carte d'identité en cours...");
+            const idFace = await faceapi.detectSingleFace(idImg, options).withFaceLandmarks().withFaceDescriptor();
+            if (!idFace) console.warn("❌ ÉCHEC : L'IA ne trouve pas de visage sur la CARTE D'IDENTITÉ.");
+            else console.log("✅ Visage trouvé sur la carte d'identité !");
+
+            console.log("🤖 Scan du selfie en cours...");
+            const selfieFace = await faceapi.detectSingleFace(selfieImg, options).withFaceLandmarks().withFaceDescriptor();
+            if (!selfieFace) console.warn("❌ ÉCHEC : L'IA ne trouve pas de visage sur le SELFIE.");
+            else console.log("✅ Visage trouvé sur le selfie !");
+
+            if (!idFace || !selfieFace) {
+                return null; // On abandonne si un visage manque
+            }
+
+            // Calcul de l'écart mathématique entre les deux visages
+            const distance = faceapi.euclideanDistance(idFace.descriptor, selfieFace.descriptor);
+            console.log(`📏 Distance mathématique calculée : ${distance.toFixed(4)}`);
+            
+            // Conversion en pourcentage
+            let similarity = Math.max(0, Math.min(100, (1 - (distance / 1.2)) * 100)); 
+            console.log(`📊 Score de similarité final : ${similarity.toFixed(2)}%`);
+            
+            return similarity;
+        } catch (err) {
+            console.error("❌ Erreur critique dans le moteur biométrique :", err);
+            return null;
+        }
+    };
+
     const validateForm = () => {
         const errors: { [key: string]: string } = {};
         
@@ -64,7 +132,7 @@ export default function NewVerificationPage() {
         if (localPhone) {
             if (nationality === "TN") {
                 const tnPhoneRegex = /^[234579][0-9]{7}$/;
-                if (!tnPhoneRegex.test(localPhone)) errors.localPhone = "Invalid Tunisian number (e.g., 98 123 456).";
+                if (!tnPhoneRegex.test(localPhone)) errors.localPhone = "Invalid Tunisian number.";
             } else {
                 if (localPhone.length < 6 || localPhone.length > 14) errors.localPhone = "Invalid phone length.";
             }
@@ -139,7 +207,6 @@ export default function NewVerificationPage() {
             finalPhoneNumber = `+${callingCode} ${localPhone.trim()}`;
         }
 
-        // Création de la promesse globale
         const registrationPromise = new Promise(async (resolve, reject) => {
             try {
                 setLoadingText("Uploading secure documents...");
@@ -160,6 +227,14 @@ export default function NewVerificationPage() {
                     throw new Error("Document upload failed. Please try again.");
                 }
 
+                // 💡 APPEL DE L'IA BIOMÉTRIQUE ICI AVANT D'ENVOYER AU BACKEND
+                setLoadingText("Executing Deep Learning Biometrics...");
+                let biometricScore: number | null = null;
+                if (idCardPreview && selfiePreview) {
+                    biometricScore = await compareFaces(idCardPreview, selfiePreview);
+                    console.log("Biometric Similarity Score:", biometricScore);
+                }
+
                 setLoadingText("Analyzing AI Risk & Creating Profile...");
                 
                 const response = await fetch("/api/customers", {
@@ -176,7 +251,8 @@ export default function NewVerificationPage() {
                         phoneNumber: finalPhoneNumber,
                         userId: (session?.user as any)?.id,
                         idCardUrl: uploadedIdCardUrl,
-                        selfieUrl: uploadedSelfieUrl
+                        selfieUrl: uploadedSelfieUrl,
+                        biometricScore: biometricScore // 💡 ON ENVOIE LE SCORE AU BACKEND
                     }),
                 });
 
@@ -195,7 +271,6 @@ export default function NewVerificationPage() {
             }
         });
 
-        // Déclenchement du Toast
         toast.promise(registrationPromise, {
             loading: "Processing KYC application...",
             success: "KYC Pipeline successfully initiated! Redirecting...",
