@@ -3,6 +3,25 @@ import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
 import kycRules from "@/lib/kyc-rules.json";
 import Tesseract from "tesseract.js";
+import { z } from "zod"; // 💡 IMPORTATION DE ZOD
+
+// =====================================================================
+// 🛡️ SCHÉMA DE SÉCURITÉ ZOD (LE BOUCLIER DE L'API)
+// =====================================================================
+const customerRegistrationSchema = z.object({
+    customerName: z.string().min(2, "Le nom doit contenir au moins 2 caractères"),
+    email: z.string().email("Format d'email invalide"),
+    type: z.string().min(1, "Le type de procédure est requis"),
+    cin: z.string().min(4, "Le numéro d'identification est trop court"),
+    documentType: z.string().min(1, "Le type de document est requis"),
+    nationality: z.string().min(1, "La nationalité est requise"),
+    dateOfBirth: z.string().optional().or(z.literal('')),
+    phoneNumber: z.string().optional().or(z.literal('')),
+    userId: z.string().min(1, "Erreur d'authentification : ID Agent manquant"),
+    idCardUrl: z.string().url("L'URL de la carte d'identité est invalide ou corrompue"),
+    selfieUrl: z.string().url("L'URL du selfie est invalide ou corrompue"),
+    biometricScore: z.number().nullable().optional() // Accepte un nombre ou null
+});
 
 // =====================================================================
 // INTERROGATION EN TEMPS RÉEL DE L'API OPENSANCTIONS + FAIL-SAFE LOCAL
@@ -176,12 +195,21 @@ export async function POST(req: Request) {
     try {
         const body = await req.json();
         
-        // 💡 1. NOUVEAUTÉ : On intercepte le "biometricScore" calculé par le navigateur du client
-        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl, biometricScore } = body;
-        console.log("🤖 Score Biométrique reçu du navigateur :", biometricScore);
-        if (!userId) {
-            return NextResponse.json({ error: "Authentication missing. Please log in." }, { status: 401 });
+        // 💡 VERIFICATION ZOD AVANT TOUTE LOGIQUE MÉTIER
+        const validationResult = customerRegistrationSchema.safeParse(body);
+        
+        if (!validationResult.success) {
+            // Si la requête est corrompue, on stoppe tout et on renvoie les erreurs détaillées
+            const errorMessages = validationResult.error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(' | ');
+            console.error("❌ Zod Security Block:", errorMessages);
+            return NextResponse.json({ error: `Security Validation Failed: ${errorMessages}` }, { status: 400 });
         }
+
+        // Si la validation réussit, on extrait les données propres et sécurisées
+        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl, biometricScore } = validationResult.data;
+        
+        console.log("🤖 Score Biométrique reçu du navigateur :", biometricScore);
+        
         const agent = await prisma.user.findUnique({ where: { id: userId } });
         if (!agent) {
             return NextResponse.json({ error: "Agent session invalid." }, { status: 401 });
@@ -255,8 +283,7 @@ export async function POST(req: Request) {
         // =====================================================================
         const normalizedEmail = String(email).toLowerCase();
         
-        // 💡 2. NOUVEAUTÉ : Détection de la fraude faciale si le score est sous 60%
-        const faceMismatchDetected = biometricScore !== null && biometricScore < 60;
+        const faceMismatchDetected = biometricScore !== null && biometricScore !== undefined && biometricScore < 60;
 
         const facts = {
             isSanctionedName: amlScreening.sanctioned,
@@ -269,7 +296,6 @@ export async function POST(req: Request) {
             isYoungAdult: isYoungAdult,
             ocrNameMismatch: !ocrFailed && !isNameOnDoc,
             ocrCinMismatch: !ocrFailed && !isCinOnDoc,
-            // 💡 Injection du fait biométrique pour le kyc-rules.json
             faceMismatch: faceMismatchDetected 
         };
 
@@ -305,8 +331,7 @@ export async function POST(req: Request) {
             rationale.push(`NOTICE: Applicant verified as a Politically Exposed Person (PEP). Detection Source: ${amlScreening.source}.`);
         }
 
-        // 💡 3. NOUVEAUTÉ : REDACTION DU RAPPORT IA BIOMÉTRIQUE POUR L'AGENT
-        if (biometricScore !== null) {
+        if (biometricScore !== null && biometricScore !== undefined) {
             if (faceMismatchDetected) {
                 rationale.unshift(`⛔ BIOMETRIC FAILURE: Face match score is ${biometricScore.toFixed(1)}%. The face on the Live Selfie does NOT match the ID Document photo.`);
             } else {
@@ -316,7 +341,6 @@ export async function POST(req: Request) {
             rationale.unshift(`⚠️ BIOMETRIC WARNING: Face detection skipped or failed to extract geometric landmarks.`);
         }
 
-        // Syntèse textuelle de l'OCR pour l'agent de conformité
         if (ocrFailed) {
             rationale.push("NOTICE: Image parsing skipped or image unreadable. Manual document verification required.");
         } else if (facts.ocrNameMismatch || facts.ocrCinMismatch) {

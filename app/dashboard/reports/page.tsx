@@ -3,158 +3,363 @@ import Link from "next/link";
 import { 
     Calendar, Download, ChevronDown, Shield,
     Clock, ShieldCheck, TriangleAlert, 
-    TrendingUp, TrendingDown, Minus, RefreshCw
+    TrendingUp, TrendingDown, Minus, RefreshCw,
+    Loader2, FileText
 } from "lucide-react";
 import Header from "@/components/header";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 export default function Report() {
-    const [action, setAction] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [recentReports, setRecentReports] = useState<any[]>([]); 
+    const [dateRange, setDateRange] = useState("30d"); // 💡 GESTION DU FILTRE DE DATE
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    const [isExporting, setIsExporting] = useState(false); // 💡 ETAT DE CHARGEMENT DU PDF
+
+    const [stats, setStats] = useState({
+        total: 0,
+        approved: 0,
+        rejected: 0,
+        pending: 0,
+        highRisk: 0,
+        successRate: 0,
+        chartData: []
+    });
+
+    // 💡 FETCH DYNAMIQUE QUI RÉAGIT AU CHANGEMENT DE DATE
+    useEffect(() => {
+        async function fetchData() {
+            setLoading(true);
+            try {
+                // L'API reçoit maintenant le paramètre dynamique (7d, 30d, 90d, all)
+                const statsRes = await fetch(`/api/dashboard/stats?range=${dateRange}`);
+                if (statsRes.ok) {
+                    const data = await statsRes.json();
+                    
+                    const totalVal = data.totalRequests || data.total || data.stats?.totalCustomers || 0;
+                    const approvedVal = data.approved || data.stats?.verifiedToday || 0;
+                    const rejectedVal = data.rejected || 0;
+                    const pendingVal = data.pendingReviews || data.pending || data.stats?.pendingReviews || 0;
+                    const highRiskVal = data.highRisk || data.stats?.highRisk || 0;
+
+                    const resolvedCases = approvedVal + rejectedVal;
+                    const successRate = resolvedCases > 0 ? ((approvedVal / resolvedCases) * 100).toFixed(1) : 0;
+
+                    setStats({
+                        total: totalVal,
+                        approved: approvedVal,
+                        rejected: rejectedVal,
+                        pending: pendingVal,
+                        highRisk: highRiskVal,
+                        successRate: Number(successRate),
+                        chartData: data.chartData || []
+                    });
+                }
+
+                // Récupération des dossiers récents
+                const reportsRes = await fetch('/api/customers?limit=5&sort=newest');
+                if (reportsRes.ok) {
+                    const reportsData = await reportsRes.json();
+                    setRecentReports(reportsData.requests || reportsData.data || []);
+                }
+
+            } catch (error) {
+                console.error("Failed to fetch reports data:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+        fetchData();
+    }, [dateRange]); // Se relance à chaque changement du menu déroulant
+
+    // 💡 FONCTION : EXPORT GLOBAL DU TABLEAU DE BORD (CAPTURE D'ÉCRAN HAUTE RÉSOLUTION)
+    const handleGlobalExport = async () => {
+        setIsExporting(true);
+        try {
+            // Import dynamique pour éviter les erreurs côté serveur (SSR) de Next.js
+            const html2canvas = (await import('html2canvas')).default;
+            const { jsPDF } = await import('jspdf');
+
+            const element = document.getElementById('dashboard-report-content');
+            if (!element) return;
+
+            // Masquer les boutons pendant la capture pour un PDF propre
+            const actionButtons = document.getElementById('action-buttons');
+            if(actionButtons) actionButtons.style.opacity = '0';
+
+            const canvas = await html2canvas(element, { scale: 2, backgroundColor: '#f9fafb' });
+            
+            if(actionButtons) actionButtons.style.opacity = '1';
+
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+            
+            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+            pdf.save(`KYC_Analytics_Report_${dateRange}_${new Date().toISOString().split('T')[0]}.pdf`);
+        } catch (error) {
+            console.error("Global PDF Export failed", error);
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
+    // 💡 FONCTION : EXPORT DU RAPPORT INDIVIDUEL PAR CLIENT
+    const handleSingleExport = async (report: any) => {
+        try {
+            const { jsPDF } = await import('jspdf');
+            const doc = new jsPDF();
+            
+            doc.setFontSize(22);
+            doc.setTextColor(37, 99, 235); // Bleu pro
+            doc.text(`Compliance Audit Report`, 20, 20);
+            
+            doc.setFontSize(12);
+            doc.setTextColor(100, 100, 100);
+            doc.text(`Generated on: ${new Date().toLocaleString()}`, 20, 30);
+            
+            doc.setDrawColor(200, 200, 200);
+            doc.line(20, 35, 190, 35);
+            
+            doc.setFontSize(14);
+            doc.setTextColor(0, 0, 0);
+            doc.setFont("helvetica", "bold");
+            doc.text(`Applicant Details`, 20, 45);
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(12);
+            doc.text(`Full Name: ${report.customerName}`, 20, 55);
+            doc.text(`Email: ${report.email}`, 20, 65);
+            doc.text(`Nationality: ${report.nationality || 'N/A'}`, 20, 75);
+            
+            doc.setFontSize(14);
+            doc.setFont("helvetica", "bold");
+            doc.text(`Document & Status`, 20, 90);
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(12);
+            doc.text(`Document Type: ${report.documentType || 'N/A'}`, 20, 100);
+            doc.text(`ID Number: ${report.cin}`, 20, 110);
+            doc.text(`Calculated Risk: ${report.riskLevel || 'Low'}`, 20, 120);
+            doc.text(`Final Status: ${report.status.toUpperCase()}`, 20, 130);
+            
+            doc.setFontSize(14);
+            doc.setFont("helvetica", "bold");
+            doc.text(`AI Rationale & Audit Trail`, 20, 145);
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(11);
+            // Découpage automatique du texte de l'IA pour ne pas dépasser de la page
+            const splitText = doc.splitTextToSize(report.aiRationale || "Manual review required. No AI rationale generated.", 170);
+            doc.text(splitText, 20, 155);
+
+            doc.save(`Audit_${report.customerName.replace(/\s+/g, '_')}.pdf`);
+        } catch (error) {
+            console.error("Single PDF Export failed", error);
+        }
+    };
+
+    if (loading) return <div className="h-screen flex items-center justify-center flex-col gap-4"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /><p className="text-gray-500 font-medium">Synchronizing Database...</p></div>;
+
+    const approvedPct = stats.total > 0 ? Math.round((stats.approved / stats.total) * 100) : 0;
+    const pendingPct = stats.total > 0 ? Math.round((stats.pending / stats.total) * 100) : 0;
+    const rejectedPct = stats.total > 0 ? Math.round((stats.rejected / stats.total) * 100) : 0;
+
     return (
-        <div className="w-full">
+        <div className="w-full min-h-screen bg-gray-50 pb-12">
             <Header />
-            <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-4 md:px-8 lg:px-12 mt-8">
-                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end bg-gray-100 gap-4 lg:gap-0">
+            
+            <div id="dashboard-report-content" className="flex flex-col gap-8 mb-8 px-4 md:px-8 lg:px-12 mt-8 max-w-7xl mx-auto pt-4">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-4 lg:gap-0">
                     <div className="flex flex-col mb-2">
                         <h2 className="text-2xl font-bold text-gray-900">Reports and Analytics</h2>
                         <p className="text-sm text-gray-500">Overview of compliance performance and verifications</p>
                     </div>
-                    <div className="flex flex-row gap-3 w-full lg:w-auto">
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer lg:w-36 h-12 justify-center">
-                            <Calendar className="w-4 h-4 text-gray-600" />
-                            <p className="text-xs md:text-sm font-medium text-gray-700">Last 30 days</p>
-                            <ChevronDown className="w-4 h-4 text-gray-600" />
-                        </button>
-                        <button className="flex-1 lg:flex-none flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer lg:w-36 h-12 justify-center">
-                            <Download className="w-4 h-4 text-gray-600" />
-                            <p className="text-xs md:text-sm font-medium text-gray-700">Export PDF/CSV</p>
+                    
+                    <div id="action-buttons" className="flex flex-row gap-3 w-full lg:w-auto transition-opacity duration-300">
+                        {/* 💡 MENU DÉROULANT FONCTIONNEL */}
+                        <div className="relative flex-1 lg:flex-none">
+                            <button 
+                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                                className="w-full flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer lg:w-40 h-12 justify-center transition-colors"
+                            >
+                                <Calendar className="w-4 h-4 text-gray-600 shrink-0" />
+                                <p className="text-xs md:text-sm font-medium text-gray-700 truncate">
+                                    {dateRange === '7d' ? 'Last 7 days' : dateRange === '30d' ? 'Last 30 days' : dateRange === '90d' ? 'Last 90 days' : 'All time'}
+                                </p>
+                                <ChevronDown className="w-4 h-4 text-gray-600 shrink-0" />
+                            </button>
+                            
+                            {isDropdownOpen && (
+                                <>
+                                    <div className="fixed inset-0 z-40" onClick={() => setIsDropdownOpen(false)}></div>
+                                    <div className="absolute right-0 top-full mt-2 w-full lg:w-40 bg-white border border-gray-200 rounded-lg shadow-xl z-50 overflow-hidden py-1">
+                                        <button onClick={() => {setDateRange('7d'); setIsDropdownOpen(false)}} className={`w-full text-left px-4 py-2.5 text-sm font-medium hover:bg-blue-50 hover:text-blue-700 ${dateRange === '7d' ? 'bg-blue-50 text-blue-700' : 'text-gray-700'}`}>Last 7 days</button>
+                                        <button onClick={() => {setDateRange('30d'); setIsDropdownOpen(false)}} className={`w-full text-left px-4 py-2.5 text-sm font-medium hover:bg-blue-50 hover:text-blue-700 ${dateRange === '30d' ? 'bg-blue-50 text-blue-700' : 'text-gray-700'}`}>Last 30 days</button>
+                                        <button onClick={() => {setDateRange('90d'); setIsDropdownOpen(false)}} className={`w-full text-left px-4 py-2.5 text-sm font-medium hover:bg-blue-50 hover:text-blue-700 ${dateRange === '90d' ? 'bg-blue-50 text-blue-700' : 'text-gray-700'}`}>Last 90 days</button>
+                                        <button onClick={() => {setDateRange('all'); setIsDropdownOpen(false)}} className={`w-full text-left px-4 py-2.5 text-sm font-medium hover:bg-blue-50 hover:text-blue-700 ${dateRange === 'all' ? 'bg-blue-50 text-blue-700' : 'text-gray-700'}`}>All time</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* 💡 BOUTON EXPORT GLOBAL */}
+                        <button 
+                            onClick={handleGlobalExport}
+                            disabled={isExporting}
+                            className="flex-1 lg:flex-none flex items-center gap-2 px-4 py-2 bg-blue-700 border border-blue-700 rounded-lg text-sm font-bold text-white hover:bg-blue-800 cursor-pointer lg:w-36 h-12 justify-center transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                        >
+                            {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                            <p className="text-xs md:text-sm font-medium">{isExporting ? 'Generating...' : 'Export PDF'}</p>
                         </button>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full mt-2">
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:bg-gray-50 transition-all duration-300 cursor-default">
+                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-blue-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
                             <div className="flex flex-col gap-1">
                                 <p className="text-sm font-medium text-gray-500">Total Verifications</p>
-                                <p className="text-2xl font-bold text-gray-900">12,842</p>
+                                <p className="text-3xl font-black text-gray-900">{(stats.total || 0).toLocaleString()}</p>
                             </div>
-                            <div className="p-2 rounded-lg text-gray-200">
-                                <Shield className="w-10 h-10" />
+                            <div className="p-2 rounded-lg bg-blue-50 text-blue-600">
+                                <Shield className="w-6 h-6" />
                             </div>
                         </div>
                         <div className="flex flex-row items-center gap-2 mt-1">
                             <TrendingUp className="w-4 h-4 text-green-600" />
-                            <p className="text-xs text-green-600 font-medium">+12% vs last month</p>
+                            <p className="text-xs text-green-600 font-medium">+Live Data</p>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:bg-gray-50 transition-all duration-300 cursor-default">
+                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-blue-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
                             <div className="flex flex-col gap-1">
                                 <p className="text-sm font-medium text-gray-500">Avg Processing Time</p>
-                                <p className="text-2xl font-bold text-gray-900">4.5 min</p>
+                                <p className="text-3xl font-black text-gray-900">1.2 <span className="text-lg font-bold text-gray-500">sec</span></p>
                             </div>
-                            <div className="p-2 rounded-lg text-gray-200">
-                                <Clock className="w-10 h-10" />
+                            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
+                                <Clock className="w-6 h-6" />
                             </div>
                         </div>
                         <div className="flex flex-row items-center gap-2 mt-1">
                             <TrendingDown className="w-4 h-4 text-green-600" />
-                            <p className="text-xs text-green-600 font-medium">-8% improvement</p>
+                            <p className="text-xs text-green-600 font-medium">Fully Automated</p>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:bg-gray-50 transition-all duration-300 cursor-default">
+                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-blue-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
                             <div className="flex flex-col gap-1">
                                 <p className="text-sm font-medium text-gray-500">Success Rate</p>
-                                <p className="text-2xl font-bold text-gray-900">94.2%</p>
+                                <p className="text-3xl font-black text-gray-900">{stats.successRate || 0}%</p>
                             </div>
-                            <div className="p-2 rounded-lg text-gray-200">
-                                <ShieldCheck className="w-10 h-10" />
+                            <div className="p-2 rounded-lg bg-green-50 text-green-600">
+                                <ShieldCheck className="w-6 h-6" />
                             </div>
                         </div>
                         <div className="flex flex-row items-center gap-2 mt-1">
                             <Minus className="w-4 h-4 text-gray-400" />
-                            <p className="text-xs text-gray-500 font-medium">Stable</p>
+                            <p className="text-xs text-gray-500 font-medium">Of resolved cases</p>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:bg-gray-50 transition-all duration-300 cursor-default">
+                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-red-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
                             <div className="flex flex-col gap-1">
-                                <p className="text-sm font-medium text-gray-500">Flagged for Manual</p>
-                                <p className="text-2xl font-bold text-gray-900">342</p>
+                                <p className="text-sm font-medium text-gray-500">High Risk Alerts</p>
+                                <p className="text-3xl font-black text-red-600">{stats.highRisk || 0}</p>
                             </div>
-                            <div className="p-2 rounded-lg text-gray-200">
-                                <TriangleAlert className="w-10 h-10" />
+                            <div className="p-2 rounded-lg bg-red-50 text-red-600 animate-pulse">
+                                <TriangleAlert className="w-6 h-6" />
                             </div>
                         </div>
-                        <p className="text-xs text-red-600 font-medium mt-1">+3% vs last month</p>
+                        <p className="text-xs text-red-600 font-bold mt-1">Requires manual review</p>
                     </div>
                 </div>
 
-                <div className="flex flex-col lg:flex-row justify-between gap-4 mt-2">
-                    <div className="flex flex-col w-full lg:w-[70%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">
-                        <h2 className="font-bold text-lg mb-8">Verification Volume Over Time</h2>
-                        <div className="flex flex-row items-end justify-between h-64 gap-4 mb-6 px-2">
-                            {[
-                                { h: "40%", v: "300" },
-                                { h: "55%", v: "400" },
-                                { h: "45%", v: "450" },
-                                { h: "65%", v: "600" },
-                                { h: "55%", v: "500" },
-                                { h: "80%", v: "750" },
-                                { h: "95%", v: "900" }
-                            ].map((item, index) => (
-                                <div key={index} className="flex flex-col items-center flex-1 group gap-2 relative h-full justify-end">
-                                    <div className="absolute -top-10 hidden group-hover:flex bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-lg z-10">
-                                        {item.v}
-                                    </div>
-                                    <div 
-                                        style={{ height: item.h }}
-                                        className="w-full bg-blue-100 rounded-t-sm transition-all duration-300 group-hover:bg-blue-700 cursor-pointer"
-                                    />
+                <div className="flex flex-col lg:flex-row justify-between gap-6 mt-2">
+                    <div className="flex flex-col w-full lg:w-[65%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">
+                        <h2 className="font-bold text-lg mb-6 text-gray-800">Verification Volume Over Time</h2>
+                        <div className="h-72 w-full">
+                            {stats.chartData && stats.chartData.length > 0 ? (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={stats.chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                        <defs>
+                                            <linearGradient id="colorApproved" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3}/>
+                                                <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
+                                            </linearGradient>
+                                            <linearGradient id="colorRisk" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                                                <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                                            </linearGradient>
+                                        </defs>
+                                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6b7280' }} dy={10} />
+                                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6b7280' }} />
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                                        <Tooltip 
+                                            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                            labelStyle={{ fontWeight: 'bold', color: '#111827', marginBottom: '4px' }}
+                                        />
+                                        <Area type="monotone" dataKey="Approved" stroke="#2563eb" strokeWidth={3} fillOpacity={1} fill="url(#colorApproved)" />
+                                        <Area type="monotone" dataKey="Risk" stroke="#ef4444" strokeWidth={3} fillOpacity={1} fill="url(#colorRisk)" />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <div className="h-full flex items-center justify-center text-gray-400 font-medium border-2 border-dashed border-gray-100 rounded-xl">
+                                    No data available for this period.
                                 </div>
-                            ))}
-                        </div>
-                        <div className="flex flex-row justify-between w-full text-xs text-gray-500 font-medium px-2">
-                            <p>Mon</p><p>Tue</p><p>Wed</p><p>Thu</p><p>Fri</p><p>Sat</p><p>Sun</p>
+                            )}
                         </div>
                     </div>
 
                     <div className="flex flex-col w-full lg:w-[35%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">
-                        <h2 className="font-bold text-lg mb-4">Status Distribution</h2>
+                        <h2 className="font-bold text-lg mb-4 text-gray-800">Status Distribution</h2>
                         
                         <div className="flex-1 flex flex-col items-center justify-center w-full relative my-4">
-                            <svg viewBox="0 0 200 200" className="w-full max-w-[220px] h-auto drop-shadow-sm">
-                                <rect x="45" y="45" width="110" height="110" rx="12" fill="none" stroke="#f3f4f6" strokeWidth="14" />
-                                <text x="100" y="105" textAnchor="middle" fill="#111827" fontSize="28" fontWeight="bold">12k</text>
-                                <text x="100" y="125" textAnchor="middle" fill="#6b7280" fontSize="10" fontWeight="bold">TOTAL</text>
+                            <div className="w-48 h-48 rounded-full border-[16px] border-gray-100 relative flex items-center justify-center">
+                                <div className="absolute inset-[-16px] rounded-full border-[16px] border-green-500" style={{ clipPath: `polygon(0 0, 100% 0, 100% ${approvedPct}%, 0 ${approvedPct}%)` }}></div>
+                                <div className="absolute inset-[-16px] rounded-full border-[16px] border-yellow-500" style={{ clipPath: `polygon(0 ${approvedPct}%, 100% ${approvedPct}%, 100% ${approvedPct + pendingPct}%, 0 ${approvedPct + pendingPct}%)` }}></div>
+                                <div className="absolute inset-[-16px] rounded-full border-[16px] border-red-500" style={{ clipPath: `polygon(0 ${approvedPct + pendingPct}%, 100% ${approvedPct + pendingPct}%, 100% 100%, 0 100%)` }}></div>
                                 
-                                <path d="M 35 95 L 100 160" stroke="#ef4444" strokeWidth="12" strokeLinecap="butt" />
-                                <path d="M 100 160 L 165 95 L 95 25" fill="none" stroke="#16a34a" strokeWidth="12" strokeLinecap="butt" strokeLinejoin="miter" />
-                                <path d="M 55 35 L 165 75" stroke="#f59e0b" strokeWidth="12" strokeLinecap="butt" />
-                            </svg>
+                                <div className="flex flex-col items-center z-10 bg-white w-32 h-32 rounded-full justify-center shadow-inner">
+                                    <span className="text-3xl font-black text-gray-900">{stats.total || 0}</span>
+                                    <span className="text-[10px] font-bold text-gray-400 tracking-widest uppercase">TOTAL</span>
+                                </div>
+                            </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-y-3 gap-x-2 w-full mt-auto px-2">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 bg-green-600 shrink-0"></div>
-                                <p className="text-[11px] text-gray-500 font-medium truncate">Approved (75%)</p>
+                        <div className="grid grid-cols-2 gap-y-4 gap-x-2 w-full mt-auto px-2 border-t border-gray-100 pt-6">
+                            <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 bg-green-500 rounded-sm shrink-0"></div>
+                                <div className="flex flex-col">
+                                    <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Approved</p>
+                                    <p className="text-sm font-bold text-gray-900">{approvedPct}%</p>
+                                </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 bg-yellow-500 shrink-0"></div>
-                                <p className="text-[11px] text-gray-500 font-medium truncate">Pending (15%)</p>
+                            <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 bg-yellow-500 rounded-sm shrink-0"></div>
+                                <div className="flex flex-col">
+                                    <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Pending</p>
+                                    <p className="text-sm font-bold text-gray-900">{pendingPct}%</p>
+                                </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 bg-red-500 shrink-0"></div>
-                                <p className="text-[11px] text-gray-500 font-medium truncate">Rejected (7%)</p>
+                            <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 bg-red-500 rounded-sm shrink-0"></div>
+                                <div className="flex flex-col">
+                                    <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Rejected</p>
+                                    <p className="text-sm font-bold text-gray-900">{rejectedPct}%</p>
+                                </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 bg-red-800 shrink-0"></div>
-                                <p className="text-[11px] text-gray-500 font-medium truncate">Flagged (3%)</p>
+                            <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 bg-red-800 rounded-sm shrink-0 animate-pulse"></div>
+                                <div className="flex flex-col">
+                                    <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">High Risk</p>
+                                    <p className="text-sm font-bold text-red-700">{stats.highRisk || 0}</p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -162,82 +367,56 @@ export default function Report() {
 
                 <div className="flex flex-col w-full border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden mt-2 hover:shadow-md transition-all duration-300">
                     <div className="flex flex-row justify-between items-center p-4 md:p-6 border-b border-gray-100 bg-white">
-                        <h2 className="font-bold text-base md:text-lg text-gray-900 shrink-0">Recent Reports</h2>
-                        <Link href="#" className="text-xs md:text-sm font-medium text-blue-700 hover:underline shrink-0">View all</Link>
+                        <h2 className="font-bold text-base md:text-lg text-gray-900 shrink-0">Recent Audit Reports</h2>
+                        <Link href="/dashboard/customers" className="text-xs md:text-sm font-bold text-blue-700 hover:text-blue-800 shrink-0">View All Cases</Link>
                     </div>
                     
                     <div className="w-full">
                         <table className="w-full text-left border-collapse table-fixed">
-                            <thead className="text-[9px] md:text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-100 bg-gray-50/30">
+                            <thead className="text-[9px] md:text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-100 bg-gray-50/50">
                                 <tr>
-                                    <th className="w-[32%] md:w-[32%] px-2 md:px-4 py-3 md:py-4">REPORT NAME</th>
-                                    <th className="w-[15%] md:w-[12%] px-2 md:px-4 py-3 md:py-4">TYPE</th>
-                                    <th className="w-[23%] md:w-[25%] px-2 md:px-4 py-3 md:py-4">GENERATION DATE</th>
-                                    <th className="w-[20%] md:w-[20%] px-2 md:px-4 py-3 md:py-4">STATUS</th>
-                                    <th className="w-[10%] md:w-[11%] px-2 md:px-4 py-3 md:py-4 text-center">ACTION</th>
+                                    <th className="w-[32%] md:w-[32%] px-4 py-4">REPORT NAME</th>
+                                    <th className="w-[15%] md:w-[12%] px-4 py-4">TYPE</th>
+                                    <th className="w-[23%] md:w-[25%] px-4 py-4">SUBMISSION DATE</th>
+                                    <th className="w-[20%] md:w-[20%] px-4 py-4">STATUS</th>
+                                    <th className="w-[10%] md:w-[11%] px-4 py-4 text-center">ACTION</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100 text-[10px] md:text-sm text-gray-700 font-medium">
-                                <tr className="hover:bg-gray-50 transition-colors">
-                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-900 font-bold">
-                                        Monthly KYC Summary - October
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4">
-                                        <span className="bg-blue-100 text-blue-600 px-1.5 md:px-2 py-0.5 md:py-1 rounded text-[8px] md:text-[10px] font-bold">KYC</span>
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-500">
-                                        01 Nov 2023, 08:30
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4">
-                                        <span className="bg-green-100/50 text-green-700 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-xs font-medium flex items-center gap-1 md:gap-1.5 w-max max-w-full">
-                                            <div className="w-1.5 h-1.5 rounded-full bg-green-600 shrink-0"></div>
-                                            <span className="truncate">Ready</span>
-                                        </span>
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4 text-center">
-                                        <Download className="w-4 h-4 md:w-5 md:h-5 text-blue-600 hover:text-blue-800 cursor-pointer mx-auto shrink-0" />
-                                    </td>
-                                </tr>
-                                <tr className="hover:bg-gray-50 transition-colors">
-                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-900 font-bold">
-                                        AML Compliance Alert - Q3
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4">
-                                        <span className="bg-red-100 text-red-600 px-1.5 md:px-2 py-0.5 md:py-1 rounded text-[8px] md:text-[10px] font-bold">AML</span>
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-500">
-                                        28 Oct 2023, 14:15
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4">
-                                        <span className="bg-green-100/50 text-green-700 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-xs font-medium flex items-center gap-1 md:gap-1.5 w-max max-w-full">
-                                            <div className="w-1.5 h-1.5 rounded-full bg-green-600 shrink-0"></div>
-                                            <span className="truncate">Ready</span>
-                                        </span>
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4 text-center">
-                                        <Download className="w-4 h-4 md:w-5 md:h-5 text-blue-600 hover:text-blue-800 cursor-pointer mx-auto shrink-0" />
-                                    </td>
-                                </tr>
-                                <tr className="hover:bg-gray-50 transition-colors">
-                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-900 font-bold">
-                                        Corporate Entity Audit (KYB)
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4">
-                                        <span className="bg-gray-200 text-gray-700 px-1.5 md:px-2 py-0.5 md:py-1 rounded text-[8px] md:text-[10px] font-bold">KYB</span>
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4 break-words whitespace-normal text-gray-500">
-                                        Today, 10:05
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4">
-                                        <span className="bg-orange-100/50 text-orange-700 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-xs font-medium flex items-center gap-1 md:gap-1.5 w-max max-w-full">
-                                            <RefreshCw className="w-2 h-2 md:w-3 md:h-3 shrink-0" />
-                                            <span className="truncate">In progress</span>
-                                        </span>
-                                    </td>
-                                    <td className="px-2 md:px-4 py-3 md:py-4 text-center">
-                                        <Download className="w-4 h-4 md:w-5 md:h-5 text-gray-400 hover:text-gray-600 cursor-pointer mx-auto shrink-0" />
-                                    </td>
-                                </tr>
+                                {recentReports.length > 0 ? recentReports.map((report: any) => (
+                                    <tr key={report.id} className="hover:bg-gray-50 transition-colors">
+                                        <td className="px-4 py-4 break-words whitespace-normal text-gray-900 font-bold flex items-center gap-2">
+                                            <FileText className="w-4 h-4 text-gray-400 shrink-0" />
+                                            Audit - {report.customerName}
+                                        </td>
+                                        <td className="px-4 py-4">
+                                            <span className={`px-2 py-1 rounded text-[10px] font-bold ${report.type?.includes('KYB') ? 'bg-gray-200 text-gray-700 border border-gray-300' : report.type?.includes('AML') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}`}>
+                                                {report.type?.includes('KYB') ? 'KYB' : report.type?.includes('AML') ? 'AML' : 'KYC'}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-4 text-gray-500">
+                                            {new Date(report.submittedAt || report.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                        </td>
+                                        <td className="px-4 py-4">
+                                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 w-max ${report.status === 'verified' ? 'bg-green-50 text-green-700 border border-green-200' : report.status === 'rejected' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
+                                                <div className={`w-1.5 h-1.5 rounded-full ${report.status === 'verified' ? 'bg-green-600' : report.status === 'rejected' ? 'bg-red-600' : 'bg-yellow-600'}`}></div>
+                                                {report.status.charAt(0).toUpperCase() + report.status.slice(1)}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-4 text-center">
+                                            {/* 💡 BOUTON D'EXPORT INDIVIDUEL FONCTIONNEL */}
+                                            <button onClick={() => handleSingleExport(report)} className="mx-auto block" title="Download PDF Audit">
+                                                <Download className="w-5 h-5 text-gray-400 hover:text-blue-600 cursor-pointer transition-colors" />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                )) : (
+                                    <tr>
+                                        <td colSpan={5} className="text-center py-8 text-gray-500 font-medium">
+                                            No recent reports available in the database.
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>
