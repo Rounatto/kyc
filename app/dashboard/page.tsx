@@ -15,7 +15,6 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true);
     const [highRiskProfiles, setHighRiskProfiles] = useState<any[]>([]);
     
-    // États dynamiques du Dashboard
     const [timeRange, setTimeRange] = useState("30d");
     const [stats, setStats] = useState({ total: 0, verified: 0, pending: 0, highRisk: 0 });
     const [trends, setTrends] = useState({ totalDelta: 0, verifiedDelta: 0, pendingDelta: 0, highRiskDelta: 0 });
@@ -28,8 +27,19 @@ export default function DashboardPage() {
                 const statsRes = await fetch(`/api/dashboard/stats?range=${timeRange}`);
                 if (statsRes.ok) {
                     const statsData = await statsRes.json();
-                    setStats(statsData.stats);
-                    setTrends(statsData.trends);
+                    // 💡 GARDE-FOU : On s'assure que si une donnée manque, on met 0 par défaut
+                    setStats({
+                        total: statsData.stats?.total || 0,
+                        verified: statsData.stats?.verified || 0,
+                        pending: statsData.stats?.pending || 0,
+                        highRisk: statsData.stats?.highRisk || 0
+                    });
+                    setTrends({
+                        totalDelta: statsData.trends?.totalDelta || 0,
+                        verifiedDelta: statsData.trends?.verifiedDelta || 0,
+                        pendingDelta: statsData.trends?.pendingDelta || 0, // Fallback de sécurité
+                        highRiskDelta: statsData.trends?.highRiskDelta || 0
+                    });
                     setChartData(statsData.chartData || []);
                 }
 
@@ -69,7 +79,6 @@ export default function DashboardPage() {
 
                     setRequestsData(formattedData.slice(0, 5));
                     
-                    // 💡 CORRECTION DU FILTRE: Un haut risque est maintenant >= 50
                     const criticalProfiles = formattedData.filter((req: any) => req.parsedScore >= 50);
                     setHighRiskProfiles(criticalProfiles.slice(0, 3));
                 }
@@ -130,9 +139,11 @@ export default function DashboardPage() {
         document.body.removeChild(link);
     };
 
-    const TrendIndicator = ({ value, invertColors = false, neutral = false }: { value: number, invertColors?: boolean, neutral?: boolean }) => {
-        const isPositive = value > 0;
-        const isZero = value === 0;
+    // 💡 GARDE-FOU : On s'assure que "value" est un nombre valide avant de lancer toFixed()
+    const TrendIndicator = ({ value = 0, invertColors = false, neutral = false }: { value?: number, invertColors?: boolean, neutral?: boolean }) => {
+        const safeValue = Number(value) || 0; 
+        const isPositive = safeValue > 0;
+        const isZero = safeValue === 0;
         
         let colorClass = "text-gray-500 bg-gray-100";
         if (!isZero) {
@@ -148,7 +159,7 @@ export default function DashboardPage() {
         return (
             <div className={`flex justify-center items-center rounded-sm px-2 py-1 text-[10px] font-bold gap-1 ${colorClass}`}>
                 {isPositive ? <TrendingUp className="w-3 h-3" /> : isZero ? <Minus className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {isPositive ? '+' : ''}{value.toFixed(1)}%
+                {isPositive ? '+' : ''}{safeValue.toFixed(1)}%
             </div>
         );
     };

@@ -48,7 +48,7 @@ export default function Header(){
                                         <p className="text-sm font-medium text-gray-800 truncate">{userName}</p>
                                         <p className="text-xs text-gray-500 truncate">{userEmail}</p>
                                     </div>
-                                <Link href="/dashboard/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                                <Link href="/dashboard/settings" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                                     <User className="w-4 h-4" />
                                     Profil
                                 </Link>
