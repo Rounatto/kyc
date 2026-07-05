@@ -24,8 +24,14 @@ export default function Report() {
         pending: 0,
         highRisk: 0,
         successRate: 0,
-        avgProcessingTime: "1.2",
+        avgProcessingTime: 0,
         chartData: []
+    });
+
+    const [trends, setTrends] = useState({
+        totalDelta: 0,
+        verifiedDelta: 0,
+        highRiskDelta: 0
     });
 
     useEffect(() => {
@@ -36,26 +42,25 @@ export default function Report() {
                 if (statsRes.ok) {
                     const data = await statsRes.json();
                     
-                    const totalVal = data.totalRequests || data.total || data.stats?.totalCustomers || 0;
-                    const approvedVal = data.approved || data.stats?.verifiedToday || 0;
-                    const rejectedVal = data.rejected || 0;
-                    const pendingVal = data.pendingReviews || data.pending || data.stats?.pendingReviews || 0;
-                    const highRiskVal = data.highRisk || data.stats?.highRisk || 0;
-
-                    const resolvedCases = approvedVal + rejectedVal;
-                    const successRate = resolvedCases > 0 ? ((approvedVal / resolvedCases) * 100).toFixed(1) : 0;
-
-                    const dynamicAvgTime = data.avgProcessingTime || (1.2 + (totalVal % 8) * 0.1).toFixed(1);
+                    const s = data.stats;
+                    const resolvedCases = s.verified + s.rejected;
+                    const successRate = resolvedCases > 0 ? ((s.verified / resolvedCases) * 100).toFixed(1) : 0;
 
                     setStats({
-                        total: totalVal,
-                        approved: approvedVal,
-                        rejected: rejectedVal,
-                        pending: pendingVal,
-                        highRisk: highRiskVal,
+                        total: s.total,
+                        approved: s.verified,
+                        rejected: s.rejected,
+                        pending: s.pending,
+                        highRisk: s.highRisk,
                         successRate: Number(successRate),
-                        avgProcessingTime: dynamicAvgTime,
+                        avgProcessingTime: data.avgProcessingTime, 
                         chartData: data.chartData || []
+                    });
+
+                    setTrends({
+                        totalDelta: data.trends?.totalDelta || 0,
+                        verifiedDelta: data.trends?.verifiedDelta || 0,
+                        highRiskDelta: data.trends?.highRiskDelta || 0
                     });
                 }
 
@@ -74,31 +79,31 @@ export default function Report() {
         fetchData();
     }, [dateRange]);
 
-    // =====================================================================
-    // 💡 NOUVEAU MOTEUR D'EXPORT PDF GLOBAL (MODERNE : HTML-TO-IMAGE)
-    // =====================================================================
     const handleGlobalExport = async () => {
         setIsExporting(true);
         try {
-            // Import dynamique des librairies modernes
             const htmlToImage = await import('html-to-image');
             const { jsPDF } = await import('jspdf');
 
             const element = document.getElementById('dashboard-report-content');
             if (!element) return;
 
-            // html-to-image supporte les couleurs lab(), oklch() et les SVG complexes
             const dataUrl = await htmlToImage.toPng(element, {
-                quality: 0.95,
+                quality: 1,
                 backgroundColor: '#f9fafb',
-                pixelRatio: 2, // Qualité Retina
-                // Ce filtre exclut le bouton d'export du PDF sans avoir à manipuler le CSS
+                pixelRatio: 2, 
+                height: element.scrollHeight,
                 filter: (node: any) => node.id !== 'action-buttons'
             });
             
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (element.offsetHeight * pdfWidth) / element.offsetWidth;
+            const pdfWidth = 210; 
+            const pdfHeight = (element.scrollHeight * pdfWidth) / element.scrollWidth;
+            
+            const pdf = new jsPDF({
+                orientation: 'p',
+                unit: 'mm',
+                format: [pdfWidth, pdfHeight] 
+            });
             
             pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
             pdf.save(`KYC_Analytics_Report_${dateRange}_${new Date().toISOString().split('T')[0]}.pdf`);
@@ -109,9 +114,6 @@ export default function Report() {
         }
     };
 
-    // =====================================================================
-    // 💡 MOTEUR D'EXPORT PDF INDIVIDUEL (TEXTE)
-    // =====================================================================
     const handleSingleExport = async (report: any) => {
         try {
             const { jsPDF } = await import('jspdf');
@@ -182,7 +184,6 @@ export default function Report() {
                         <p className="text-sm text-gray-500">Overview of compliance performance and verifications</p>
                     </div>
                     
-                    {/* L'ID "action-buttons" est utilisé par le filtre du PDF pour masquer ces boutons à l'export */}
                     <div id="action-buttons" className="flex flex-row gap-3 w-full lg:w-auto">
                         
                         <div className="relative flex-1 lg:flex-none">
@@ -221,66 +222,87 @@ export default function Report() {
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full mt-2">
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-blue-300 transition-all duration-300 cursor-default">
+                {/* 💡 NOUVEAU [FLEXBOX] : Remplacement de CSS Grid par Flexbox fluide (flex-wrap + flex-1) */}
+                <div className="flex flex-row flex-wrap gap-4 md:gap-6 w-full mt-2">
+                    <div className="flex-1 min-w-[240px] bg-white p-5 md:p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between min-h-[144px] hover:border-blue-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-1">
-                                <p className="text-sm font-medium text-gray-500">Total Verifications</p>
-                                <p className="text-3xl font-black text-gray-900">{(stats.total || 0).toLocaleString()}</p>
+                            <div className="flex flex-col gap-1 w-[70%]">
+                                <p className="text-xs md:text-sm font-medium text-gray-500 truncate">Total Verifications</p>
+                                <p className="text-2xl md:text-3xl font-black text-gray-900 truncate">{(stats.total || 0).toLocaleString()}</p>
                             </div>
-                            <div className="p-2 rounded-lg bg-blue-50 text-blue-600">
-                                <Shield className="w-6 h-6" />
+                            <div className="p-2 rounded-lg bg-blue-50 text-blue-600 shrink-0">
+                                <Shield className="w-5 h-5 md:w-6 md:h-6" />
                             </div>
                         </div>
-                        <div className="flex flex-row items-center gap-2 mt-1">
-                            <TrendingUp className="w-4 h-4 text-green-600" />
-                            <p className="text-xs text-green-600 font-medium">+Live Data</p>
+                        <div className="flex flex-row items-center gap-2 mt-2 md:mt-1">
+                            {trends.totalDelta >= 0 ? <TrendingUp className="w-3.5 h-3.5 md:w-4 md:h-4 text-green-600 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-red-600 shrink-0" />}
+                            <p className={`text-[10px] md:text-xs font-medium truncate ${trends.totalDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {trends.totalDelta > 0 ? '+' : ''}{trends.totalDelta.toFixed(1)}% vs previous
+                            </p>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-blue-300 transition-all duration-300 cursor-default">
+                    <div className="flex-1 min-w-[240px] bg-white p-5 md:p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between min-h-[144px] hover:border-blue-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-1">
-                                <p className="text-sm font-medium text-gray-500">Avg Processing Time</p>
-                                <p className="text-3xl font-black text-gray-900">{stats.avgProcessingTime} <span className="text-lg font-bold text-gray-500">sec</span></p>
+                            <div className="flex flex-col gap-1 w-[70%]">
+                                <p className="text-xs md:text-sm font-medium text-gray-500 truncate">Avg Processing Time</p>
+                                <p className="text-2xl md:text-3xl font-black text-gray-900 truncate">
+                                    {stats.avgProcessingTime < 60 
+                                        ? stats.avgProcessingTime 
+                                        : stats.avgProcessingTime < 3600 
+                                            ? (stats.avgProcessingTime / 60).toFixed(1) 
+                                            : (stats.avgProcessingTime / 3600).toFixed(1)}
+                                    <span className="text-sm md:text-lg font-bold text-gray-500 ml-1">
+                                        {stats.avgProcessingTime < 60 ? 'sec' : stats.avgProcessingTime < 3600 ? 'min' : 'hrs'}
+                                    </span>
+                                </p>
                             </div>
-                            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
-                                <Clock className="w-6 h-6" />
+                            <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 shrink-0">
+                                <Clock className="w-5 h-5 md:w-6 md:h-6" />
                             </div>
                         </div>
-                        <div className="flex flex-row items-center gap-2 mt-1">
-                            <TrendingDown className="w-4 h-4 text-green-600" />
-                            <p className="text-xs text-green-600 font-medium">Fully Automated</p>
+                        <div className="flex flex-row items-center gap-2 mt-2 md:mt-1">
+                            {stats.avgProcessingTime < 5 ? <TrendingDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-green-600 shrink-0" /> : <Minus className="w-3.5 h-3.5 md:w-4 md:h-4 text-yellow-600 shrink-0" />}
+                            <p className={`text-[10px] md:text-xs font-medium truncate ${stats.avgProcessingTime < 5 ? 'text-green-600' : 'text-yellow-600'}`}>
+                                {stats.avgProcessingTime < 5 ? 'Fully Automated' : 'Manual Review Noted'}
+                            </p>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-blue-300 transition-all duration-300 cursor-default">
+                    <div className="flex-1 min-w-[240px] bg-white p-5 md:p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between min-h-[144px] hover:border-blue-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-1">
-                                <p className="text-sm font-medium text-gray-500">Success Rate</p>
-                                <p className="text-3xl font-black text-gray-900">{stats.successRate || 0}%</p>
+                            <div className="flex flex-col gap-1 w-[70%]">
+                                <p className="text-xs md:text-sm font-medium text-gray-500 truncate">Success Rate</p>
+                                <p className="text-2xl md:text-3xl font-black text-gray-900 truncate">{stats.successRate || 0}%</p>
                             </div>
-                            <div className="p-2 rounded-lg bg-green-50 text-green-600">
-                                <ShieldCheck className="w-6 h-6" />
+                            <div className="p-2 rounded-lg bg-green-50 text-green-600 shrink-0">
+                                <ShieldCheck className="w-5 h-5 md:w-6 md:h-6" />
                             </div>
                         </div>
-                        <div className="flex flex-row items-center gap-2 mt-1">
-                            <Minus className="w-4 h-4 text-gray-400" />
-                            <p className="text-xs text-gray-500 font-medium">Of resolved cases</p>
+                        <div className="flex flex-row items-center gap-2 mt-2 md:mt-1">
+                            {trends.verifiedDelta > 0 ? <TrendingUp className="w-3.5 h-3.5 md:w-4 md:h-4 text-green-600 shrink-0" /> : <Minus className="w-3.5 h-3.5 md:w-4 md:h-4 text-gray-400 shrink-0" />}
+                            <p className={`text-[10px] md:text-xs font-medium truncate ${trends.verifiedDelta > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+                                {trends.verifiedDelta > 0 ? `+${trends.verifiedDelta.toFixed(1)}% volume` : 'Stable conversion'}
+                            </p>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between h-36 hover:border-red-300 transition-all duration-300 cursor-default">
+                    <div className="flex-1 min-w-[240px] bg-white p-5 md:p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col justify-between min-h-[144px] hover:border-red-300 transition-all duration-300 cursor-default">
                         <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-1">
-                                <p className="text-sm font-medium text-gray-500">High Risk Alerts</p>
-                                <p className="text-3xl font-black text-red-600">{stats.highRisk || 0}</p>
+                            <div className="flex flex-col gap-1 w-[70%]">
+                                <p className="text-xs md:text-sm font-medium text-gray-500 truncate">High Risk Alerts</p>
+                                <p className="text-2xl md:text-3xl font-black text-red-600 truncate">{stats.highRisk}</p>
                             </div>
-                            <div className="p-2 rounded-lg bg-red-50 text-red-600 animate-pulse">
-                                <TriangleAlert className="w-6 h-6" />
+                            <div className="p-2 rounded-lg bg-red-50 text-red-600 animate-pulse shrink-0">
+                                <TriangleAlert className="w-5 h-5 md:w-6 md:h-6" />
                             </div>
                         </div>
-                        <p className="text-xs text-red-600 font-bold mt-1">Requires manual review</p>
+                        <div className="flex flex-row items-center gap-2 mt-2 md:mt-1">
+                            {trends.highRiskDelta > 0 ? <TrendingUp className="w-3.5 h-3.5 md:w-4 md:h-4 text-red-600 shrink-0" /> : <TrendingDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-green-600 shrink-0" />}
+                            <p className={`text-[10px] md:text-xs font-medium truncate ${trends.highRiskDelta > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                {trends.highRiskDelta > 0 ? `+${trends.highRiskDelta.toFixed(1)}% risk increment` : 'Risk dropping'}
+                            </p>
+                        </div>
                     </div>
                 </div>
 
@@ -330,39 +352,40 @@ export default function Report() {
                                 <div className="absolute inset-[-16px] rounded-full border-[16px] border-red-500" style={{ clipPath: `polygon(0 ${approvedPct + pendingPct}%, 100% ${approvedPct + pendingPct}%, 100% 100%, 0 100%)` }}></div>
                                 
                                 <div className="flex flex-col items-center z-10 bg-white w-32 h-32 rounded-full justify-center shadow-inner">
-                                    <span className="text-3xl font-black text-gray-900">{stats.total || 0}</span>
+                                    <span className="text-3xl font-black text-gray-900">{stats.total}</span>
                                     <span className="text-[10px] font-bold text-gray-400 tracking-widest uppercase">TOTAL</span>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-y-4 gap-x-2 w-full mt-auto px-2 border-t border-gray-100 pt-6">
-                            <div className="flex items-center gap-3">
+                        {/* 💡 NOUVEAU [FLEXBOX] : Remplacement du grid par flex pour la légende */}
+                        <div className="flex flex-wrap justify-between gap-y-4 w-full mt-auto px-2 border-t border-gray-100 pt-6">
+                            <div className="flex items-center gap-3 basis-[48%]">
                                 <div className="w-3 h-3 bg-green-500 rounded-sm shrink-0"></div>
                                 <div className="flex flex-col">
                                     <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Approved</p>
                                     <p className="text-sm font-bold text-gray-900">{approvedPct}%</p>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3 basis-[48%]">
                                 <div className="w-3 h-3 bg-yellow-500 rounded-sm shrink-0"></div>
                                 <div className="flex flex-col">
                                     <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Pending</p>
                                     <p className="text-sm font-bold text-gray-900">{pendingPct}%</p>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3 basis-[48%]">
                                 <div className="w-3 h-3 bg-red-500 rounded-sm shrink-0"></div>
                                 <div className="flex flex-col">
                                     <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Rejected</p>
                                     <p className="text-sm font-bold text-gray-900">{rejectedPct}%</p>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3 basis-[48%]">
                                 <div className="w-3 h-3 bg-red-800 rounded-sm shrink-0 animate-pulse"></div>
                                 <div className="flex flex-col">
                                     <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">High Risk</p>
-                                    <p className="text-sm font-bold text-red-700">{stats.highRisk || 0}</p>
+                                    <p className="text-sm font-bold text-red-700">{stats.highRisk}</p>
                                 </div>
                             </div>
                         </div>
@@ -375,15 +398,15 @@ export default function Report() {
                         <Link href="/dashboard/customers" className="text-xs md:text-sm font-bold text-blue-700 hover:text-blue-800 shrink-0">View All Cases</Link>
                     </div>
                     
-                    <div className="w-full">
-                        <table className="w-full text-left border-collapse table-fixed">
+                    <div className="w-full overflow-x-auto">
+                        <table className="w-full text-left border-collapse min-w-[600px]">
                             <thead className="text-[9px] md:text-xs font-bold text-gray-500 uppercase tracking-wider border-b border-gray-100 bg-gray-50/50">
                                 <tr>
-                                    <th className="w-[32%] md:w-[32%] px-4 py-4">REPORT NAME</th>
-                                    <th className="w-[15%] md:w-[12%] px-4 py-4">TYPE</th>
-                                    <th className="w-[23%] md:w-[25%] px-4 py-4">SUBMISSION DATE</th>
-                                    <th className="w-[20%] md:w-[20%] px-4 py-4">STATUS</th>
-                                    <th className="w-[10%] md:w-[11%] px-4 py-4 text-center">ACTION</th>
+                                    <th className="px-4 py-4">REPORT NAME</th>
+                                    <th className="px-4 py-4">TYPE</th>
+                                    <th className="px-4 py-4">SUBMISSION DATE</th>
+                                    <th className="px-4 py-4">STATUS</th>
+                                    <th className="px-4 py-4 text-center">ACTION</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100 text-[10px] md:text-sm text-gray-700 font-medium">
