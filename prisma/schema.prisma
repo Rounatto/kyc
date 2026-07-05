@@ -6,6 +6,7 @@ generator client {
 // Connexion à la base de données (PostgreSQL)
 datasource db {
   provider = "postgresql"
+  // 💡 L'URL n'est plus requise ici sous Prisma 7+, elle est gérée par ton prisma.config.ts
 }
 
 // Table Utilisateur (Les agents/admins de l'agence)
@@ -20,7 +21,8 @@ model User {
   updatedAt            DateTime              @updatedAt 
   
   verificationRequests VerificationRequest[]
-  auditLogs            AuditLog[]            // Lien vers les actions que l'agent a effectuées
+  auditLogs            AuditLog[]            
+  userSessions         UserSession[]         // 💡 AJOUT : Ligne indispensable pour lier l'utilisateur à ses appareils
 }
 
 // Table Principale (Les dossiers clients soumis)
@@ -31,14 +33,13 @@ model VerificationRequest {
   type         String   
   status       String   @default("pending") // pending, verified, rejected
   
-  // Retrait de @unique pour permettre de multiples soumissions (ex: en cas de rejet et réessai)
   cin          String   
   documentType String   @default("CIN")
   nationality  String?
   dateOfBirth  String?
   phoneNumber  String?
 
-  // Section Fichiers (Pour UploadThing)
+  // Section Fichiers (Pour UploadThing / Supabase)
   idCardUrl    String?
   selfieUrl    String?
 
@@ -52,7 +53,7 @@ model VerificationRequest {
 
   // Relation : l'agent propriétaire du dossier
   userId       String
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   // Relation : l'historique des actions sur ce dossier
   auditLogs    AuditLog[] 
@@ -72,4 +73,19 @@ model AuditLog {
   // L'agent qui a cliqué (Optionnel si c'est l'IA qui agit)
   agentId     String?
   agent       User?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+}
+
+// 💡 NOUVEAU [SÉCURITÉ] : Table de traçabilité des appareils et sessions actives
+model UserSession {
+  id           String   @id @default(cuid())
+  userAgent    String   // Contient la chaîne brute du navigateur pour l'analyse
+  deviceType   String   // Stocke le résultat propre : Windows PC, iOS iPhone, Android, etc.
+  ipAddress    String   // Adresse IP de connexion
+  isActive     Boolean  @default(true) // Permet la révocation à distance
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now()) @updatedAt
+
+  // Relation vers l'utilisateur propriétaire de la session
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
