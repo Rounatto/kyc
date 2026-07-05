@@ -12,7 +12,6 @@ import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 function CustomerPageContent() {
     const searchParams = useSearchParams();
     
-    // Lecture de l'URL pour le bouton Review Anomalies
     const initialRisk = searchParams.get("risk") || "all";
     const initialStatus = searchParams.get("status") || "all";
 
@@ -45,22 +44,42 @@ function CustomerPageContent() {
         return Number.isNaN(numericScore) ? "N/A" : `${numericScore}/100`;
     };
 
+    // 💡 CORRECTION MAJEURE : On récupère TOUTES les statistiques globales ici via la bonne API unifiée
     useEffect(() => {
-        async function fetchTrends() {
+        async function fetchGlobalStats() {
             try {
                 const res = await fetch('/api/dashboard/stats?range=30d');
                 if (res.ok) {
                     const data = await res.json();
-                    setTrends(data.trends);
+                    
+                    // On met à jour les tendances
+                    setTrends({
+                        totalDelta: data.trends?.totalDelta || 0,
+                        verifiedDelta: data.trends?.verifiedDelta || 0,
+                        pendingDelta: data.trends?.pendingDelta || 0,
+                        highRiskDelta: data.trends?.highRiskDelta || 0
+                    });
+                    
+                    // 💡 C'est ça qui manquait ! On met à jour les gros chiffres ici.
+                    if (data.stats) {
+                        setStats({
+                            totalCustomers: data.stats.total || 0,
+                            verifiedToday: data.stats.verified || 0,
+                            pendingReviews: data.stats.pending || 0,
+                            highRisk: data.stats.highRisk || 0
+                        });
+                    }
+                    
                     setChartData(data.chartData || []);
                 }
             } catch (error) {
-                console.error("Failed to load trends:", error);
+                console.error("Failed to load global stats:", error);
             }
         }
-        fetchTrends();
+        fetchGlobalStats();
     }, []);
 
+    // Ce useEffect ne s'occupe plus QUE du tableau des clients
     useEffect(() => {
         async function fetchCustomers() {
             setLoading(true);
@@ -82,10 +101,9 @@ function CustomerPageContent() {
                             }
                         }
                         
-                        let risk = "Low"; // 💡 Par défaut, le risque est faible
+                        let risk = "Low"; 
                         const parsedScore = getNumericScore(req.score);
                         
-                        // 💡 CORRECTION: Le score de 50+ est High Risk, 20-49 est Medium.
                         if (!isNaN(parsedScore)) {
                             if (parsedScore >= 50) risk = "High";
                             else if (parsedScore >= 20) risk = "Medium";
@@ -107,8 +125,6 @@ function CustomerPageContent() {
                     setCustomers(formattedData);
                     setTotalItems(data.total);
                     setTotalPages(Math.ceil(data.total / LimitPerPage));
-                    if (data.stats) setStats(data.stats);
-
                 }
             } catch (error) {
                 console.error("Error fetching customers:", error);
@@ -201,9 +217,10 @@ function CustomerPageContent() {
     const handlePrevPage = () => { if (currentPage > 1) { setCurrentPage((prev) => prev - 1); } };
     const handleLimitChange = (newLimit: number) => { setLimitPerPage(newLimit); setCurrentPage(1); }
 
-    const TrendIndicator = ({ value, invertColors = false, neutral = false }: { value: number, invertColors?: boolean, neutral?: boolean }) => {
-        const isPositive = value > 0;
-        const isZero = value === 0;
+    const TrendIndicator = ({ value = 0, invertColors = false, neutral = false }: { value?: number, invertColors?: boolean, neutral?: boolean }) => {
+        const safeValue = Number(value) || 0;
+        const isPositive = safeValue > 0;
+        const isZero = safeValue === 0;
         
         let colorClass = "text-gray-500 bg-gray-100";
         if (!isZero) {
@@ -219,7 +236,7 @@ function CustomerPageContent() {
         return (
             <div className={`flex items-center justify-center rounded-sm px-2 py-1 text-[10px] font-bold gap-1 ${colorClass} truncate`}>
                 {isPositive ? <TrendingUp className="w-3 h-3" /> : isZero ? <Minus className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {isPositive ? '+' : ''}{value.toFixed(1)}%
+                {isPositive ? '+' : ''}{safeValue.toFixed(1)}%
             </div>
         );
     };
@@ -304,7 +321,6 @@ function CustomerPageContent() {
                                             >
                                                 <option value="oldest">Oldest First (SLA)</option>
                                                 <option value="newest">Newest First (SLA)</option>
-                                                {/* 💡 CORRECTION DU TEXTE DE FILTRE */}
                                                 <option value="highest_score">Riskiest Profiles (High Score)</option>
                                                 <option value="lowest_score">Safest Profiles (Low Score)</option>
                                             </select>
@@ -333,7 +349,7 @@ function CustomerPageContent() {
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Total Customers</p>
-                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center"><User className="w-5 h-5"/></div>       
+                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center"><User className="w-5 h-5"/></div>      
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.totalCustomers}</p>
@@ -344,7 +360,7 @@ function CustomerPageContent() {
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Verified Profiles</p>
-                            <div className="text-green-700 text-sm font-bold flex items-center justify-center"><ShieldCheck className="w-5 h-5"/></div>       
+                            <div className="text-green-700 text-sm font-bold flex items-center justify-center"><ShieldCheck className="w-5 h-5"/></div>      
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verifiedToday}</p>
@@ -355,7 +371,7 @@ function CustomerPageContent() {
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
-                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center"><ClipboardClock className="w-5 h-5"/></div>       
+                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center"><ClipboardClock className="w-5 h-5"/></div>      
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pendingReviews}</p>
@@ -366,7 +382,7 @@ function CustomerPageContent() {
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
-                            <div className="text-red-700 text-sm font-bold flex items-center justify-center"><TriangleAlert className="w-5 h-5"/></div>       
+                            <div className="text-red-700 text-sm font-bold flex items-center justify-center"><TriangleAlert className="w-5 h-5"/></div>      
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.highRisk}</p>
