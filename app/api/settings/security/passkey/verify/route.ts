@@ -25,35 +25,32 @@ export async function POST(req: Request) {
 
         let verification;
         try {
-            // 💡 VÉRIFICATION CRYPTOGRAPHIQUE ABSOLUE
             verification = await verifyRegistrationResponse({
                 response: body,
                 expectedChallenge: user.currentChallenge,
                 expectedOrigin: origin,
                 expectedRPID: rpID,
+                requireUserVerification: false, // On garde cette souplesse pour Google Password Manager
             });
         } catch (error: any) {
             console.error("Verification failed:", error.message);
-            return NextResponse.json({ error: "Biometric verification failed" }, { status: 400 });
+            return NextResponse.json({ error: error.message }, { status: 400 });
         }
 
         if (verification.verified && verification.registrationInfo) {
-            const { credentialPublicKey, credentialID, counter } = verification.registrationInfo;
-
-            // On convertit les données pour les stocker proprement dans PostgreSQL
-            const credentialIDString = Buffer.from(credentialID).toString('base64url');
+            // 💡 LA CORRECTION EST ICI : Extraction propre selon le standard v10+
+            const { id, publicKey, counter } = verification.registrationInfo.credential;
             
             await prisma.passkey.create({
                 data: {
                     userId: user.id,
-                    credentialID: credentialIDString,
-                    credentialPublicKey: Buffer.from(credentialPublicKey),
+                    credentialID: id, // L'ID est déjà au parfait format (base64url) dans la v10
+                    credentialPublicKey: Buffer.from(publicKey), // On convertit la clé publique en binaire pour Prisma
                     counter: counter,
                     transports: body.response.transports?.join(','),
                 },
             });
 
-            // On efface le défi (il est à usage unique pour contrer les hackers)
             await prisma.user.update({
                 where: { id: user.id },
                 data: { currentChallenge: null },

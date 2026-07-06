@@ -48,6 +48,7 @@ export const authOptions: NextAuthOptions = {
                         publicKey: new Uint8Array(passkey.credentialPublicKey),
                         counter: passkey.counter,
                     },
+                    requireUserVerification: false, // 💡 LA CORRECTION ABSOLUMENT CRUCIALE EST ICI
                 });
             } catch (error) {
                 console.error("Erreur crypto:", error);

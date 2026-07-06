@@ -3,10 +3,8 @@ import { generateRegistrationOptions } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 
-// Configuration de ton application (Relying Party)
 const rpName = "TrustVerify KYC";
 const rpID = "localhost"; // En production, ce sera 'trustverify.com'
-const origin = `http://${rpID}:3000`;
 
 export async function GET() {
     try {
@@ -22,29 +20,29 @@ export async function GET() {
 
         if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-        // On liste les clés déjà enregistrées pour dire à l'appareil de ne pas les recréer
         const excludeCredentials = user.passkeys.map(passkey => ({
             id: passkey.credentialID,
             type: "public-key" as const,
             transports: passkey.transports ? (passkey.transports.split(',') as any[]) : undefined,
         }));
 
-        // 💡 GÉNÉRATION DU DÉFI SÉCURISÉ
+        // 💡 LA CORRECTION EST ICI : On transforme le String en données binaires (Uint8Array)
+        const userIDBuffer = new TextEncoder().encode(user.id);
+
         const options = await generateRegistrationOptions({
             rpName,
             rpID,
-            userID: user.id,
+            userID: userIDBuffer, // 👈 On passe la donnée binaire ici
             userName: user.email,
             userDisplayName: user.fullName,
             attestationType: "none",
             excludeCredentials,
             authenticatorSelection: {
                 residentKey: "preferred",
-                userVerification: "preferred", // Exige FaceID/TouchID/Code PIN
+                userVerification: "preferred", 
             },
         });
 
-        // On sauvegarde le défi dans la BDD pour vérifier la réponse plus tard
         await prisma.user.update({
             where: { id: user.id },
             data: { currentChallenge: options.challenge },
