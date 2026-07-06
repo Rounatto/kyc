@@ -1,8 +1,9 @@
 "use client";
 
-import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock } from "lucide-react";
+import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useState, useEffect } from "react";
+import { startRegistration } from "@simplewebauthn/browser"; // 💡 IMPORT POUR CRÉER LE PASSKEY
 
 export default function SecurSetting() {
     // États pour les valeurs des mots de passe
@@ -10,19 +11,23 @@ export default function SecurSetting() {
     const [newPassword, setNewPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     
-    // États pour afficher/masquer les mots de passe (comme sur la page Register)
+    // États pour afficher/masquer les mots de passe
     const [showCurrentPassword, setShowCurrentPassword] = useState(false);
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-    // États de chargement et de notification
+    // États de chargement et de notification (Mot de passe)
     const [passwordLoading, setPasswordLoading] = useState(false);
     const [passwordStatus, setPasswordStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+    // 💡 ÉTATS POUR LE PASSKEY
+    const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
+    const [passkeyStatus, setPasskeyStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
     const [sessions, setSessions] = useState<any[]>([]);
     const [sessionsLoading, setSessionsLoading] = useState(true);
 
-    // 💡 LOGIQUE DE VALIDATION EN TEMPS RÉEL
+    // LOGIQUE DE VALIDATION EN TEMPS RÉEL (Mot de passe)
     const correctLength = newPassword.length >= 12;
     const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
     const isValid = correctLength && hasSpecialChar;
@@ -48,7 +53,6 @@ export default function SecurSetting() {
         e.preventDefault();
         setPasswordStatus(null);
 
-        // Blocage frontend immédiat si les règles ne sont pas respectées
         if (!isValid) {
             setPasswordStatus({ type: "error", text: "Please meet all password requirements." });
             return;
@@ -69,7 +73,6 @@ export default function SecurSetting() {
             });
 
             const data = await res.json();
-
             if (!res.ok) throw new Error(data.error || "An error occurred");
 
             setPasswordStatus({ type: "success", text: "Password successfully updated!" });
@@ -82,6 +85,53 @@ export default function SecurSetting() {
             setPasswordStatus({ type: "error", text: error.message });
         } finally {
             setPasswordLoading(false);
+        }
+    };
+
+    // 🌟 LA MAGIE : CRÉATION DU PASSKEY (LE CADENAS)
+    const handleRegisterPasskey = async () => {
+        setPasskeyStatus(null);
+        setIsPasskeyLoading(true);
+
+        try {
+            // 1. Demande au serveur de préparer le terrain (Le Défi)
+            const resp = await fetch("/api/settings/security/passkey/generate");
+            if (!resp.ok) {
+                const errorData = await resp.json();
+                throw new Error(errorData.error || "Failed to start passkey registration.");
+            }
+            const options = await resp.json();
+
+            // 2. Le navigateur réveille le capteur biométrique et crée la paire de clés
+            let attResp;
+            try {
+                attResp = await startRegistration(options);
+            } catch (error: any) {
+                if (error.name === "NotAllowedError") {
+                    throw new Error("Registration cancelled by user.");
+                }
+                throw new Error("Biometric sensor error. Please try again.");
+            }
+
+            // 3. On envoie la Clé Publique (La Serrure) au serveur pour la sauvegarder
+            const verificationResp = await fetch("/api/settings/security/passkey/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(attResp),
+            });
+
+            if (!verificationResp.ok) {
+                const errorData = await verificationResp.json();
+                throw new Error(errorData.error || "Failed to verify and save passkey.");
+            }
+
+            setPasskeyStatus({ type: "success", text: "Passkey successfully registered! You can now use it to log in." });
+            setTimeout(() => setPasskeyStatus(null), 5000);
+
+        } catch (error: any) {
+            setPasskeyStatus({ type: "error", text: error.message });
+        } finally {
+            setIsPasskeyLoading(false);
         }
     };
 
@@ -104,7 +154,7 @@ export default function SecurSetting() {
     return (
         <div className="flex flex-col gap-6 w-full">
             
-            {/* BLOC 1 : Gestion Dynamique du Mot de Passe */}
+            {/* BLOC 1 : Mot de Passe */}
             <form onSubmit={handlePasswordUpdate} className="flex flex-col w-full bg-white rounded-sm border border-gray-400 shadow-sm">
                 <div className="border-b border-gray-400 px-5 md:px-6 py-4 flex flex-row items-center gap-3 bg-gray-50/50">
                     <KeyRound className="w-5 h-5 text-gray-500 shrink-0" />
@@ -117,8 +167,6 @@ export default function SecurSetting() {
                     )}
                 </div>
                 <div className="flex flex-col p-5 md:p-6 gap-5">
-                    
-                    {/* Input : Mot de passe actuel */}
                     <div className="flex flex-col gap-1.5 w-full md:w-1/2">
                         <label className="text-xs font-semibold text-gray-700">Current Password</label>
                         <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2 px-3 focus-within:border-blue-500 bg-white transition-colors">
@@ -138,7 +186,6 @@ export default function SecurSetting() {
                     </div>
 
                     <div className="flex flex-row flex-wrap gap-4 md:gap-5 w-full">
-                        {/* Input : Nouveau Mot de passe */}
                         <div className="flex flex-col gap-1.5 flex-1 min-w-[240px]">
                             <label className="text-xs font-semibold text-gray-700">New Password</label>
                             <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2 px-3 focus-within:border-blue-500 bg-white transition-colors">
@@ -157,7 +204,6 @@ export default function SecurSetting() {
                             </div>
                         </div>
 
-                        {/* Input : Confirmer Nouveau Mot de passe */}
                         <div className="flex flex-col gap-1.5 flex-1 min-w-[240px]">
                             <label className="text-xs font-semibold text-gray-700">Confirm New Password</label>
                             <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2 px-3 focus-within:border-blue-500 bg-white transition-colors">
@@ -177,7 +223,6 @@ export default function SecurSetting() {
                         </div>
                     </div>
 
-                    {/* 💡 INDICATEUR DE VALIDATION EN TEMPS RÉEL */}
                     <div className="flex flex-col w-full">
                         <p className={`text-xs font-medium transition-colors ${newPassword.length === 0 ? "text-gray-500" : isValid ? "text-green-600" : "text-red-500"}`}>
                             Must be at least 12 characters with 1 special symbol.
@@ -197,7 +242,37 @@ export default function SecurSetting() {
                 </div>
             </form>
 
-            {/* BLOC 2 : Authentification Double Facteur (2FA) */}
+            {/* 💡 NOUVEAU BLOC 2 : Biometric Security (Passkeys) */}
+            <div className="flex flex-col w-full bg-white rounded-sm border border-gray-400 shadow-sm">
+                <div className="border-b border-gray-400 px-5 md:px-6 py-4 flex flex-row items-center gap-3 bg-gray-50/50">
+                    <Fingerprint className="w-5 h-5 text-gray-500 shrink-0" />
+                    <h3 className="text-base md:text-lg font-bold text-gray-900 flex-1">Biometric Security (Passkeys)</h3>
+                    {passkeyStatus && (
+                        <div className={`flex items-center gap-1.5 text-xs font-semibold ${passkeyStatus.type === "success" ? "text-green-600" : "text-red-600"}`}>
+                            {passkeyStatus.type === "success" ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                            <span className="truncate max-w-[200px] md:max-w-none">{passkeyStatus.text}</span>
+                        </div>
+                    )}
+                </div>
+                <div className="flex flex-row flex-wrap items-center justify-between p-5 md:p-6 gap-5">
+                    <div className="flex flex-col gap-1.5 flex-1 min-w-[280px]">
+                        <p className="text-sm font-bold text-gray-900">Passwordless Authentication</p>
+                        <p className="text-xs text-gray-500 leading-relaxed max-w-xl">
+                            Register your device's fingerprint, Face ID, or Windows Hello. Once registered, you can log in instantly without typing a password. Your biometric data never leaves your device.
+                        </p>
+                    </div>
+                    <button 
+                        onClick={handleRegisterPasskey}
+                        disabled={isPasskeyLoading}
+                        className="w-full sm:w-auto flex items-center justify-center gap-2 text-sm font-bold text-gray-900 bg-white border border-gray-300 px-5 h-10 rounded-sm hover:bg-gray-50 transition-colors shadow-sm shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                        {isPasskeyLoading ? <Loader2 className="w-4 h-4 animate-spin text-gray-500" /> : <Fingerprint className="w-4 h-4 text-gray-600" />}
+                        Add New Passkey
+                    </button>
+                </div>
+            </div>
+
+            {/* BLOC 3 : Authentification Double Facteur (2FA) */}
             <div className="flex flex-row flex-wrap items-center justify-between p-5 md:p-6 bg-white rounded-sm border border-gray-400 shadow-sm gap-5">
                 <div className="flex flex-row gap-4 items-center flex-1 min-w-[280px]">
                     <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0 border border-blue-100">
@@ -216,7 +291,7 @@ export default function SecurSetting() {
                 </button>
             </div>
 
-            {/* BLOC 3 : Sessions Actives & Détection d'Appareil 100% Réelle */}
+            {/* BLOC 4 : Sessions Actives */}
             <div className="flex flex-col w-full bg-white rounded-sm border border-gray-400 shadow-sm">
                 <div className="border-b border-gray-400 px-5 md:px-6 py-4 flex flex-row items-center gap-3 bg-gray-50/50">
                     <Laptop className="w-5 h-5 text-gray-500" />
