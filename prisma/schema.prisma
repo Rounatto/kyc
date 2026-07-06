@@ -9,7 +9,6 @@ datasource db {
   // 💡 L'URL n'est plus requise ici sous Prisma 7+, elle est gérée par ton prisma.config.ts
 }
 
-// Table Utilisateur (Les agents/admins de l'agence)
 // Table Utilisateur
 model User {
   id                   String                @id @default(cuid())
@@ -21,9 +20,13 @@ model User {
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt 
   
+  // 💡 SÉCURITÉ WEBAUTHN : Le défi temporaire envoyé par le serveur pour valider l'empreinte
+  currentChallenge     String?
+  
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
   userSessions         UserSession[]         
+  passkeys             Passkey[]             // 💡 RELATION : Les clés biométriques de l'utilisateur
 }
 
 // Table Principale (Les dossiers clients soumis)
@@ -76,7 +79,7 @@ model AuditLog {
   agent       User?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
 }
 
-// 💡 NOUVEAU [SÉCURITÉ] : Table de traçabilité des appareils et sessions actives
+// Table de traçabilité des appareils et sessions actives
 model UserSession {
   id           String   @id @default(cuid())
   userAgent    String   // Contient la chaîne brute du navigateur pour l'analyse
@@ -89,4 +92,20 @@ model UserSession {
   // Relation vers l'utilisateur propriétaire de la session
   userId       String
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// 💡 NOUVEAU [SÉCURITÉ] : Table pour stocker les clés biométriques (WebAuthn / Passkeys)
+model Passkey {
+  id                  String   @id @default(cuid())
+  credentialID        String   @unique // L'identifiant unique généré par l'appareil
+  credentialPublicKey Bytes    // La clé cryptographique publique (format binaire)
+  counter             Int      // Sécurité anti-clonage (compteur d'utilisation)
+  transports          String?  // Ex: "internal" (FaceID/TouchID), "usb" (Clé Yubikey)
+  
+  // Le propriétaire de cette empreinte
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt           DateTime @default(now())
+  lastUsedAt          DateTime @default(now())
 }
