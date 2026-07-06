@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Eye, Mail, Lock, EyeOff, Fingerprint, CircleQuestionMark } from "lucide-react";
+import { Eye, Mail, Lock, EyeOff, Fingerprint, CircleQuestionMark, Loader2 } from "lucide-react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import LoginBtn from "@/components/login-btn";
+import { startAuthentication } from "@simplewebauthn/browser"; // 💡 Réveille le capteur biométrique
 
 export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
@@ -13,9 +14,11 @@ export default function Login() {
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [rememberMe, setRememberMe] = useState(false);
+    const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
 
     const router = useRouter();
 
+    // 🌟 CONNEXION CLASSIQUE
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError("");
@@ -34,19 +37,67 @@ export default function Login() {
         }
     };
 
+    // 🌟 CONNEXION BIOMÉTRIQUE (PASSKEY)
+    const handlePasskeyLogin = async () => {
+        setError("");
+        if (!email) {
+            setError("Please enter your email to use Passkey.");
+            return;
+        }
+
+        setIsPasskeyLoading(true);
+        try {
+            // 1. On demande un Défi au serveur
+            const resp = await fetch("/api/auth/passkey/generate-login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email })
+            });
+
+            if (!resp.ok) {
+                throw new Error("No passkey found for this email. Setup in Settings first.");
+            }
+
+            const options = await resp.json();
+
+            // 2. Le navigateur réveille Windows Hello / Face ID et signe le défi
+            let authenticationResponse;
+            try {
+                authenticationResponse = await startAuthentication(options);
+            } catch (authErr) {
+                throw new Error("Biometric scan cancelled or failed.");
+            }
+
+            // 3. On envoie la signature au grand videur (NextAuth) via le champ secret "passkeyResponse"
+            const resultat = await signIn("credentials", {
+                email: email,
+                passkeyResponse: JSON.stringify(authenticationResponse), // 💡 On injecte la signature ici
+                redirect: false,
+            });
+
+            if (resultat?.error) {
+                throw new Error("Security verification failed.");
+            } else {
+                router.push("/dashboard");
+            }
+        } catch (err: any) {
+            setError(err.message || "An error occurred with Passkey authentication.");
+        } finally {
+            setIsPasskeyLoading(false);
+        }
+    };
+
     return (
         <div className="flex min-h-screen w-full flex-col justify-between items-center py-3 bg-gray-100">
-            
             <div className="flex flex-row w-full justify-between items-center px-8">
                 <h1 className="text-xl font-bold text-blue-700">TrustVerify</h1>
-                <span className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg" aria-hidden="true">
+                <span className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg">
                     <CircleQuestionMark className="text-gray-500 w-5 h-5" />
                 </span>
             </div>
 
             <div className="flex flex-col items-center justify-center flex-1 w-full gap-4">
                 <div className="flex w-full max-w-md flex-col gap-4 rounded-md bg-white p-8 border border-gray-200 shadow-sm">
-                    
                     <div className="text-center mb-3 text-2xl font-bold">
                         <h1 className="text-2xl font-bold text-gray-900">Welcome Back</h1>
                         <p className="text-sm text-gray-500 m-2">Please enter your details to sign in</p>
@@ -55,7 +106,7 @@ export default function Login() {
                     <form onSubmit={handleSubmit} className="flex flex-col">
                         <label className="text-sm font-bold text-gray-700 mb-1">Email address</label>
                         <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2.5 px-3 mb-4 bg-white focus-within:border-blue-500 transition-colors">
-                            <span className="flex h-5 w-5 items-center justify-center text-gray-400 shrink-0" aria-hidden="true">
+                            <span className="flex h-5 w-5 items-center justify-center text-gray-400 shrink-0">
                                 <Mail className="w-4 h-4" />
                             </span>
                             <input type="email" placeholder="name@company.com" className="w-full outline-none text-sm text-gray-900 bg-transparent" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -68,11 +119,11 @@ export default function Login() {
                             </Link>
                         </div>
                         <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2.5 px-3 mb-4 bg-white focus-within:border-blue-500 transition-colors">
-                            <span className="flex h-5 w-5 items-center justify-center text-gray-400 shrink-0" aria-hidden="true">
+                            <span className="flex h-5 w-5 items-center justify-center text-gray-400 shrink-0">
                                 <Lock className="w-4 h-4" />
                             </span>
-                            <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-900 bg-transparent" value={password} onChange={(e) => setPassword(e.target.value)} required />
-                            <span className="text-gray-400 cursor-pointer hover:text-gray-600 transition-colors shrink-0" aria-hidden="true" onClick={() => setShowPassword(!showPassword)}>
+                            <input type={showPassword ? "text" : "password"} placeholder="••••••••" className="w-full outline-none text-sm text-gray-900 bg-transparent" value={password} onChange={(e) => setPassword(e.target.value)} />
+                            <span className="text-gray-400 cursor-pointer hover:text-gray-600 transition-colors shrink-0" onClick={() => setShowPassword(!showPassword)}>
                                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </span>
                         </div>
@@ -84,7 +135,6 @@ export default function Login() {
 
                         {error && <div className="p-3 mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-sm font-medium">{error}</div>}
                         
-                        {/* Composant bouton (Je suppose qu'il contient un <button type="submit">) */}
                         <LoginBtn />
 
                         <div className="flex flex-row items-center my-5 gap-3 justify-center opacity-70">
@@ -94,7 +144,6 @@ export default function Login() {
                         </div>
 
                         <div className="flex flex-row items-center gap-4 w-full">
-                            {/* 💡 CORRECTION ICI : <button type="button"> avec la fonction signIn */}
                             <button 
                                 type="button" 
                                 onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
@@ -109,14 +158,19 @@ export default function Login() {
                                 <span className="ml-2 text-sm font-bold text-gray-700">Google</span>
                             </button>
                             
-                            {/* Bouton Passkey (Désactivé pour l'instant avec not-allowed) */}
+                            {/* 💡 BOUTON PASSKEY ACTIF */}
                             <button 
                                 type="button"
-                                disabled
-                                className="flex items-center justify-center py-2 px-3 border border-gray-200 bg-gray-50 rounded-sm cursor-not-allowed w-full"
+                                onClick={handlePasskeyLogin}
+                                disabled={isPasskeyLoading}
+                                className="flex items-center justify-center py-2 px-3 border border-gray-300 bg-white rounded-sm cursor-pointer hover:bg-gray-50 transition duration-200 w-full shadow-sm disabled:opacity-50"
                             >
-                                <Fingerprint className="h-5 w-5 text-gray-400 shrink-0" />
-                                <span className="ml-2 text-sm font-bold text-gray-400">Passkey</span>
+                                {isPasskeyLoading ? (
+                                    <Loader2 className="h-5 w-5 text-gray-700 animate-spin shrink-0" />
+                                ) : (
+                                    <Fingerprint className="h-5 w-5 text-gray-700 shrink-0" />
+                                )}
+                                <span className="ml-2 text-sm font-bold text-gray-700">Passkey</span>
                             </button>
                         </div>
 

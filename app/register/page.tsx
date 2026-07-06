@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, Scale, Fingerprint } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react"; // 💡 IMPORT POUR GOOGLE AUTH
+import { signIn } from "next-auth/react"; 
 
 export default function Register() {
     const [showPassword, setShowPassword] = useState(false);
@@ -87,9 +87,9 @@ export default function Register() {
                         <p className="text-sm text-gray-500 mt-1">Start your 14-day premium trial today.</p>
                     </div>
 
-                    {/* 💡 NOUVEAU : BOUTONS SOCIAL AUTH */}
                     <div className="flex flex-col gap-3 mb-6">
                         <button 
+                            type="button"
                             onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
                             className="flex items-center justify-center gap-3 w-full border border-gray-300 bg-white text-gray-700 py-2.5 px-4 rounded-sm hover:bg-gray-50 transition-colors text-sm font-bold cursor-pointer"
                         >
@@ -102,11 +102,15 @@ export default function Register() {
                             Continue with Google
                         </button>
                         <button 
-                            className="flex items-center justify-center gap-3 w-full border border-gray-300 bg-gray-50 text-gray-400 py-2.5 px-4 rounded-sm text-sm font-bold cursor-not-allowed"
-                            title="Passkeys will be available in the next phase"
+                            type="button"
+                            className="flex items-center justify-center gap-3 w-full border border-gray-300 bg-gray-50 text-gray-400 py-2.5 px-4 rounded-sm text-sm font-bold cursor-not-allowed group relative"
                         >
                             <Fingerprint className="w-5 h-5" />
-                            Continue with Passkey (Coming Soon)
+                            Continue with Passkey
+                            {/* 💡 Tooltip pour expliquer à l'utilisateur */}
+                            <span className="absolute hidden group-hover:block bottom-full mb-2 w-max px-3 py-1 bg-gray-800 text-white text-xs rounded-sm shadow-md">
+                                Set up your Passkey in Settings after registration
+                            </span>
                         </button>
                     </div>
 
