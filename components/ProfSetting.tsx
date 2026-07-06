@@ -5,23 +5,18 @@ import { useSession } from "next-auth/react";
 import { useState, useEffect, useRef } from "react";
 
 export default function ProfSetting() {
-    // Récupération de la session active et de la fonction de rafraîchissement NextAuth
     const { data: session, update } = useSession();
 
-    // États locaux pour gérer les champs du formulaire de manière dynamique
     const [fullName, setFullName] = useState("");
     const [companyName, setCompanyName] = useState("");
     
-    // États pour la gestion de l'avatar et de la prévisualisation fluide
     const [avatarFile, setAvatarFile] = useState<File | null>(null);
     const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // États de synchronisation visuelle (animation de chargement, erreurs, succès)
     const [isSaving, setIsSaving] = useState(false);
     const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error", text: string } | null>(null);
 
-    // Remplissage automatique des champs dès que la session NextAuth est chargée
     useEffect(() => {
         if (session?.user) {
             setFullName(session.user.name || "");
@@ -30,17 +25,15 @@ export default function ProfSetting() {
         }
     }, [session]);
 
-    // Déclenche l'explorateur de fichiers natif lors du clic sur le crayon
     const handleAvatarClick = () => {
         fileInputRef.current?.click();
     };
 
-    // Capture le fichier sélectionné et génère une URL locale pour l'afficher instantanément
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            if (file.size > 5 * 1024 * 1024) { // Limite stricte de 5Mo
-                setStatusMessage({ type: "error", text: "L'image est trop volumineuse (Max 5Mo)." });
+            if (file.size > 5 * 1024 * 1024) { 
+                setStatusMessage({ type: "error", text: "Image is too large (Max 5MB)." });
                 return;
             }
             setAvatarFile(file);
@@ -49,7 +42,6 @@ export default function ProfSetting() {
         }
     };
 
-    // Bouton Discard : Annule les modifications en cours et restaure les valeurs de la BD
     const handleDiscard = () => {
         if (session?.user) {
             setFullName(session.user.name || "");
@@ -60,7 +52,6 @@ export default function ProfSetting() {
         }
     };
 
-    // Envoi des données modifiées à l'API via FormData
     const handleSave = async () => {
         setIsSaving(true);
         setStatusMessage(null);
@@ -73,16 +64,16 @@ export default function ProfSetting() {
                 formData.append("avatar", avatarFile);
             }
 
-            const response = await fetch("/api/profile", {
+            // 💡 CORRECTION DU LIEN DE L'API ICI
+            const response = await fetch("/api/settings/profile", {
                 method: "POST",
                 body: formData,
             });
 
             const data = await response.json();
 
-            if (!response.ok) throw new Error(data.error || "Échec de la mise à jour");
+            if (!response.ok) throw new Error(data.error || "Failed to update profile");
 
-            // Synchro magique : On pousse les nouvelles données dans le jeton NextAuth
             await update({
                 ...session,
                 user: {
@@ -93,14 +84,13 @@ export default function ProfSetting() {
                 }
             });
 
-            setStatusMessage({ type: "success", text: "Profil mis à jour avec succès !" });
+            setStatusMessage({ type: "success", text: "Profile updated successfully!" });
             
-            // Dissimulation automatique du bandeau de succès après 3 secondes
             setTimeout(() => setStatusMessage(null), 3000);
             
         } catch (error: any) {
             console.error(error);
-            setStatusMessage({ type: "error", text: error.message || "Une erreur est survenue." });
+            setStatusMessage({ type: "error", text: error.message || "An error occurred." });
         } finally {
             setIsSaving(false);
         }
@@ -138,14 +128,14 @@ export default function ProfSetting() {
                         <button 
                             onClick={handleAvatarClick}
                             className="absolute -bottom-1.5 -right-1.5 bg-blue-700 text-white p-1.5 rounded-full border-2 border-white hover:bg-blue-800 transition-all shadow-sm z-10 cursor-pointer hover:scale-105"
-                            title="Modifier la photo"
+                            title="Edit picture"
                         >
                             <Pencil className="w-3 h-3 md:w-3.5 md:h-3.5" />
                         </button>
                     </div>
                     <div className="flex flex-col">
                         <p className="text-sm font-semibold text-gray-900">Profile Picture</p>
-                        <p className="text-xs text-gray-500 mt-0.5">JPG, GIF or PNG. Max size of 5Mo.</p>
+                        <p className="text-xs text-gray-500 mt-0.5">JPG, GIF or PNG. Max size of 5MB.</p>
                     </div>
                 </div>
 

@@ -10,19 +10,20 @@ datasource db {
 }
 
 // Table Utilisateur (Les agents/admins de l'agence)
+// Table Utilisateur
 model User {
   id                   String                @id @default(cuid())
   fullName             String
-  companyName          String
+  companyName          String?               // 💡 DEVENU OPTIONNEL POUR GOOGLE
   email                String                @unique
-  password             String
+  password             String?               // 💡 DEVENU OPTIONNEL POUR GOOGLE
   avatarUrl            String?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt 
   
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
-  userSessions         UserSession[]         // 💡 AJOUT : Ligne indispensable pour lier l'utilisateur à ses appareils
+  userSessions         UserSession[]         
 }
 
 // Table Principale (Les dossiers clients soumis)

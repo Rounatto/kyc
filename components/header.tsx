@@ -4,17 +4,16 @@ import { Search, CircleQuestionMark, Bell, LogOut, User, Loader2 } from "lucide-
 import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
-import Image from "next/image"; // Ajout pour optimiser les images Next.js
 
 export default function Header() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-    // Récupération de la session
+    // Récupération de la session en temps réel
     const { data: session, status } = useSession();
     
-    // Valeurs par défaut sécurisées
-    const userName = session?.user?.name || "Agent de Conformité";
-    const userEmail = session?.user?.email || "Chargement...";
+    // Valeurs par défaut sécurisées et traduites en anglais Business
+    const userName = session?.user?.name || "Compliance Officer";
+    const userEmail = session?.user?.email || "Loading...";
     const userInitial = userName.charAt(0).toUpperCase();
     const userImage = session?.user?.image;
 
@@ -39,7 +38,6 @@ export default function Header() {
                 <button className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer">
                     <span className="sr-only">Notifications</span>
                     <Bell className="w-5 h-5" />
-                    {/* Petit point rouge pour simuler une alerte */}
                     <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
                 </button>
                 <button className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer mr-1">
@@ -48,7 +46,7 @@ export default function Header() {
                 </button>
                 
                 <div className="relative">
-                    {/* Avatar cliquable */}
+                    {/* Avatar cliquable connecté à Supabase & NextAuth */}
                     <div 
                         onClick={() => setIsMenuOpen(!isMenuOpen)} 
                         className={`w-10 h-10 md:mr-3 ${userImage ? 'bg-transparent' : 'bg-blue-100 border border-blue-200'} rounded-xl overflow-hidden cursor-pointer flex items-center justify-center shadow-sm hover:shadow-md transition-shadow relative`}
@@ -65,7 +63,6 @@ export default function Header() {
                     {/* Menu déroulant */}
                     {isMenuOpen && (
                         <>
-                            {/* Couche invisible pour fermer le menu quand on clique à côté */}
                             <div className="fixed inset-0 z-40" onClick={() => setIsMenuOpen(false)}></div>
                             <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-100 rounded-xl shadow-lg py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
                                 <div className="px-4 py-3 border-b border-gray-100 mb-1">
