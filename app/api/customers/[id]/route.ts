@@ -2,15 +2,14 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendKYCEmail } from "@/lib/mail";
 import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN DE SÉCURITÉ
-import { authoptions } from "@/api/auth/[...nextauth]/route"; // 💡 LES OPTIONS D'AUTHENTIFICATION
-
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 export async function GET(
     req: Request, 
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
-        const session = await getServerSession(authoptions);
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email) {
             console.error("🔴 Sécurité : Tentative d'accès anonyme bloquée sur GET /customers/[id]");
             return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });
@@ -45,7 +44,7 @@ export async function PATCH(
 ) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
-        const session = await getServerSession();
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email || !(session.user as any).id) {
             console.error("🔴 Sécurité : Tentative de modification bloquée sur PATCH /customers/[id]");
             return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });

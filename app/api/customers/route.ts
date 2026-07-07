@@ -5,8 +5,7 @@ import kycRules from "@/lib/kyc-rules.json";
 import Tesseract from "tesseract.js";
 import { z } from "zod"; 
 import { getServerSession } from "next-auth/next"; // 💡 IMPORT VITAL : LE GARDIEN
-import { authoptions } from "@/api/auth/[...nextauth]/route"; // 💡 IMPORT VITAL : LES OPTIONS D'AUTHENTIFICATION
-
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 // =====================================================================
 // 🛡️ SCHÉMA DE SÉCURITÉ ZOD (LE BOUCLIER DE L'API)
 // =====================================================================
@@ -104,7 +103,7 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
 export async function GET(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
-        const session = await getServerSession(authoptions);
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email || !(session.user as any).id) {
             console.error("🔴 Sécurité : Tentative d'accès non autorisée à l'API GET /customers");
             return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
@@ -203,7 +202,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
-        const session = await getServerSession();
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email || !(session.user as any).id) {
             console.error("🔴 Sécurité : Tentative d'écriture non autorisée à l'API POST /customers");
             return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
@@ -218,7 +217,9 @@ export async function POST(req: Request) {
         const validationResult = customerRegistrationSchema.safeParse(body);
         
         if (!validationResult.success) {
-            const errorMessages = validationResult.error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(' | ');
+            const errorMessages = validationResult.error.issues
+                .map((err) => `${err.path.map(String).join('.')}: ${err.message}`)
+                .join(' | ');
             console.error("❌ Zod Security Block:", errorMessages);
             return NextResponse.json({ error: `Security Validation Failed: ${errorMessages}` }, { status: 400 });
         }

@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN
-import { authoptions } from "@/api/auth/[...nextauth]/route"; // 💡 LES OPTIONS D'AUTHENTIFICATION
+import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LES OPTIONS D'AUTHENTIFICATION
 
 export async function GET(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DES STATISTIQUES
-        const session = await getServerSession(authoptions);
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email) {
             console.error("🔴 Sécurité : Tentative d'accès anonyme bloquée sur GET /dashboard/stats");
             return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });

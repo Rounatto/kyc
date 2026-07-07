@@ -1,7 +1,6 @@
 import { createUploadthing, type FileRouter } from "uploadthing/next";
 import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN
-import { authoptions } from "@/api/auth/[...nextauth]/route"; // 💡 LES OPTIONS D'AUTHENTIFICATION
-
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 const f = createUploadthing();
 
 export const ourFileRouter = {
@@ -9,7 +8,7 @@ export const ourFileRouter = {
   kycDocumentUploader: f({ image: { maxFileSize: "4MB", maxFileCount: 1 } })
     // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'UPLOAD
     .middleware(async ({ req }) => {
-      const session = await getServerSession(authoptions);
+      const session = await getServerSession(authOptions);
       if (!session?.user?.email || !(session.user as any).id) {
           console.error("🔴 Sécurité : Tentative d'upload de document bloquée");
           throw new Error("Unauthorized access. Valid session required to upload files.");
