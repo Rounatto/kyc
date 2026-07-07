@@ -5,6 +5,7 @@ import kycRules from "@/lib/kyc-rules.json";
 import Tesseract from "tesseract.js";
 import { z } from "zod"; 
 import { getServerSession } from "next-auth/next"; // 💡 IMPORT VITAL : LE GARDIEN
+import { authoptions } from "@/api/auth/[...nextauth]/route"; // 💡 IMPORT VITAL : LES OPTIONS D'AUTHENTIFICATION
 
 // =====================================================================
 // 🛡️ SCHÉMA DE SÉCURITÉ ZOD (LE BOUCLIER DE L'API)
@@ -103,7 +104,7 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
 export async function GET(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
-        const session = await getServerSession();
+        const session = await getServerSession(authoptions);
         if (!session?.user?.email || !(session.user as any).id) {
             console.error("🔴 Sécurité : Tentative d'accès non autorisée à l'API GET /customers");
             return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
