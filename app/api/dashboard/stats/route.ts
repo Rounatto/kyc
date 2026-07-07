@@ -1,16 +1,23 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN
 
 export async function GET(req: Request) {
     try {
+        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DES STATISTIQUES
+        const session = await getServerSession();
+        if (!session?.user?.email) {
+            console.error("🔴 Sécurité : Tentative d'accès anonyme bloquée sur GET /dashboard/stats");
+            return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
+        }
+
         const { searchParams } = new URL(req.url);
         const range = searchParams.get("range") || "30d";
 
-        // 💡 NOUVEAU [DYNAMIQUE] : Gestion globale du filtre temporel
         let days = 30;
         if (range === "7d") days = 7;
         else if (range === "90d") days = 90;
-        else if (range === "all") days = 3650; // 10 ans pour "All time"
+        else if (range === "all") days = 3650; 
 
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - days);
@@ -18,7 +25,7 @@ export async function GET(req: Request) {
         const prevStartDate = new Date(startDate);
         prevStartDate.setDate(prevStartDate.getDate() - days);
 
-        // 1. Récupération des KPIs de la période actuelle (ajout des rejected)
+        // 1. Récupération des KPIs
         const [total, verified, rejected, pending, highRisk] = await Promise.all([
             prisma.verificationRequest.count({ where: { submittedAt: { gte: startDate } } }),
             prisma.verificationRequest.count({ where: { status: "verified", submittedAt: { gte: startDate } } }),
@@ -27,21 +34,18 @@ export async function GET(req: Request) {
             prisma.verificationRequest.count({ where: { riskLevel: "High", submittedAt: { gte: startDate } } }),
         ]);
 
-        // 2. Récupération des KPIs de la période précédente (pour les tendances / flèches rouges et vertes)
         const [prevTotal, prevVerified, prevHighRisk] = await Promise.all([
             prisma.verificationRequest.count({ where: { submittedAt: { gte: prevStartDate, lt: startDate } } }),
             prisma.verificationRequest.count({ where: { status: "verified", submittedAt: { gte: prevStartDate, lt: startDate } } }),
             prisma.verificationRequest.count({ where: { riskLevel: "High", submittedAt: { gte: prevStartDate, lt: startDate } } }),
         ]);
 
-        // 3. Fonction mathématique pour le pourcentage de variation (Delta)
         const calcDelta = (curr: number, prev: number) => {
             if (prev === 0) return curr > 0 ? 100 : 0;
             return (((curr - prev) / prev) * 100);
         };
 
-        // 💡 NOUVEAU [DYNAMIQUE] : 4. Calcul du VRAI Avg Processing Time depuis Prisma
-        // On récupère tous les dossiers résolus (vérifiés ou rejetés) de la période
+        // 2. Calcul du VRAI Avg Processing Time
         const resolvedRequests = await prisma.verificationRequest.findMany({
             where: {
                 status: { in: ["verified", "rejected"] },
@@ -52,43 +56,40 @@ export async function GET(req: Request) {
 
         let totalSeconds = 0;
         resolvedRequests.forEach(req => {
-            // Calcul de la différence entre l'heure de soumission et l'heure de décision
             totalSeconds += (req.updatedAt.getTime() - req.submittedAt.getTime()) / 1000;
         });
         
-        // Si aucun dossier n'est résolu, on renvoie 0. Sinon la moyenne exacte à 1 décimale.
         const avgProcessingTime = resolvedRequests.length > 0 
             ? (totalSeconds / resolvedRequests.length).toFixed(1) 
             : 0;
 
-        // 5. Construction des données du graphique (AreaChart) - Les 7 derniers jours
-        const chartData = [];
+        // 💡 OPTIMISATION : Suppression de la boucle N+1 pour le Chart
         const today = new Date();
-        
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(today.getDate() - 6);
+        sevenDaysAgo.setHours(0, 0, 0, 0);
+
+        // On fait 2 requêtes globales au lieu de 14 petites requêtes
+        const recentApproved = await prisma.verificationRequest.findMany({
+            where: { status: "verified", updatedAt: { gte: sevenDaysAgo } },
+            select: { updatedAt: true }
+        });
+
+        const recentHighRisk = await prisma.verificationRequest.findMany({
+            where: { riskLevel: "High", submittedAt: { gte: sevenDaysAgo } },
+            select: { submittedAt: true }
+        });
+
+        // On regroupe les données par jour en Javascript (infiniment plus rapide)
+        const chartData = [];
         for (let i = 6; i >= 0; i--) {
             const dateCursor = new Date(today);
             dateCursor.setDate(today.getDate() - i);
-            dateCursor.setHours(0, 0, 0, 0);
-
-            const nextDay = new Date(dateCursor);
-            nextDay.setDate(dateCursor.getDate() + 1);
-
-            const approvedCount = await prisma.verificationRequest.count({
-                where: {
-                    status: "verified",
-                    updatedAt: { gte: dateCursor, lt: nextDay }
-                }
-            });
-
-            const riskCount = await prisma.verificationRequest.count({
-                where: {
-                    riskLevel: "High",
-                    submittedAt: { gte: dateCursor, lt: nextDay }
-                }
-            });
-
             const dayName = dateCursor.toLocaleDateString('en-US', { weekday: 'short' });
-            
+
+            const approvedCount = recentApproved.filter(r => r.updatedAt.toDateString() === dateCursor.toDateString()).length;
+            const riskCount = recentHighRisk.filter(r => r.submittedAt.toDateString() === dateCursor.toDateString()).length;
+
             chartData.push({
                 name: dayName,
                 Approved: approvedCount,
@@ -96,7 +97,6 @@ export async function GET(req: Request) {
             });
         }
 
-        // 6. Retour de l'objet global standardisé pour TOUTES les pages
         return NextResponse.json({
             stats: { total, verified, rejected, pending, highRisk },
             trends: {
