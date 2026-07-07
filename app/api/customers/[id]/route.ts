@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendKYCEmail } from "@/lib/mail";
+import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN DE SÉCURITÉ
 
 export async function GET(
     req: Request, 
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
+        const session = await getServerSession();
+        if (!session?.user?.email) {
+            console.error("🔴 Sécurité : Tentative d'accès anonyme bloquée sur GET /customers/[id]");
+            return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });
+        }
+
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
@@ -35,6 +43,17 @@ export async function PATCH(
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
+        const session = await getServerSession();
+        if (!session?.user?.email || !(session.user as any).id) {
+            console.error("🔴 Sécurité : Tentative de modification bloquée sur PATCH /customers/[id]");
+            return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });
+        }
+
+        // 💡 IDENTITÉ INFALSIFIABLE DE L'AGENT DEPUIS LE SERVEUR
+        const serverAgentId = (session.user as any).id;
+        const serverAgentName = session.user.name || "Unknown Agent";
+
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
@@ -48,7 +67,8 @@ export async function PATCH(
                     auditLogs: {
                         create: {
                             action: "FLAGGED",
-                            details: `Profile manually flagged for internal security audit. Immediate attention required.`,
+                            details: `Profile manually flagged for internal security audit by ${serverAgentName}. Immediate attention required.`,
+                            agentId: serverAgentId // 👈 IDENTITÉ SERVEUR
                         }
                     }
                 }
@@ -57,27 +77,22 @@ export async function PATCH(
         }
 
         // --- Logique Standard Approve/Reject ---
-        const { status, agentId, rejectionReason } = body;
+        // ❌ agentId EST SUPPRIMÉ DU BODY. Le client n'a plus le droit de dicter son identité.
+        const { status, rejectionReason } = body; 
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
             return NextResponse.json({ message: "Invalid status value." }, { status: 400 });
         }
 
-        let agentName = "System";
-        if (agentId) {
-            const agent = await prisma.user.findUnique({ where: { id: agentId } });
-            if (agent) agentName = agent.fullName;
-        }
-
         let actionName = "UPDATED";
-        let logDetails = `Status changed to ${status} by ${agentName}.`;
+        let logDetails = `Status changed to ${status} by ${serverAgentName}.`;
 
         if (status === "verified") {
             actionName = "APPROVED";
-            logDetails = `KYC Profile manually approved by ${agentName}.`;
+            logDetails = `KYC Profile manually approved by ${serverAgentName}.`;
         } else if (status === "rejected") {
             actionName = "REJECTED";
-            logDetails = `KYC Profile rejected by ${agentName}.${rejectionReason ? ` Reason: ${rejectionReason}` : ""}`;
+            logDetails = `KYC Profile rejected by ${serverAgentName}.${rejectionReason ? ` Reason: ${rejectionReason}` : ""}`;
         }
         
         const updatedCustomer = await prisma.verificationRequest.update({
@@ -88,7 +103,7 @@ export async function PATCH(
                     create: {
                         action: actionName,
                         details: logDetails,
-                        agentId: agentId || null
+                        agentId: serverAgentId // 👈 IDENTITÉ SERVEUR INFALSIFIABLE
                     }
                 }
             },
