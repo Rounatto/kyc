@@ -3,7 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";
-import { verifyAuthenticationResponse } from "@simplewebauthn/server"; // 💡 L'outil qui lit l'empreinte
+import { verifyAuthenticationResponse } from "@simplewebauthn/server";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -13,7 +13,7 @@ export const authOptions: NextAuthOptions = {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
         rememberMe: { label: "Remember Me", type: "checkbox" },
-        passkeyResponse: { label: "Passkey Response", type: "text" } // 💡 NOUVEAU : Le champ secret pour la biométrie
+        passkeyResponse: { label: "Passkey Response", type: "text" }
       },
       async authorize(credentials): Promise<any> { 
         if (!credentials?.email) return null;
@@ -31,24 +31,24 @@ export const authOptions: NextAuthOptions = {
 
             const response = JSON.parse(credentials.passkeyResponse);
             
-            // On cherche la clé exacte utilisée par l'appareil parmi celles enregistrées
             const passkey = user.passkeys.find(pk => pk.credentialID === response.id);
             if (!passkey) throw new Error("Clé biométrique non reconnue");
 
             let verification;
             try {
-                // NextAuth fait les mathématiques complexes ici
                 verification = await verifyAuthenticationResponse({
                     response,
                     expectedChallenge: user.currentChallenge,
-                    expectedOrigin: "http://localhost:3000",
-                    expectedRPID: "localhost",
+                    // 💡 SÉCURITÉ : Variables dynamiques pour la production
+                    expectedOrigin: process.env.WEBAUTHN_ORIGIN || "http://localhost:3000",
+                    expectedRPID: process.env.WEBAUTHN_RPID || "localhost",
                     credential: {
                         id: passkey.credentialID,
                         publicKey: new Uint8Array(passkey.credentialPublicKey),
                         counter: passkey.counter,
                     },
-                    requireUserVerification: false, // 💡 LA CORRECTION ABSOLUMENT CRUCIALE EST ICI
+                    // 💡 SÉCURITÉ : Exigence biométrique stricte restaurée (Standard 9.9/10)
+                    requireUserVerification: true, 
                 });
             } catch (error) {
                 console.error("Erreur crypto:", error);
@@ -56,7 +56,6 @@ export const authOptions: NextAuthOptions = {
             }
 
             if (verification.verified) {
-                // On met à jour la sécurité anti-clonage et on détruit le défi
                 await prisma.passkey.update({
                     where: { credentialID: passkey.credentialID },
                     data: { counter: verification.authenticationInfo.newCounter }
@@ -66,7 +65,15 @@ export const authOptions: NextAuthOptions = {
                     data: { currentChallenge: null }
                 });
 
-                return { id: user.id, email: user.email, name: user.fullName, image: user.avatarUrl, companyName: user.companyName };
+                // 💡 INJECTION B2B
+                return { 
+                    id: user.id, 
+                    email: user.email, 
+                    name: user.fullName, 
+                    image: user.avatarUrl, 
+                    companyId: user.companyId, 
+                    role: user.role 
+                };
             }
             return null;
         }
@@ -76,12 +83,14 @@ export const authOptions: NextAuthOptions = {
             const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
             if (!isPasswordValid) return null;
 
+            // 💡 INJECTION B2B
             return { 
                 id: user.id, 
                 email: user.email, 
                 name: user.fullName, 
                 image: user.avatarUrl, 
-                companyName: user.companyName, 
+                companyId: user.companyId, 
+                role: user.role,
                 rememberMe: credentials.rememberMe === "true" 
             };
         }
@@ -98,32 +107,50 @@ export const authOptions: NextAuthOptions = {
   ],
   session: {
     strategy: "jwt" as const,
-    maxAge: 15 * 24 * 60 * 60,
+    maxAge: 15 * 24 * 60 * 60, // 15 jours
   },
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
         if (!user.email) return false;
         const existingUser = await prisma.user.findUnique({ where: { email: user.email } });
+        
         if (!existingUser) {
-          await prisma.user.create({
-            data: { email: user.email, fullName: user.name || "Google User", avatarUrl: user.image }
+          // 💡 TRANSACTION B2B POUR GOOGLE OAUTH
+          await prisma.$transaction(async (tx) => {
+            const newCompany = await tx.company.create({
+                data: { name: `${user.name || "Google User"} Workspace`, plan: "trial" }
+            });
+            await tx.user.create({
+              data: { 
+                  email: user.email as string, 
+                  fullName: user.name || "Google User", 
+                  avatarUrl: user.image,
+                  companyId: newCompany.id,
+                  role: "COMPANY_ADMIN"
+              }
+            });
           });
         }
       }
       return true;
     },
-    async jwt({ token, user, trigger, session }) {
-      if (user) {
-        token.id = user.id;
-        token.name = user.name;
-        token.image = user.image;
-        token.companyName = (user as any).companyName;
+    async jwt({ token, user, trigger, session, account }) {
+      // 💡 Synchronisation robuste avec la base de données à la connexion
+      if (account || user) {
+        const dbUser = await prisma.user.findUnique({ where: { email: token.email as string } });
+        if (dbUser) {
+            token.id = dbUser.id;
+            token.name = dbUser.fullName;
+            token.image = dbUser.avatarUrl;
+            token.companyId = dbUser.companyId; // Propagation Multi-Tenant
+            token.role = dbUser.role;           // Propagation RBAC
+        }
       }
+      
       if (trigger === "update" && session?.user) {
         token.name = session.user.name;
         token.image = session.user.image;
-        token.companyName = session.user.companyName;
       }
       return token;
     },
@@ -132,7 +159,10 @@ export const authOptions: NextAuthOptions = {
         session.user.id = token.id as string;
         session.user.name = token.name;
         session.user.image = token.image as string;
-        (session.user as any).companyName = token.companyName as string;
+        
+        // 💡 Le serveur expose les métadonnées B2B à l'application
+        (session.user as any).companyId = token.companyId as string;
+        (session.user as any).role = token.role as string;
       }
       return session;
     }
