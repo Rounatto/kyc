@@ -144,7 +144,9 @@ export default function HeaderCustomers() {
                                                 {req.cin && (
                                                     <span>• CIN: {highlightText(req.cin, searchTerm)}</span>
                                                 )}
-                                                {/* Note : Si tu veux aussi afficher le téléphone, on l'ajouterait ici de la même manière */}
+                                                {req.phone && (
+                                                    <span>• Phone: {highlightText(req.phone, searchTerm)}</span>
+                                                )}
                                             </div>
                                         </li>
                                     ))}

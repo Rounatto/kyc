@@ -3,7 +3,8 @@ import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
 import kycRules from "@/lib/kyc-rules.json";
 import Tesseract from "tesseract.js";
-import { z } from "zod"; // 💡 IMPORTATION DE ZOD
+import { z } from "zod"; 
+import { getServerSession } from "next-auth/next"; // 💡 IMPORT VITAL : LE GARDIEN
 
 // =====================================================================
 // 🛡️ SCHÉMA DE SÉCURITÉ ZOD (LE BOUCLIER DE L'API)
@@ -17,10 +18,10 @@ const customerRegistrationSchema = z.object({
     nationality: z.string().min(1, "La nationalité est requise"),
     dateOfBirth: z.string().optional().or(z.literal('')),
     phoneNumber: z.string().optional().or(z.literal('')),
-    userId: z.string().min(1, "Erreur d'authentification : ID Agent manquant"),
+    // ❌ userId SUPPRIMÉ ICI : Le client n'a plus le droit de nous dire qui il est.
     idCardUrl: z.string().url("L'URL de la carte d'identité est invalide ou corrompue"),
     selfieUrl: z.string().url("L'URL du selfie est invalide ou corrompue"),
-    biometricScore: z.number().nullable().optional() // Accepte un nombre ou null
+    biometricScore: z.number().nullable().optional() 
 });
 
 // =====================================================================
@@ -101,6 +102,13 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
 // =====================================================================
 export async function GET(req: Request) {
     try {
+        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
+        const session = await getServerSession();
+        if (!session?.user?.email || !(session.user as any).id) {
+            console.error("🔴 Sécurité : Tentative d'accès non autorisée à l'API GET /customers");
+            return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
+        }
+
         const { searchParams } = new URL(req.url);
         const search = searchParams.get("search") || "";
         const page = parseInt(searchParams.get("page") || "1");
@@ -193,26 +201,34 @@ export async function GET(req: Request) {
 // =====================================================================
 export async function POST(req: Request) {
     try {
+        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
+        const session = await getServerSession();
+        if (!session?.user?.email || !(session.user as any).id) {
+            console.error("🔴 Sécurité : Tentative d'écriture non autorisée à l'API POST /customers");
+            return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
+        }
+        
+        // IDENTITÉ INFALSIFIABLE DE L'AGENT
+        const serverAgentId = (session.user as any).id;
+
         const body = await req.json();
         
         // 💡 VERIFICATION ZOD AVANT TOUTE LOGIQUE MÉTIER
         const validationResult = customerRegistrationSchema.safeParse(body);
         
         if (!validationResult.success) {
-            // Si la requête est corrompue, on stoppe tout et on renvoie les erreurs détaillées
             const errorMessages = validationResult.error.errors.map(err => `${err.path.join('.')}: ${err.message}`).join(' | ');
             console.error("❌ Zod Security Block:", errorMessages);
             return NextResponse.json({ error: `Security Validation Failed: ${errorMessages}` }, { status: 400 });
         }
 
-        // Si la validation réussit, on extrait les données propres et sécurisées
-        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, userId, idCardUrl, selfieUrl, biometricScore } = validationResult.data;
+        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardUrl, selfieUrl, biometricScore } = validationResult.data;
         
         console.log("🤖 Score Biométrique reçu du navigateur :", biometricScore);
         
-        const agent = await prisma.user.findUnique({ where: { id: userId } });
+        const agent = await prisma.user.findUnique({ where: { id: serverAgentId } });
         if (!agent) {
-            return NextResponse.json({ error: "Agent session invalid." }, { status: 401 });
+            return NextResponse.json({ error: "Agent session invalid or revoked." }, { status: 401 });
         }
 
         const existingRecord = await prisma.verificationRequest.findFirst({
@@ -373,7 +389,7 @@ export async function POST(req: Request) {
                 nationality,
                 dateOfBirth,
                 phoneNumber,
-                userId,
+                userId: serverAgentId, // 👈 Identité blindée
                 idCardUrl,
                 selfieUrl,
                 status: "pending", 
@@ -385,7 +401,7 @@ export async function POST(req: Request) {
                     create: {
                         action: "CREATED",
                         details: `KYC Pipeline initialized. Modules processed: Biometrics, Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
-                        agentId: userId 
+                        agentId: serverAgentId // 👈 Audit Log infalsifiable
                     }
                 }
             },
