@@ -118,7 +118,8 @@ export const authOptions: NextAuthOptions = {
         
         if (!existingUser) {
           await prisma.$transaction(async (tx) => {
-            const newCompany = await tx.company.create({
+            const txWithCompany = tx as any;
+            const newCompany = await txWithCompany.company.create({
                 data: { name: `${user.name || "Google User"} Workspace`, plan: "trial" }
             });
             await tx.user.create({
@@ -140,16 +141,16 @@ export const authOptions: NextAuthOptions = {
         // 💡 CORRECTION : On demande à Prisma d'inclure les infos de la table Company
         const dbUser = await prisma.user.findUnique({ 
             where: { email: token.email as string },
-            include: { company: true } 
         });
         if (dbUser) {
+        const typedDbUser = dbUser as typeof dbUser & { companyId?: string | null; role?: string | null };
             token.id = dbUser.id;
             token.name = dbUser.fullName;
             token.image = dbUser.avatarUrl;
-            token.companyId = dbUser.companyId; 
-            token.role = dbUser.role;           
+        token.companyId = typedDbUser.companyId; 
+        token.role = typedDbUser.role;           
             // 💡 CORRECTION : On met le VRAI nom de l'entreprise dans le Token !
-            token.companyName = dbUser.company?.name || dbUser.companyName;
+        token.companyName = dbUser.companyName;
         }
       }
       
@@ -166,10 +167,10 @@ export const authOptions: NextAuthOptions = {
         session.user.name = token.name;
         session.user.image = token.image as string;
         
-        (session.user as any).companyId = token.companyId as string;
-        (session.user as any).role = token.role as string;
+        session.user.companyId = token.companyId as string;
+        session.user.role = token.role as string;
         // 💡 CORRECTION : On expose enfin l'info au Frontend (UI)
-        (session.user as any).companyName = token.companyName as string;
+        session.user.companyName = token.companyName as string;
       }
       return session;
     }

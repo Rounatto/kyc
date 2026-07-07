@@ -7,7 +7,7 @@ export async function POST(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : Vérification stricte
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !(session.user as any).companyId) {
+        if (!session?.user?.email || !session.user.companyId) {
             return NextResponse.json(
                 { error: "Access denied. Valid B2B session required." }, 
                 { status: 401 }
@@ -15,7 +15,7 @@ export async function POST(req: Request) {
         }
 
         const secureEmail = session.user.email; 
-        const companyId = (session.user as any).companyId; // 🏢 On récupère le vrai ID de l'entreprise
+        const companyId = session.user.companyId; // 🏢 On récupère le vrai ID de l'entreprise
 
         const formData = await req.formData();
         const fullName = formData.get("fullName") as string;
@@ -59,7 +59,7 @@ export async function POST(req: Request) {
         await prisma.$transaction(async (tx) => {
             // Mise à jour de la vraie entité Organisation
             if (companyId) {
-                await tx.company.update({
+                await (tx as any).company.update({
                     where: { id: companyId },
                     data: { name: companyName }
                 });

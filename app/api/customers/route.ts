@@ -4,11 +4,9 @@ import { Engine } from "json-rules-engine";
 import kycRules from "@/lib/kyc-rules.json";
 import Tesseract from "tesseract.js";
 import { z } from "zod"; 
-import { getServerSession } from "next-auth/next"; // 💡 IMPORT VITAL : LE GARDIEN
+import { getServerSession } from "next-auth/next"; 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-// =====================================================================
-// 🛡️ SCHÉMA DE SÉCURITÉ ZOD (LE BOUCLIER DE L'API)
-// =====================================================================
+
 const customerRegistrationSchema = z.object({
     customerName: z.string().min(2, "Le nom doit contenir au moins 2 caractères"),
     email: z.string().email("Format d'email invalide"),
@@ -18,15 +16,11 @@ const customerRegistrationSchema = z.object({
     nationality: z.string().min(1, "La nationalité est requise"),
     dateOfBirth: z.string().optional().or(z.literal('')),
     phoneNumber: z.string().optional().or(z.literal('')),
-    // ❌ userId SUPPRIMÉ ICI : Le client n'a plus le droit de nous dire qui il est.
     idCardUrl: z.string().url("L'URL de la carte d'identité est invalide ou corrompue"),
     selfieUrl: z.string().url("L'URL du selfie est invalide ou corrompue"),
     biometricScore: z.number().nullable().optional() 
 });
 
-// =====================================================================
-// INTERROGATION EN TEMPS RÉEL DE L'API OPENSANCTIONS + FAIL-SAFE LOCAL
-// =====================================================================
 async function performGlobalSanctionsLookup(name: string, country: string) {
     let apiSanctioned = false;
     let apiPep = false;
@@ -97,17 +91,16 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
     };
 }
 
-// =====================================================================
-// GET : RÉCUPÉRATION DES CLIENTS ET CALCUL DYNAMIQUE DES STATISTIQUES
-// =====================================================================
 export async function GET(req: Request) {
     try {
-        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !session.user.id) {
-            console.error("🔴 Sécurité : Tentative d'accès non autorisée à l'API GET /customers");
-            return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
+        if (!session?.user?.email || !session.user.id || !(session.user as any).companyId) {
+            console.error("🔴 Sécurité : Tentative d'accès sans Company ID valide");
+            return NextResponse.json({ error: "Unauthorized access. Valid B2B session required." }, { status: 401 });
         }
+
+        // 💡 MUR B2B : On récupère l'entreprise
+        const companyId = (session.user as any).companyId;
 
         const { searchParams } = new URL(req.url);
         const search = searchParams.get("search") || "";
@@ -118,7 +111,8 @@ export async function GET(req: Request) {
         const sort = searchParams.get("sort") || "oldest";
         const skip = (page - 1) * limit;
 
-        const whereCondition: any = {};
+        // 💡 MUR B2B : Filtre obligatoire sur la BDD
+        const whereCondition: any = { companyId: companyId };
         
         if (search) {
             whereCondition.OR = [
@@ -157,8 +151,9 @@ export async function GET(req: Request) {
             prisma.verificationRequest.count({ where: whereCondition })
         ]);
 
+        // 💡 MUR B2B : Comptage isolé
         const pendingCount = await prisma.verificationRequest.count({
-            where: { status: "pending" }
+            where: { status: "pending", companyId: companyId }
         });
 
         const today = new Date();
@@ -167,14 +162,17 @@ export async function GET(req: Request) {
         const verifiedTodayCount = await prisma.verificationRequest.count({
             where: {
                 status: "verified",
-                updatedAt: { gte: today }
-            }
+                updatedAt: { gte: today },
+                companyId: companyId
+            } as any
         });
 
-        const totalAbsolute = await prisma.verificationRequest.count(); 
+        const totalAbsolute = await prisma.verificationRequest.count({
+            where: { companyId: companyId } as any
+        }); 
         
         const highRiskCount = await prisma.verificationRequest.count({
-            where: { riskLevel: "High" }
+            where: { riskLevel: "High", companyId: companyId } as any
         });
 
         return NextResponse.json({
@@ -196,24 +194,20 @@ export async function GET(req: Request) {
     }
 }
 
-// =====================================================================
-// POST : LE PIPELINE KYC COMPLET AVEC VISION INTELLIGENTE (OCR & BIOMETRIE)
-// =====================================================================
 export async function POST(req: Request) {
     try {
-        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !session.user.id) {
-            console.error("🔴 Sécurité : Tentative d'écriture non autorisée à l'API POST /customers");
-            return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
+        if (!session?.user?.email || !session.user.id || !session.user.companyId) {
+            console.error("🔴 Sécurité : Tentative d'écriture sans Company ID valide");
+            return NextResponse.json({ error: "Unauthorized access. Valid B2B session required." }, { status: 401 });
         }
         
-        // IDENTITÉ INFALSIFIABLE DE L'AGENT
         const serverAgentId = session.user.id;
+        // 💡 MUR B2B : On récupère l'entreprise
+        const companyId = session.user.companyId;
 
         const body = await req.json();
         
-        // 💡 VERIFICATION ZOD AVANT TOUTE LOGIQUE MÉTIER
         const validationResult = customerRegistrationSchema.safeParse(body);
         
         if (!validationResult.success) {
@@ -235,6 +229,7 @@ export async function POST(req: Request) {
 
         const existingRecord = await prisma.verificationRequest.findFirst({
             where: {
+                companyId: companyId, // 💡 MUR B2B : Double vérification uniquement dans l'entreprise
                 OR: [ { email: email }, { cin: cin } ],
                 status: { in: ["pending", "verified"] } 
             }
@@ -243,9 +238,6 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "This applicant or identification document is already linked to an active KYC pipeline." }, { status: 409 });
         }
 
-        // =====================================================================
-        // CALCUL DYNAMIQUE DE L'ÂGE
-        // =====================================================================
         let clientAge = 30;
         let isUnderage = false;
         let isYoungAdult = false;
@@ -264,9 +256,6 @@ export async function POST(req: Request) {
             else if (clientAge < 25) isYoungAdult = true;
         }
 
-        // =====================================================================
-        // LECTURE OPTIQUE DE LA CARTE D'IDENTITÉ (OCR - TESSERACT.JS)
-        // =====================================================================
         let ocrText = "";
         let ocrFailed = false;
         let isNameOnDoc = false;
@@ -291,16 +280,8 @@ export async function POST(req: Request) {
             ocrFailed = true; 
         }
 
-        // =====================================================================
-        // APPEL OPENSANCTIONS + LOCAL FAIL-SAFE
-        // =====================================================================
         const amlScreening = await performGlobalSanctionsLookup(customerName, nationality || "");
-
-        // =====================================================================
-        // PRÉPARATION DES FAITS POUR LE MOTEUR
-        // =====================================================================
         const normalizedEmail = String(email).toLowerCase();
-        
         const faceMismatchDetected = biometricScore !== null && biometricScore !== undefined && biometricScore < 60;
 
         const facts = {
@@ -317,9 +298,6 @@ export async function POST(req: Request) {
             faceMismatch: faceMismatchDetected 
         };
 
-        // =====================================================================
-        // EXÉCUTION DU MOTEUR DE RÈGLES
-        // =====================================================================
         const engine = new Engine(kycRules);
         const { events } = await engine.run(facts);
 
@@ -378,9 +356,6 @@ export async function POST(req: Request) {
             ? rationale.join(" ") 
             : `Profile analyzed successfully. Source: ${amlScreening.source}. Client Age: ${clientAge}. Document validation successful.`;
 
-        // =====================================================================
-        // SAUVEGARDE FINALE
-        // =====================================================================
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
@@ -391,7 +366,8 @@ export async function POST(req: Request) {
                 nationality,
                 dateOfBirth,
                 phoneNumber,
-                userId: serverAgentId, // 👈 Identité blindée
+                userId: serverAgentId, 
+                companyId: companyId, // 💡 MUR B2B : Sauvegarde avec le tampon de l'entreprise
                 idCardUrl,
                 selfieUrl,
                 status: "pending", 
@@ -403,7 +379,7 @@ export async function POST(req: Request) {
                     create: {
                         action: "CREATED",
                         details: `KYC Pipeline initialized. Modules processed: Biometrics, Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
-                        agentId: serverAgentId // 👈 Audit Log infalsifiable
+                        agentId: serverAgentId 
                     }
                 }
             },
