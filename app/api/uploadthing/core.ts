@@ -9,13 +9,13 @@ export const ourFileRouter = {
     // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'UPLOAD
     .middleware(async ({ req }) => {
       const session = await getServerSession(authOptions);
-      if (!session?.user?.email || !(session.user as any).id) {
+      if (!session?.user?.email || !session.user.id) {
           console.error("🔴 Sécurité : Tentative d'upload de document bloquée");
           throw new Error("Unauthorized access. Valid session required to upload files.");
       }
       
       // On attache l'identité de l'agent aux métadonnées du fichier
-      return { uploaderId: (session.user as any).id };
+      return { uploaderId: session.user.id };
     })
     .onUploadComplete(async ({ metadata, file }) => {
       console.log(`✅ Upload autorisé complété par l'agent ID: ${metadata.uploaderId}`);

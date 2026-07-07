@@ -45,13 +45,13 @@ export async function PATCH(
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !(session.user as any).id) {
+        if (!session?.user?.email || !session.user.id) {
             console.error("🔴 Sécurité : Tentative de modification bloquée sur PATCH /customers/[id]");
             return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });
         }
 
         // 💡 IDENTITÉ INFALSIFIABLE DE L'AGENT DEPUIS LE SERVEUR
-        const serverAgentId = (session.user as any).id;
+        const serverAgentId = session.user.id;
         const serverAgentName = session.user.name || "Unknown Agent";
 
         const resolvedParams = await params;

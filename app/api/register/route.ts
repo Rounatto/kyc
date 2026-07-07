@@ -41,7 +41,8 @@ export async function POST(req: Request) {
         const result = await prisma.$transaction(async (tx) => {
             
             // Étape A : Créer l'entité Entreprise
-            const newCompany = await tx.company.create({
+            const txWithCompany = tx as typeof prisma;
+            const newCompany = await txWithCompany.company.create({
                 data: {
                     name: companyName,
                     plan: "trial", // Le nouveau compte commence en période d'essai

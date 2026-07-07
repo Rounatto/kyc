@@ -104,7 +104,7 @@ export async function GET(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !(session.user as any).id) {
+        if (!session?.user?.email || !session.user.id) {
             console.error("🔴 Sécurité : Tentative d'accès non autorisée à l'API GET /customers");
             return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
         }
@@ -203,13 +203,13 @@ export async function POST(req: Request) {
     try {
         // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !(session.user as any).id) {
+        if (!session?.user?.email || !session.user.id) {
             console.error("🔴 Sécurité : Tentative d'écriture non autorisée à l'API POST /customers");
             return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
         }
         
         // IDENTITÉ INFALSIFIABLE DE L'AGENT
-        const serverAgentId = (session.user as any).id;
+        const serverAgentId = session.user.id;
 
         const body = await req.json();
         

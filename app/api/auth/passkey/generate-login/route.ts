@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateAuthenticationOptions } from "@simplewebauthn/server";
+import { generateAuthenticationOptions, type AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 
 const rpID = "localhost"; 
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
         const allowCredentials = user.passkeys.map(passkey => ({
             id: passkey.credentialID,
             type: "public-key" as const,
-            transports: passkey.transports ? (passkey.transports.split(',') as any[]) : undefined,
+            transports: passkey.transports ? (passkey.transports.split(',') as AuthenticatorTransportFuture[]) : undefined,
         }));
 
         // 3. On génère le défi de connexion

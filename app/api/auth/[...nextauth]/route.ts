@@ -24,6 +24,7 @@ export const authOptions: NextAuthOptions = {
         });
         
         if (!user) return null;
+        const authUser = user as NonNullable<typeof user> & { companyId: string | null; role: string };
 
         // 🌟 SCÉNARIO 1 : L'utilisateur a envoyé une empreinte digitale (Passkey)
         if (credentials.passkeyResponse) {
@@ -71,8 +72,8 @@ export const authOptions: NextAuthOptions = {
                     email: user.email, 
                     name: user.fullName, 
                     image: user.avatarUrl, 
-                    companyId: user.companyId, 
-                    role: user.role 
+                  companyId: authUser.companyId, 
+                  role: authUser.role 
                 };
             }
             return null;
@@ -89,8 +90,8 @@ export const authOptions: NextAuthOptions = {
                 email: user.email, 
                 name: user.fullName, 
                 image: user.avatarUrl, 
-                companyId: user.companyId, 
-                role: user.role,
+              companyId: authUser.companyId, 
+              role: authUser.role,
                 rememberMe: credentials.rememberMe === "true" 
             };
         }
@@ -118,7 +119,8 @@ export const authOptions: NextAuthOptions = {
         if (!existingUser) {
           // 💡 TRANSACTION B2B POUR GOOGLE OAUTH
           await prisma.$transaction(async (tx) => {
-            const newCompany = await tx.company.create({
+            const txWithCompany = tx as typeof prisma;
+            const newCompany = await txWithCompany.company.create({
                 data: { name: `${user.name || "Google User"} Workspace`, plan: "trial" }
             });
             await tx.user.create({
@@ -140,11 +142,12 @@ export const authOptions: NextAuthOptions = {
       if (account || user) {
         const dbUser = await prisma.user.findUnique({ where: { email: token.email as string } });
         if (dbUser) {
+          const typedDbUser = dbUser as typeof dbUser & { companyId: string | null; role: string };
             token.id = dbUser.id;
             token.name = dbUser.fullName;
             token.image = dbUser.avatarUrl;
-            token.companyId = dbUser.companyId; // Propagation Multi-Tenant
-            token.role = dbUser.role;           // Propagation RBAC
+          token.companyId = typedDbUser.companyId; // Propagation Multi-Tenant
+          token.role = typedDbUser.role;           // Propagation RBAC
         }
       }
       
