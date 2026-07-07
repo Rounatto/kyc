@@ -117,10 +117,8 @@ export const authOptions: NextAuthOptions = {
         const existingUser = await prisma.user.findUnique({ where: { email: user.email } });
         
         if (!existingUser) {
-          // 💡 TRANSACTION B2B POUR GOOGLE OAUTH
           await prisma.$transaction(async (tx) => {
-            const txWithCompany = tx as typeof prisma;
-            const newCompany = await txWithCompany.company.create({
+            const newCompany = await tx.company.create({
                 data: { name: `${user.name || "Google User"} Workspace`, plan: "trial" }
             });
             await tx.user.create({
@@ -138,22 +136,27 @@ export const authOptions: NextAuthOptions = {
       return true;
     },
     async jwt({ token, user, trigger, session, account }) {
-      // 💡 Synchronisation robuste avec la base de données à la connexion
       if (account || user) {
-        const dbUser = await prisma.user.findUnique({ where: { email: token.email as string } });
+        // 💡 CORRECTION : On demande à Prisma d'inclure les infos de la table Company
+        const dbUser = await prisma.user.findUnique({ 
+            where: { email: token.email as string },
+            include: { company: true } 
+        });
         if (dbUser) {
-          const typedDbUser = dbUser as typeof dbUser & { companyId: string | null; role: string };
             token.id = dbUser.id;
             token.name = dbUser.fullName;
             token.image = dbUser.avatarUrl;
-          token.companyId = typedDbUser.companyId; // Propagation Multi-Tenant
-          token.role = typedDbUser.role;           // Propagation RBAC
+            token.companyId = dbUser.companyId; 
+            token.role = dbUser.role;           
+            // 💡 CORRECTION : On met le VRAI nom de l'entreprise dans le Token !
+            token.companyName = dbUser.company?.name || dbUser.companyName;
         }
       }
       
       if (trigger === "update" && session?.user) {
         token.name = session.user.name;
         token.image = session.user.image;
+        token.companyName = session.user.companyName; // Mise à jour à chaud
       }
       return token;
     },
@@ -163,9 +166,10 @@ export const authOptions: NextAuthOptions = {
         session.user.name = token.name;
         session.user.image = token.image as string;
         
-        // 💡 Le serveur expose les métadonnées B2B à l'application
         (session.user as any).companyId = token.companyId as string;
         (session.user as any).role = token.role as string;
+        // 💡 CORRECTION : On expose enfin l'info au Frontend (UI)
+        (session.user as any).companyName = token.companyName as string;
       }
       return session;
     }
