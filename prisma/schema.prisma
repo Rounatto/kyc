@@ -6,30 +6,63 @@ generator client {
 // Connexion à la base de données (PostgreSQL)
 datasource db {
   provider = "postgresql"
-  // 💡 L'URL n'est plus requise ici sous Prisma 7+, elle est gérée par ton prisma.config.ts
 }
 
-// Table Utilisateur
+// =====================================================================
+// 🏢 PHASE 1 : LE VRAI MODÈLE B2B (MULTI-TENANT)
+// =====================================================================
+model Company {
+  id                   String                @id @default(cuid())
+  name                 String
+  plan                 String                @default("trial") // trial, starter, growth, enterprise
+  createdAt            DateTime              @default(now())
+  
+  users                User[]
+  verificationRequests VerificationRequest[]
+  
+  // Préparation Phase 4 (L'écosystème Développeur B2B)
+  // apiKeys              ApiKey[]
+  // webhooks             Webhook[]
+}
+
+// =====================================================================
+// 🧑‍💻 UTILISATEURS ET IAM (IDENTITY & ACCESS MANAGEMENT)
+// =====================================================================
 model User {
   id                   String                @id @default(cuid())
   fullName             String
-  companyName          String?               // 💡 DEVENU OPTIONNEL POUR GOOGLE
+  companyName          String?               // Gardé temporairement pour ne pas casser l'ancien code
+  
+  // 🏢 RELATION ENTREPRISE
+  companyId            String?
+  company              Company?              @relation(fields: [companyId], references: [id])
+  
+  // 🛡️ SÉCURITÉ & RÔLES (Phase 2 & 4)
+  role                 String                @default("AGENT") // SUPER_ADMIN, COMPANY_ADMIN, AGENT, AUDITOR
+  
   email                String                @unique
-  password             String?               // 💡 DEVENU OPTIONNEL POUR GOOGLE
+  password             String?
   avatarUrl            String?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt 
   
-  // 💡 SÉCURITÉ WEBAUTHN : Le défi temporaire envoyé par le serveur pour valider l'empreinte
+  // 🔐 WEBAUTHN / PASSKEYS
   currentChallenge     String?
+  passkeys             Passkey[]
+  
+  // 📱 2FA TOTP (Préparation Phase 2)
+  totpEnabled          Boolean               @default(false)
+  totpSecret           String?               // ⚠️ Devra être chiffré
+  backupCodes          String?               // Codes de secours stockés hashés
   
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
   userSessions         UserSession[]         
-  passkeys             Passkey[]             // 💡 RELATION : Les clés biométriques de l'utilisateur
 }
 
-// Table Principale (Les dossiers clients soumis)
+// =====================================================================
+// 📁 MOTEUR KYC : DOSSIERS CLIENTS
+// =====================================================================
 model VerificationRequest {
   id           String   @id @default(cuid())
   customerName String
@@ -43,66 +76,70 @@ model VerificationRequest {
   dateOfBirth  String?
   phoneNumber  String?
 
-  // Section Fichiers (Pour UploadThing / Supabase)
   idCardUrl    String?
   selfieUrl    String?
 
-  // Section Décision IA 
   score        String?  
-  riskLevel    String?  // ex: Low, Medium, High
-  aiRationale  String?  // Explication textuelle de l'IA
+  riskLevel    String?  
+  aiRationale  String?  
 
   submittedAt  DateTime @default(now())
   updatedAt    DateTime @updatedAt 
 
-  // Relation : l'agent propriétaire du dossier
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // 🏢 ISOLATION DES DONNÉES (Le dossier appartient à l'entreprise)
+  companyId    String?
+  company      Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // ⚖️ CONFORMITÉ LÉGALE (SetNull au lieu de Cascade)
+  // Le dossier KYC doit survivre si l'agent est supprimé de la BDD.
+  userId       String?  
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   
-  // Relation : l'historique des actions sur ce dossier
   auditLogs    AuditLog[] 
 }
 
-// Table Historique (La Piste d'Audit obligatoire en finance/KYC)
+// =====================================================================
+// 📜 PISTE D'AUDIT (OBLIGATOIRE EN COMPLIANCE)
+// =====================================================================
 model AuditLog {
   id          String   @id @default(cuid())
-  action      String   // Ex: CREATED, APPROVED, REJECTED
-  details     String?  // Ex: "Validé suite à un appel" ou "Rejeté par IA"
+  action      String   
+  details     String?  
   timestamp   DateTime @default(now())
 
-  // Le dossier concerné
   requestId   String
   request     VerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
-  // L'agent qui a cliqué (Optionnel si c'est l'IA qui agit)
   agentId     String?
   agent       User?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
 }
 
-// Table de traçabilité des appareils et sessions actives
+// =====================================================================
+// 💻 SESSIONS DYNAMIQUES
+// =====================================================================
 model UserSession {
   id           String   @id @default(cuid())
-  userAgent    String   // Contient la chaîne brute du navigateur pour l'analyse
-  deviceType   String   // Stocke le résultat propre : Windows PC, iOS iPhone, Android, etc.
-  ipAddress    String   // Adresse IP de connexion
-  isActive     Boolean  @default(true) // Permet la révocation à distance
+  userAgent    String   
+  deviceType   String   
+  ipAddress    String   
+  isActive     Boolean  @default(true) 
   createdAt    DateTime @default(now())
   lastActiveAt DateTime @default(now()) @updatedAt
 
-  // Relation vers l'utilisateur propriétaire de la session
   userId       String
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// 💡 NOUVEAU [SÉCURITÉ] : Table pour stocker les clés biométriques (WebAuthn / Passkeys)
+// =====================================================================
+// 🔑 CRYPTOGRAPHIE : PASSKEYS
+// =====================================================================
 model Passkey {
   id                  String   @id @default(cuid())
-  credentialID        String   @unique // L'identifiant unique généré par l'appareil
-  credentialPublicKey Bytes    // La clé cryptographique publique (format binaire)
-  counter             Int      // Sécurité anti-clonage (compteur d'utilisation)
-  transports          String?  // Ex: "internal" (FaceID/TouchID), "usb" (Clé Yubikey)
+  credentialID        String   @unique 
+  credentialPublicKey Bytes    
+  counter             Int      
+  transports          String?  
   
-  // Le propriétaire de cette empreinte
   userId              String
   user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
