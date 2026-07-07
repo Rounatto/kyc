@@ -2,11 +2,9 @@ import { NextResponse } from "next/server";
 import { generateAuthenticationOptions, type AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 
-const rpID = "localhost"; 
-
 export async function POST(req: Request) {
     try {
-        const { email } = await req.json(); // Le fameux POST qui reçoit l'email !
+        const { email } = await req.json(); 
         if (!email) return NextResponse.json({ error: "Email required" }, { status: 400 });
 
         // 1. On cherche l'utilisateur et ses clés
@@ -28,13 +26,15 @@ export async function POST(req: Request) {
 
         // 3. On génère le défi de connexion
         const options = await generateAuthenticationOptions({
-            rpID,
+            // 💡 SÉCURITÉ : Faille de Claude n°5 corrigée (Plus de localhost en dur)
+            rpID: process.env.WEBAUTHN_RPID || "localhost", 
             allowCredentials,
-            userVerification: "preferred",
+            // 💡 SÉCURITÉ : On FORCE l'appareil à demander le PIN ou l'empreinte (Norme Militaire)
+            userVerification: "required", 
         });
 
         // 4. On sauvegarde le défi en BDD
-        await prisma.user.update({
+        const updatedUser = await prisma.user.update({
             where: { id: user.id },
             data: { currentChallenge: options.challenge },
         });

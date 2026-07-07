@@ -2,13 +2,12 @@ import { NextResponse } from "next/server";
 import { verifyRegistrationResponse } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
-
-const rpID = "localhost";
-const origin = `http://${rpID}:3000`;
+import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LE GARDIEN PHASE 0
 
 export async function POST(req: Request) {
     try {
-        const session = await getServerSession();
+        // 🔒 Sécurité : On s'assure que la session est valide
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -23,6 +22,10 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "No active registration challenge found" }, { status: 400 });
         }
 
+        // 💡 SÉCURITÉ : Faille de Claude n°5 corrigée (Variables d'environnement)
+        const rpID = process.env.WEBAUTHN_RPID || "localhost";
+        const origin = process.env.WEBAUTHN_ORIGIN || `http://${rpID}:3000`;
+
         let verification;
         try {
             verification = await verifyRegistrationResponse({
@@ -30,7 +33,8 @@ export async function POST(req: Request) {
                 expectedChallenge: user.currentChallenge,
                 expectedOrigin: origin,
                 expectedRPID: rpID,
-                requireUserVerification: false, // On garde cette souplesse pour Google Password Manager
+                // 💡 SÉCURITÉ MILITAIRE : Fini la souplesse, on exige le PIN/Biométrie !
+                requireUserVerification: true, 
             });
         } catch (error: any) {
             console.error("Verification failed:", error.message);
@@ -38,14 +42,13 @@ export async function POST(req: Request) {
         }
 
         if (verification.verified && verification.registrationInfo) {
-            // 💡 LA CORRECTION EST ICI : Extraction propre selon le standard v10+
             const { id, publicKey, counter } = verification.registrationInfo.credential;
             
             await prisma.passkey.create({
                 data: {
                     userId: user.id,
-                    credentialID: id, // L'ID est déjà au parfait format (base64url) dans la v10
-                    credentialPublicKey: Buffer.from(publicKey), // On convertit la clé publique en binaire pour Prisma
+                    credentialID: id,
+                    credentialPublicKey: Buffer.from(publicKey), 
                     counter: counter,
                     transports: body.response.transports?.join(','),
                 },

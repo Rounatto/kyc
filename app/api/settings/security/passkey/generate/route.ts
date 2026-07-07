@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { generateRegistrationOptions } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LE GARDIEN PHASE 0
 
-const rpName = "TrustVerify KYC";
-const rpID = "localhost"; // En production, ce sera 'trustverify.com'
+const rpName = "TrustVerify KYC B2B"; // 🏢 Touche Pro
 
 export async function GET() {
     try {
-        const session = await getServerSession();
+        // 🔒 Sécurité : On s'assure que la session est valide avec authOptions
+        const session = await getServerSession(authOptions);
         if (!session?.user?.email) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -26,20 +27,23 @@ export async function GET() {
             transports: passkey.transports ? (passkey.transports.split(',') as any[]) : undefined,
         }));
 
-        // 💡 LA CORRECTION EST ICI : On transforme le String en données binaires (Uint8Array)
         const userIDBuffer = new TextEncoder().encode(user.id);
+
+        // 💡 SÉCURITÉ : Faille de Claude n°5 corrigée
+        const rpID = process.env.WEBAUTHN_RPID || "localhost";
 
         const options = await generateRegistrationOptions({
             rpName,
             rpID,
-            userID: userIDBuffer, // 👈 On passe la donnée binaire ici
+            userID: userIDBuffer,
             userName: user.email,
             userDisplayName: user.fullName,
             attestationType: "none",
             excludeCredentials,
             authenticatorSelection: {
                 residentKey: "preferred",
-                userVerification: "preferred", 
+                // 💡 SÉCURITÉ MILITAIRE : On FORCE Windows/Apple à demander le PIN ou la biométrie !
+                userVerification: "required", 
             },
         });
 
