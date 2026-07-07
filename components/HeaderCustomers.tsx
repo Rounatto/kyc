@@ -185,9 +185,9 @@ export default function HeaderCustomers() {
                                 <p className="text-sm font-medium text-gray-800 truncate">{userName}</p>
                                 <p className="text-xs text-gray-500 truncate">{userEmail}</p>
                             </div>
-                            <Link href="/dashboard/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                            <Link href="/dashboard/settings" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                                 <User className="w-4 h-4" />
-                                Profil
+                                Account Settings
                             </Link>
                             <button onClick={() => signOut({ callbackUrl: "/login"})} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-100 transition-colors mt-1 border-t border-gray-100 cursor-pointer">
                                 <LogOut className="w-4 h-4" />Logout
