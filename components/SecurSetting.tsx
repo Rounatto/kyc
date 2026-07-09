@@ -1,11 +1,13 @@
 "use client";
 
 import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X } from "lucide-react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import { useState, useEffect } from "react";
 import { startRegistration } from "@simplewebauthn/browser"; 
 
 export default function SecurSetting() {
+    const { data: session, update } = useSession();
+
     // --- ÉTATS MOT DE PASSE ---
     const [currentPassword, setCurrentPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
@@ -37,6 +39,13 @@ export default function SecurSetting() {
     const correctLength = newPassword.length >= 12;
     const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
     const isValid = correctLength && hasSpecialChar;
+
+    // 💡 SYNCHRONISATION DE L'ÉTAT 2FA AU CHARGEMENT
+    useEffect(() => {
+        if (session?.user) {
+            setIs2faEnabled((session.user as any).totpEnabled === true);
+        }
+    }, [session]);
 
     useEffect(() => {
         async function fetchSessions() {
@@ -153,7 +162,6 @@ export default function SecurSetting() {
         }
     };
 
-    // 💡 LOGIQUE 2FA : DEMANDER LE QR CODE AU SERVEUR
     const handleStart2faSetup = async () => {
         setIs2faLoading(true);
         setTotpStatus(null);
@@ -172,7 +180,6 @@ export default function SecurSetting() {
         }
     };
 
-    // 💡 LOGIQUE 2FA : VÉRIFIER LE CODE TAPÉ PAR L'UTILISATEUR
     const handleVerify2fa = async () => {
         setIs2faLoading(true);
         setTotpStatus(null);
@@ -189,6 +196,16 @@ export default function SecurSetting() {
             setIs2faEnabled(true);
             setIs2faModalOpen(false);
             setTotpCodeInput("");
+            
+            // 💡 MISE À JOUR DE LA SESSION SANS DÉCONNEXION
+            await update({
+                ...session,
+                user: {
+                    ...session?.user,
+                    totpEnabled: true
+                }
+            });
+
         } catch (error: any) {
             setTotpStatus({ type: "error", text: error.message });
         } finally {

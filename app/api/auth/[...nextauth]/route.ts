@@ -4,7 +4,7 @@ import GoogleProvider from "next-auth/providers/google";
 import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { verifyAuthenticationResponse } from "@simplewebauthn/server";
-import { verifySync } from "otplib"; // 💡 IMPORT VITAL POUR LE 2FA
+import { verifySync } from "otplib"; 
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -15,7 +15,7 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
         rememberMe: { label: "Remember Me", type: "checkbox" },
         passkeyResponse: { label: "Passkey Response", type: "text" },
-        totpCode: { label: "2FA Code", type: "text" } // 💡 On prépare le terrain pour recevoir les 6 chiffres
+        totpCode: { label: "2FA Code", type: "text" } 
       },
       async authorize(credentials): Promise<any> { 
         if (!credentials?.email) return null;
@@ -27,7 +27,6 @@ export const authOptions: NextAuthOptions = {
         
         if (!user) return null;
         
-        // 💡 Typage strict incluant les nouveaux champs de sécurité
         const authUser = user as NonNullable<typeof user> & { 
             companyId: string | null; 
             role: string; 
@@ -35,7 +34,6 @@ export const authOptions: NextAuthOptions = {
             totpSecret: string | null 
         };
 
-        // 🌟 SCÉNARIO 1 : L'utilisateur a envoyé une empreinte digitale (Passkey)
         if (credentials.passkeyResponse) {
             if (!user.currentChallenge) throw new Error("Challenge expiré ou invalide");
 
@@ -85,23 +83,16 @@ export const authOptions: NextAuthOptions = {
             return null;
         }
 
-        // 🌟 SCÉNARIO 2 : L'utilisateur a envoyé un Mot de Passe classique
         if (credentials.password && user.password) {
             const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
-            if (!isPasswordValid) return null; // Mot de passe faux, on rejette.
+            if (!isPasswordValid) return null; 
 
-            // ==========================================================
-            // 🛡️ LE MUR 2FA (LE PURGATOIRE)
-            // ==========================================================
             if (authUser.totpEnabled) {
                 
-                // Cas A : Le mot de passe est bon, mais il n'a pas encore envoyé le code 6 chiffres.
-                // On bloque la connexion et on avertit le Frontend.
                 if (!credentials.totpCode) {
                     throw new Error("2FA_REQUIRED");
                 }
 
-                // Cas B : Il a envoyé un code à 6 chiffres, on doit le vérifier.
                 if (!authUser.totpSecret) throw new Error("Erreur de configuration 2FA");
                 
                 const { valid: isValidTotp } = verifySync({
@@ -110,12 +101,10 @@ export const authOptions: NextAuthOptions = {
                 });
 
                 if (!isValidTotp) {
-                    throw new Error("INVALID_2FA_CODE"); // Code faux, on rejette.
+                    throw new Error("INVALID_2FA_CODE"); 
                 }
             }
-            // ==========================================================
 
-            // Si on arrive ici, soit il n'a pas de 2FA, soit son 2FA est valide. On le laisse passer !
             return { 
                 id: user.id, 
                 email: user.email, 
@@ -131,7 +120,6 @@ export const authOptions: NextAuthOptions = {
       }
     }),
     
-    // 🌟 SCÉNARIO 3 : Connexion Google
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID as string,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
@@ -139,7 +127,7 @@ export const authOptions: NextAuthOptions = {
   ],
   session: {
     strategy: "jwt" as const,
-    maxAge: 15 * 24 * 60 * 60, // 15 jours
+    maxAge: 15 * 24 * 60 * 60, 
   },
   callbacks: {
     async signIn({ user, account }) {
@@ -180,6 +168,8 @@ export const authOptions: NextAuthOptions = {
             token.companyId = typedDbUser.companyId; 
             token.role = typedDbUser.role;          
             token.companyName = (dbUser as any).companyName;
+            // 💡 Injection de l'état 2FA
+            token.totpEnabled = (dbUser as any).totpEnabled;
         }
       }
       
@@ -187,6 +177,8 @@ export const authOptions: NextAuthOptions = {
         token.name = session.user.name;
         token.image = session.user.image;
         token.companyName = session.user.companyName; 
+        // 💡 Mise à jour à chaud
+        token.totpEnabled = session.user.totpEnabled;
       }
       return token;
     },
@@ -199,6 +191,8 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).companyId = token.companyId as string;
         (session.user as any).role = token.role as string;
         (session.user as any).companyName = token.companyName as string;
+        // 💡 Exposition au Frontend
+        (session.user as any).totpEnabled = token.totpEnabled as boolean;
       }
       return session;
     }
