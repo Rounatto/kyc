@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LES OPTIONS D'AUTHENTIFICATION
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route"; 
 
 export async function GET(req: Request) {
     try {
-        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DES STATISTIQUES
+        // 🔒 CONFINEMENT B2B : Le Gardien exige une entreprise valide
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email) {
-            console.error("🔴 Sécurité : Tentative d'accès anonyme bloquée sur GET /dashboard/stats");
-            return NextResponse.json({ error: "Unauthorized access. Valid session required." }, { status: 401 });
+        if (!session?.user?.email || !(session.user as any).companyId) {
+            console.error("🔴 Sécurité : Tentative d'accès anonyme ou sans organisation bloquée sur GET /dashboard/stats");
+            return NextResponse.json({ error: "Unauthorized access. Valid B2B session required." }, { status: 401 });
         }
+
+        // 💡 MUR B2B : Extraction de l'ID de l'entreprise
+        const companyId = (session.user as any).companyId;
 
         const { searchParams } = new URL(req.url);
         const range = searchParams.get("range") || "30d";
@@ -26,19 +29,19 @@ export async function GET(req: Request) {
         const prevStartDate = new Date(startDate);
         prevStartDate.setDate(prevStartDate.getDate() - days);
 
-        // 1. Récupération des KPIs
+        // 1. Récupération des KPIs (ISOLÉS PAR ENTREPRISE)
         const [total, verified, rejected, pending, highRisk] = await Promise.all([
-            prisma.verificationRequest.count({ where: { submittedAt: { gte: startDate } } }),
-            prisma.verificationRequest.count({ where: { status: "verified", submittedAt: { gte: startDate } } }),
-            prisma.verificationRequest.count({ where: { status: "rejected", submittedAt: { gte: startDate } } }),
-            prisma.verificationRequest.count({ where: { status: "pending", submittedAt: { gte: startDate } } }),
-            prisma.verificationRequest.count({ where: { riskLevel: "High", submittedAt: { gte: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, submittedAt: { gte: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, status: "verified", submittedAt: { gte: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, status: "rejected", submittedAt: { gte: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, status: "pending", submittedAt: { gte: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, riskLevel: "High", submittedAt: { gte: startDate } } }),
         ]);
 
         const [prevTotal, prevVerified, prevHighRisk] = await Promise.all([
-            prisma.verificationRequest.count({ where: { submittedAt: { gte: prevStartDate, lt: startDate } } }),
-            prisma.verificationRequest.count({ where: { status: "verified", submittedAt: { gte: prevStartDate, lt: startDate } } }),
-            prisma.verificationRequest.count({ where: { riskLevel: "High", submittedAt: { gte: prevStartDate, lt: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, submittedAt: { gte: prevStartDate, lt: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, status: "verified", submittedAt: { gte: prevStartDate, lt: startDate } } }),
+            prisma.verificationRequest.count({ where: { companyId, riskLevel: "High", submittedAt: { gte: prevStartDate, lt: startDate } } }),
         ]);
 
         const calcDelta = (curr: number, prev: number) => {
@@ -46,9 +49,10 @@ export async function GET(req: Request) {
             return (((curr - prev) / prev) * 100);
         };
 
-        // 2. Calcul du VRAI Avg Processing Time
+        // 2. Calcul du VRAI Avg Processing Time (ISOLÉ)
         const resolvedRequests = await prisma.verificationRequest.findMany({
             where: {
+                companyId, // 💡 MUR B2B
                 status: { in: ["verified", "rejected"] },
                 updatedAt: { gte: startDate }
             },
@@ -64,24 +68,22 @@ export async function GET(req: Request) {
             ? (totalSeconds / resolvedRequests.length).toFixed(1) 
             : 0;
 
-        // 💡 OPTIMISATION : Suppression de la boucle N+1 pour le Chart
+        // 3. OPTIMISATION : Données du Graphique (ISOLÉES)
         const today = new Date();
         const sevenDaysAgo = new Date(today);
         sevenDaysAgo.setDate(today.getDate() - 6);
         sevenDaysAgo.setHours(0, 0, 0, 0);
 
-        // On fait 2 requêtes globales au lieu de 14 petites requêtes
         const recentApproved = await prisma.verificationRequest.findMany({
-            where: { status: "verified", updatedAt: { gte: sevenDaysAgo } },
+            where: { companyId, status: "verified", updatedAt: { gte: sevenDaysAgo } },
             select: { updatedAt: true }
         });
 
         const recentHighRisk = await prisma.verificationRequest.findMany({
-            where: { riskLevel: "High", submittedAt: { gte: sevenDaysAgo } },
+            where: { companyId, riskLevel: "High", submittedAt: { gte: sevenDaysAgo } },
             select: { submittedAt: true }
         });
 
-        // On regroupe les données par jour en Javascript (infiniment plus rapide)
         const chartData = [];
         for (let i = 6; i >= 0; i--) {
             const dateCursor = new Date(today);
