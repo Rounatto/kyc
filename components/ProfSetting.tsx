@@ -17,6 +17,10 @@ export default function ProfSetting() {
     const [isSaving, setIsSaving] = useState(false);
     const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error", text: string } | null>(null);
 
+    // 🛡️ ANALYSE DE LA HIÉRARCHIE RBAC (Phase 3)
+    // Détermine si l'utilisateur possède l'autorité d'administration racine
+    const isAdmin = (session?.user as any)?.role === "COMPANY_ADMIN";
+
     useEffect(() => {
         if (session?.user) {
             setFullName(session.user.name || "");
@@ -64,7 +68,6 @@ export default function ProfSetting() {
                 formData.append("avatar", avatarFile);
             }
 
-            // 💡 CORRECTION DU LIEN DE L'API ICI
             const response = await fetch("/api/settings/profile", {
                 method: "POST",
                 body: formData,
@@ -149,13 +152,22 @@ export default function ProfSetting() {
                             className="w-full border border-gray-300 rounded-sm px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 transition-colors" 
                         />
                     </div>
+                    
+                    {/* 💡 CHAMP DYNAMIQUE SÉCURISÉ PAR RÔLE */}
                     <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-semibold text-gray-700">Organization</label>
+                        <label className="text-xs font-semibold text-gray-700">
+                            Organization {!isAdmin && "(Read-only)"}
+                        </label>
                         <input 
                             type="text" 
                             value={companyName}
                             onChange={(e) => setCompanyName(e.target.value)}
-                            className="w-full border border-gray-300 rounded-sm px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 transition-colors" 
+                            disabled={!isAdmin}
+                            className={`w-full border rounded-sm px-3 py-2 text-sm outline-none transition-colors ${
+                                !isAdmin 
+                                    ? "border-gray-200 bg-gray-50 text-gray-500 cursor-not-allowed focus:border-gray-200" 
+                                    : "border-gray-300 text-gray-900 focus:border-blue-500"
+                            }`}
                         />
                     </div>
                 </div>

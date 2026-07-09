@@ -1,24 +1,31 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LE GARDIEN DE SÉCURITÉ
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { enforceRole } from "@/lib/rbac"; // 💡 IMPORT DU GARDIEN RBAC
 
 export async function POST(req: Request) {
     try {
-        // 🔒 CONFINEMENT PHASE 0 : Vérification stricte
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !session.user.companyId) {
-            return NextResponse.json(
-                { error: "Access denied. Valid B2B session required." }, 
-                { status: 401 }
-            );
+        if (!session?.user?.email) {
+            return NextResponse.json({ error: "Unauthorized access." }, { status: 401 });
         }
+        
+        // 🛡️ VERROU RBAC : On autorise les Admins ET les Agents à accéder à cette route
+        const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
+        if (!guard.isValid) return guard.response!; // Bloque les intrus (Erreur 401 ou 403)
 
-        const secureEmail = session.user.email; 
-        const companyId = session.user.companyId; // 🏢 On récupère le vrai ID de l'entreprise
+        // 💡 Extraction sécurisée des accréditations par le Gardien
+        const { companyId, role } = guard;
+        const secureEmail = session.user.email;
+        const sessionCompanyName = session.user ? (session.user as any).companyName : undefined;
+        
+        // On vérifie le rôle exact pour conditionner l'écriture en base
+        const isAdmin = role === "COMPANY_ADMIN";
 
         const formData = await req.formData();
         const fullName = formData.get("fullName") as string;
+        // On récupère le nom de l'entreprise envoyé par le frontend
         const companyName = formData.get("companyName") as string;
         const file = formData.get("avatar") as File | null;
 
@@ -55,32 +62,36 @@ export async function POST(req: Request) {
             newAvatarUrl = `${supabaseUrl}/storage/v1/object/public/avatars/${filename}`;
         }
 
-        // 🏢 CORRECTION B2B (Phase 1) : On met à jour l'Entreprise ET l'Utilisateur en simultané
+        // 🏢 SAUVEGARDE B2B AVEC FILTRAGE DE PRIVILÈGES (RBAC)
         await prisma.$transaction(async (tx) => {
-            // Mise à jour de la vraie entité Organisation
-            if (companyId) {
+            
+            // 💡 RÈGLE 1 : Seul l'ADMINISTRATEUR a le droit de renommer la vraie entité Organisation
+            if (isAdmin && companyId) {
                 await (tx as any).company.update({
                     where: { id: companyId },
                     data: { name: companyName }
                 });
             }
             
-            // Mise à jour du profil Agent
+            // 💡 RÈGLE 2 : TOUT LE MONDE peut mettre à jour son propre profil
             await tx.user.update({
                 where: { email: secureEmail },
                 data: {
                     fullName: fullName,
-                    companyName: companyName, // Rétrocompatibilité UI
+                    // L'agent n'a pas le droit d'écraser le label "companyName" sur son profil
+                    ...(isAdmin && { companyName: companyName }), 
                     ...(newAvatarUrl && { avatarUrl: newAvatarUrl }),
                 },
             });
         });
 
+        // On renvoie les bonnes données au Frontend selon ce qui a été réellement sauvegardé
         return NextResponse.json({
-            message: "Profile and Organization updated successfully",
+            message: isAdmin ? "Profile and Organization updated successfully" : "Personal profile updated successfully",
             user: {
                 fullName,
-                companyName,
+                // Si l'utilisateur est un agent, on renvoie l'ancien nom de la session pour ne pas faire croire que ça a marché
+                companyName: isAdmin ? companyName : sessionCompanyName,
                 avatarUrl: newAvatarUrl
             }
         });

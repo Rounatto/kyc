@@ -6,6 +6,7 @@ import Tesseract from "tesseract.js";
 import { z } from "zod"; 
 import { getServerSession } from "next-auth/next"; 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { enforceRole } from "@/lib/rbac"; // 💡 IMPORT DU GARDIEN RBAC
 
 const customerRegistrationSchema = z.object({
     customerName: z.string().min(2, "Le nom doit contenir au moins 2 caractères"),
@@ -91,16 +92,19 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
     };
 }
 
+// ============================================================================
+// 📥 RÉCUPÉRATION DES DOSSIERS (GET)
+// ============================================================================
 export async function GET(req: Request) {
     try {
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !session.user.id || !(session.user as any).companyId) {
-            console.error("🔴 Sécurité : Tentative d'accès sans Company ID valide");
-            return NextResponse.json({ error: "Unauthorized access. Valid B2B session required." }, { status: 401 });
-        }
+        
+        // 🛡️ VERROU RBAC : Admins et Agents peuvent consulter la liste
+        const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
+        if (!guard.isValid) return guard.response!;
 
-        // 💡 MUR B2B : On récupère l'entreprise
-        const companyId = (session.user as any).companyId;
+        // 💡 L'Agent de sécurité RBAC nous fournit directement l'ID de l'entreprise
+        const { companyId } = guard;
 
         const { searchParams } = new URL(req.url);
         const search = searchParams.get("search") || "";
@@ -194,20 +198,21 @@ export async function GET(req: Request) {
     }
 }
 
+// ============================================================================
+// 📤 SOUMISSION D'UN NOUVEAU DOSSIER KYC (POST)
+// ============================================================================
 export async function POST(req: Request) {
     try {
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !session.user.id || !session.user.companyId) {
-            console.error("🔴 Sécurité : Tentative d'écriture sans Company ID valide");
-            return NextResponse.json({ error: "Unauthorized access. Valid B2B session required." }, { status: 401 });
-        }
         
-        const serverAgentId = session.user.id;
-        // 💡 MUR B2B : On récupère l'entreprise
-        const companyId = session.user.companyId;
+        // 🛡️ VERROU RBAC : Admins et Agents ont le droit de soumettre des dossiers
+        const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
+        if (!guard.isValid) return guard.response!;
+
+        // 💡 Extraction propre et sécurisée par le Gardien
+        const { companyId, userId: serverAgentId } = guard;
 
         const body = await req.json();
-        
         const validationResult = customerRegistrationSchema.safeParse(body);
         
         if (!validationResult.success) {
@@ -221,7 +226,8 @@ export async function POST(req: Request) {
         const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardUrl, selfieUrl, biometricScore } = validationResult.data;
         
         console.log("🤖 Score Biométrique reçu du navigateur :", biometricScore);
-        
+
+        // Cette double vérification sur la DB assure que le compte n'a pas été supprimé entre-temps
         const agent = await prisma.user.findUnique({ where: { id: serverAgentId } });
         if (!agent) {
             return NextResponse.json({ error: "Agent session invalid or revoked." }, { status: 401 });
@@ -229,7 +235,7 @@ export async function POST(req: Request) {
 
         const existingRecord = await prisma.verificationRequest.findFirst({
             where: {
-                companyId: companyId, // 💡 MUR B2B : Double vérification uniquement dans l'entreprise
+                companyId: companyId, // 💡 MUR B2B
                 OR: [ { email: email }, { cin: cin } ],
                 status: { in: ["pending", "verified"] } 
             }
@@ -238,6 +244,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "This applicant or identification document is already linked to an active KYC pipeline." }, { status: 409 });
         }
 
+        // --- Logique Métier KYC (Inchangée et robuste) ---
         let clientAge = 30;
         let isUnderage = false;
         let isYoungAdult = false;
@@ -356,6 +363,8 @@ export async function POST(req: Request) {
             ? rationale.join(" ") 
             : `Profile analyzed successfully. Source: ${amlScreening.source}. Client Age: ${clientAge}. Document validation successful.`;
 
+        // --- Fin de Logique Métier ---
+
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
@@ -366,8 +375,8 @@ export async function POST(req: Request) {
                 nationality,
                 dateOfBirth,
                 phoneNumber,
-                userId: serverAgentId, 
-                companyId: companyId, // 💡 MUR B2B : Sauvegarde avec le tampon de l'entreprise
+                userId: serverAgentId!, // 💡 Assuré par le RBAC
+                companyId: companyId!,  // 💡 Assuré par le RBAC
                 idCardUrl,
                 selfieUrl,
                 status: "pending", 
@@ -379,7 +388,7 @@ export async function POST(req: Request) {
                     create: {
                         action: "CREATED",
                         details: `KYC Pipeline initialized. Modules processed: Biometrics, Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
-                        agentId: serverAgentId 
+                        agentId: serverAgentId! 
                     }
                 }
             },

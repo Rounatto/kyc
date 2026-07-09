@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"; 
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { enforceRole } from "@/lib/rbac"; // 💡 IMPORT DU GARDIEN RBAC
 
 export async function GET(req: Request) {
     try {
-        // 🔒 CONFINEMENT B2B : Le Gardien exige une entreprise valide
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !(session.user as any).companyId) {
-            console.error("🔴 Sécurité : Tentative d'accès anonyme ou sans organisation bloquée sur GET /dashboard/stats");
-            return NextResponse.json({ error: "Unauthorized access. Valid B2B session required." }, { status: 401 });
-        }
 
-        // 💡 MUR B2B : Extraction de l'ID de l'entreprise
-        const companyId = (session.user as any).companyId;
+        // 🛡️ VERROU RBAC : Seuls l'Admin et l'Agent peuvent voir les stats
+        const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
+        if (!guard.isValid) return guard.response!;
+
+        // 💡 MUR B2B : Extraction sécurisée de l'ID de l'entreprise par le Gardien
+        const companyId = guard.companyId!;
 
         const { searchParams } = new URL(req.url);
         const range = searchParams.get("range") || "30d";
