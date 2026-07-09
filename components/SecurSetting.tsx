@@ -1,31 +1,37 @@
 "use client";
 
-import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint } from "lucide-react";
+import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useState, useEffect } from "react";
-import { startRegistration } from "@simplewebauthn/browser"; // 💡 IMPORT POUR CRÉER LE PASSKEY
+import { startRegistration } from "@simplewebauthn/browser"; 
 
 export default function SecurSetting() {
-    // États pour les valeurs des mots de passe
+    // --- ÉTATS MOT DE PASSE ---
     const [currentPassword, setCurrentPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
-    
-    // États pour afficher/masquer les mots de passe
     const [showCurrentPassword, setShowCurrentPassword] = useState(false);
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-
-    // États de chargement et de notification (Mot de passe)
     const [passwordLoading, setPasswordLoading] = useState(false);
     const [passwordStatus, setPasswordStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-    // 💡 ÉTATS POUR LE PASSKEY
+    // --- ÉTATS PASSKEY ---
     const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
     const [passkeyStatus, setPasskeyStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+    // --- ÉTATS SESSIONS ---
     const [sessions, setSessions] = useState<any[]>([]);
     const [sessionsLoading, setSessionsLoading] = useState(true);
+
+    // 💡 NOUVEAUX ÉTATS POUR LE 2FA (TOTP)
+    const [is2faModalOpen, setIs2faModalOpen] = useState(false);
+    const [qrCodeUrl, setQrCodeUrl] = useState("");
+    const [totpSecret, setTotpSecret] = useState("");
+    const [totpCodeInput, setTotpCodeInput] = useState("");
+    const [is2faLoading, setIs2faLoading] = useState(false);
+    const [is2faEnabled, setIs2faEnabled] = useState(false); 
+    const [totpStatus, setTotpStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
     // LOGIQUE DE VALIDATION EN TEMPS RÉEL (Mot de passe)
     const correctLength = newPassword.length >= 12;
@@ -88,13 +94,11 @@ export default function SecurSetting() {
         }
     };
 
-    // 🌟 LA MAGIE : CRÉATION DU PASSKEY (LE CADENAS)
     const handleRegisterPasskey = async () => {
         setPasskeyStatus(null);
         setIsPasskeyLoading(true);
 
         try {
-            // 1. Demande au serveur de préparer le terrain (Le Défi)
             const resp = await fetch("/api/settings/security/passkey/generate");
             if (!resp.ok) {
                 const errorData = await resp.json();
@@ -102,7 +106,6 @@ export default function SecurSetting() {
             }
             const options = await resp.json();
 
-            // 2. Le navigateur réveille le capteur biométrique et crée la paire de clés
             let attResp;
             try {
                 attResp = await startRegistration(options);
@@ -113,7 +116,6 @@ export default function SecurSetting() {
                 throw new Error("Biometric sensor error. Please try again.");
             }
 
-            // 3. On envoie la Clé Publique (La Serrure) au serveur pour la sauvegarder
             const verificationResp = await fetch("/api/settings/security/passkey/verify", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -151,8 +153,51 @@ export default function SecurSetting() {
         }
     };
 
+    // 💡 LOGIQUE 2FA : DEMANDER LE QR CODE AU SERVEUR
+    const handleStart2faSetup = async () => {
+        setIs2faLoading(true);
+        setTotpStatus(null);
+        try {
+            const res = await fetch("/api/settings/security/totp/generate", { method: "POST" });
+            if (!res.ok) throw new Error("Failed to generate 2FA secret");
+            const data = await res.json();
+            
+            setQrCodeUrl(data.qrCodeUrl);
+            setTotpSecret(data.secret);
+            setIs2faModalOpen(true);
+        } catch (error: any) {
+            console.error(error);
+        } finally {
+            setIs2faLoading(false);
+        }
+    };
+
+    // 💡 LOGIQUE 2FA : VÉRIFIER LE CODE TAPÉ PAR L'UTILISATEUR
+    const handleVerify2fa = async () => {
+        setIs2faLoading(true);
+        setTotpStatus(null);
+        try {
+            const res = await fetch("/api/settings/security/totp/verify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: totpCodeInput, secret: totpSecret })
+            });
+            
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Invalid verification code");
+
+            setIs2faEnabled(true);
+            setIs2faModalOpen(false);
+            setTotpCodeInput("");
+        } catch (error: any) {
+            setTotpStatus({ type: "error", text: error.message });
+        } finally {
+            setIs2faLoading(false);
+        }
+    };
+
     return (
-        <div className="flex flex-col gap-6 w-full">
+        <div className="flex flex-col gap-6 w-full relative">
             
             {/* BLOC 1 : Mot de Passe */}
             <form onSubmit={handlePasswordUpdate} className="flex flex-col w-full bg-white rounded-sm border border-gray-400 shadow-sm">
@@ -242,7 +287,7 @@ export default function SecurSetting() {
                 </div>
             </form>
 
-            {/* 💡 NOUVEAU BLOC 2 : Biometric Security (Passkeys) */}
+            {/* BLOC 2 : Biometric Security (Passkeys) */}
             <div className="flex flex-col w-full bg-white rounded-sm border border-gray-400 shadow-sm">
                 <div className="border-b border-gray-400 px-5 md:px-6 py-4 flex flex-row items-center gap-3 bg-gray-50/50">
                     <Fingerprint className="w-5 h-5 text-gray-500 shrink-0" />
@@ -272,7 +317,7 @@ export default function SecurSetting() {
                 </div>
             </div>
 
-            {/* BLOC 3 : Authentification Double Facteur (2FA) */}
+            {/* 💡 BLOC 3 : Authentification Double Facteur (2FA) */}
             <div className="flex flex-row flex-wrap items-center justify-between p-5 md:p-6 bg-white rounded-sm border border-gray-400 shadow-sm gap-5">
                 <div className="flex flex-row gap-4 items-center flex-1 min-w-[280px]">
                     <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0 border border-blue-100">
@@ -281,14 +326,24 @@ export default function SecurSetting() {
                     <div className="flex flex-col gap-1">
                         <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
                             Two-Factor Authentication (2FA)
-                            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded-sm uppercase border border-red-200">Disabled</span>
+                            {is2faEnabled ? (
+                                <span className="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded-sm uppercase border border-green-200">Enabled</span>
+                            ) : (
+                                <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded-sm uppercase border border-red-200">Disabled</span>
+                            )}
                         </h4>
                         <p className="text-xs text-gray-500 leading-relaxed max-w-md mt-0.5">Enforce bank-grade compliance security by requiring a code from an authenticator application at login.</p>
                     </div>
                 </div>
-                <button className="w-full sm:w-auto text-sm font-bold text-blue-700 bg-white border border-blue-700 px-5 h-10 rounded-sm hover:bg-blue-50 transition-colors shrink-0 text-center cursor-pointer">
-                    Configure 2FA
-                </button>
+                {!is2faEnabled && (
+                    <button 
+                        onClick={handleStart2faSetup} 
+                        disabled={is2faLoading} 
+                        className="w-full sm:w-auto text-sm font-bold text-blue-700 bg-white border border-blue-700 px-5 h-10 rounded-sm hover:bg-blue-50 transition-colors shrink-0 text-center cursor-pointer disabled:opacity-50"
+                    >
+                        {is2faLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Configure 2FA"}
+                    </button>
+                )}
             </div>
 
             {/* BLOC 4 : Sessions Actives */}
@@ -347,6 +402,57 @@ export default function SecurSetting() {
                     </div>
                 </div>
             </div>
+
+            {/* 💡 MODALE DE CONFIGURATION 2FA */}
+            {is2faModalOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex justify-between items-center p-4 border-b border-gray-100">
+                            <h3 className="font-bold text-lg text-gray-900">Setup Authenticator App</h3>
+                            <button onClick={() => setIs2faModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6 flex flex-col items-center gap-6">
+                            <p className="text-sm text-gray-600 text-center">
+                                Scan this QR code with your authenticator app (like Google Authenticator, Authy, or 1Password).
+                            </p>
+                            
+                            <div className="p-2 bg-white border border-gray-200 rounded-lg shadow-sm">
+                                {qrCodeUrl ? (
+                                    <img src={qrCodeUrl} alt="2FA QR Code" className="w-48 h-48" />
+                                ) : (
+                                    <div className="w-48 h-48 flex items-center justify-center bg-gray-50 text-gray-400">Loading...</div>
+                                )}
+                            </div>
+
+                            <div className="w-full">
+                                <label className="text-xs font-bold text-gray-700 mb-1.5 block">Enter the 6-digit code</label>
+                                <input 
+                                    type="text" 
+                                    maxLength={6}
+                                    placeholder="000000"
+                                    value={totpCodeInput}
+                                    onChange={(e) => setTotpCodeInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                    className="w-full border border-gray-300 rounded-sm py-2.5 px-3 text-center tracking-[0.5em] font-mono text-lg focus-within:border-blue-500 outline-none transition-colors"
+                                />
+                                {totpStatus?.type === "error" && (
+                                    <p className="text-xs text-red-600 mt-2 flex items-center justify-center gap-1"><AlertCircle className="w-3 h-3"/> {totpStatus.text}</p>
+                                )}
+                            </div>
+
+                            <button 
+                                onClick={handleVerify2fa}
+                                disabled={totpCodeInput.length !== 6 || is2faLoading}
+                                className="w-full bg-blue-700 text-white font-bold py-2.5 rounded-sm hover:bg-blue-800 disabled:opacity-50 transition-colors flex justify-center items-center h-11"
+                            >
+                                {is2faLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify and Enable 2FA"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 }
