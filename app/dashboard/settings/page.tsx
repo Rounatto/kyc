@@ -2,28 +2,31 @@
 
 import Header from "@/components/header";
 import { useState } from "react";
-import { useSession } from "next-auth/react"; // 💡 IMPORT OBLIGATOIRE POUR LE RBAC
-import { User, Lock, Bell, Code, ShieldAlert } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { User, Lock, Bell, Code, ShieldAlert, Users } from "lucide-react"; // 💡 Import de l'icône Users
 import ProfSetting from "@/components/ProfSetting";
 import SecurSetting from "@/components/SecurSetting";
 import ApIwebhooksSetting from "@/components/API&webhooksSetting";
 import NotifSetting from "@/components/NotifSetting";
 import AuditSetting from "@/components/AuditSetting";
+import TeamSetting from "@/components/TeamSetting"; // 💡 Import du nouveau composant
 
 export default function Settings() {
     const { data: session } = useSession();
     const [activeSetting, setActiveSetting] = useState("Profile Info");
 
-    // 🛡️ VERROU RBAC FRONTEND : Détermine si l'utilisateur est un Administrateur
     const isAdmin = (session?.user as any)?.role === "COMPANY_ADMIN";
 
-    // 💡 TABLEAU DYNAMIQUE : L'onglet Audit Trail ne s'ajoute que si isAdmin est true
+    // 💡 TABLEAU DYNAMIQUE MIS À JOUR
     const menuItems = [
         { name: "Profile Info", icon: User },
         { name: "Security", icon: Lock },
         { name: "Notifications", icon: Bell },
         { name: "API & Webhooks", icon: Code },
-        ...(isAdmin ? [{ name: "Audit Trail", icon: ShieldAlert }] : []),
+        ...(isAdmin ? [
+            { name: "Team Management", icon: Users }, // 👈 Ajout de l'onglet Team
+            { name: "Audit Trail", icon: ShieldAlert }
+        ] : []),
     ];
 
     const renderContent = () => {
@@ -36,7 +39,9 @@ export default function Settings() {
                 return <NotifSetting />;
             case "API & Webhooks":
                 return <ApIwebhooksSetting />;
-            // 💡 AJOUT DU NOUVEAU COMPOSANT
+            // 💡 CÂBLAGE DES DEUX ONGLETS ADMIN
+            case "Team Management":
+                return isAdmin ? <TeamSetting /> : null;
             case "Audit Trail":
                 return isAdmin ? <AuditSetting /> : null;
             default:
