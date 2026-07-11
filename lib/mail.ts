@@ -1,20 +1,23 @@
 import nodemailer from "nodemailer";
 
+// Configuration globale du transporteur sécurisé
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_APP_PASSWORD,
+  },
+});
+
+// ============================================================================
+// 📁 EMAILS DE STATUT KYC (Existant)
+// ============================================================================
 export const sendKYCEmail = async (
   to: string, 
   status: string, 
   name: string, 
   rejectionReason?: string
 ) => {
-  // Configuration du transporteur sécurisé avec les identifiants du fichier .env
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_APP_PASSWORD,
-    },
-  });
-
   let subject = "";
   let htmlContent = "";
 
@@ -60,9 +63,51 @@ export const sendKYCEmail = async (
     `;
   }
 
-  // Envoi effectif de l'e-mail
   await transporter.sendMail({
     from: `"Compliance Operations" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html: htmlContent,
+  });
+};
+
+// ============================================================================
+// 🛡️ NOUVEAU : EMAILS D'INVITATION D'ÉQUIPE (Phase 5.1)
+// ============================================================================
+export const sendAgentInvitationEmail = async (
+  to: string, 
+  name: string, 
+  tempPassword: string
+) => {
+  const subject = "You've been invited to join the Compliance Team";
+  
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
+      <div style="margin-bottom: 24px;">
+        <span style="background-color: #e0e7ff; color: #3730a3; font-weight: bold; font-size: 12px; padding: 6px 12px; rounded-full: 9999px; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 12px;">Organization Invitation</span>
+      </div>
+      <h2 style="color: #111827; font-size: 24px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Welcome to the Team</h2>
+      <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">Hello <strong>${name}</strong>,</p>
+      <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">Your Administrator has provisioned a KYC Agent account for you. You are now authorized to access the secure compliance infrastructure.</p>
+      
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 20px; border-radius: 8px; margin: 24px 0; text-align: center;">
+        <p style="margin: 0; font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Your Temporary Password</p>
+        <p style="margin: 0; font-size: 24px; font-family: monospace; font-weight: 800; color: #0f172a; letter-spacing: 0.1em;">${tempPassword}</p>
+      </div>
+      
+      <p style="font-size: 15px; line-height: 1.6; color: #4b5563; border-left: 3px solid #f59e0b; padding-left: 12px; margin-top: 24px;">
+        <strong>Security Notice:</strong> For SOC2 compliance, you must configure your <strong>Two-Factor Authentication (2FA)</strong> immediately upon your first login.
+      </p>
+
+      <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
+        Securely yours,<br/>
+        <strong style="color: #4b5563;">System Administrator</strong>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: `"Security Admin" <${process.env.EMAIL_USER}>`,
     to,
     subject,
     html: htmlContent,

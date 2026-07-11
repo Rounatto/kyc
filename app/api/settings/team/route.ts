@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac"; 
 import { logSecurityEvent } from "@/lib/logger"; 
+import { sendAgentInvitationEmail } from "@/lib/mail"; // 💡 NOUVEL IMPORT
 
 // Validation stricte des données pour la création d'un Agent
 const agentSchema = z.object({
@@ -99,6 +100,14 @@ export async function POST(req: Request) {
             companyId: companyId!,
             agentId: adminId!
         });
+
+        // ✉️ ENVOI DE L'EMAIL B2B AUTOMATIQUE (Nouveau bloc)
+        try {
+            await sendAgentInvitationEmail(email, fullName, password);
+        } catch (emailError) {
+            console.error("Failed to send invitation email:", emailError);
+            // On ne crashe pas l'API si l'email échoue, l'agent est quand même créé
+        }
 
         return NextResponse.json({ message: "Agent created successfully", member: newAgent }, { status: 201 });
     } catch (error: any) {
