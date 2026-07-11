@@ -19,11 +19,12 @@ model Company {
   
   users                User[]
   verificationRequests VerificationRequest[]
-  
+  auditLogs            AuditLog[]            // 💡 AJOUT : L'entreprise possède désormais son registre global
+}
   // Préparation Phase 4 (L'écosystème Développeur B2B)
   // apiKeys              ApiKey[]
   // webhooks             Webhook[]
-}
+
 
 // =====================================================================
 // 🧑‍💻 UTILISATEURS ET IAM (IDENTITY & ACCESS MANAGEMENT)
@@ -107,8 +108,13 @@ model AuditLog {
   details     String?  
   timestamp   DateTime @default(now())
 
-  requestId   String
-  request     VerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  // 💡 NOUVEAU : Centralisation B2B obligatoire (Tout log appartient à l'entreprise)
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // 💡 CORRECTION : Rendu optionnel (?) car un log de Login n'a pas de dossier KYC !
+  requestId   String?
+  request     VerificationRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
   agentId     String?
   agent       User?    @relation(fields: [agentId], references: [id], onDelete: SetNull)

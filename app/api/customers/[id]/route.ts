@@ -1,34 +1,40 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendKYCEmail } from "@/lib/mail";
-import { getServerSession } from "next-auth/next"; // 💡 LE GARDIEN DE SÉCURITÉ
+import { getServerSession } from "next-auth/next"; 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { enforceRole } from "@/lib/rbac"; // 💡 IMPORT DU GARDIEN RBAC
+
 export async function GET(
     req: Request, 
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
-        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE LA LECTURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email) {
-            console.error("🔴 Sécurité : Tentative d'accès anonyme bloquée sur GET /customers/[id]");
-            return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });
-        }
+        
+        // 🛡️ VERROU RBAC
+        const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
+        if (!guard.isValid) return guard.response!;
 
+        const { companyId } = guard;
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
         const customer = await prisma.verificationRequest.findUnique({
-            where: { id: customerId },
+            where: { 
+                id: customerId,
+                companyId: companyId! // 🏢 DOUBLE VÉRIFICATION B2B
+            },
             include: {
                 auditLogs: {
-                    orderBy: { timestamp: 'desc' } 
+                    orderBy: { timestamp: 'desc' },
+                    include: { agent: { select: { fullName: true } } } // Pour afficher le nom de l'agent dans l'historique
                 }
             }
         });
 
         if (!customer) {
-            return NextResponse.json({ message: "Customer not found." }, { status: 404 });
+            return NextResponse.json({ message: "Customer not found or unauthorized access." }, { status: 404 });
         }
         
         return NextResponse.json(customer);
@@ -43,23 +49,30 @@ export async function PATCH(
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
-        // 🔒 CONFINEMENT PHASE 0 : VERROUILLAGE DE L'ÉCRITURE
         const session = await getServerSession(authOptions);
-        if (!session?.user?.email || !session.user.id) {
-            console.error("🔴 Sécurité : Tentative de modification bloquée sur PATCH /customers/[id]");
-            return NextResponse.json({ message: "Unauthorized access. Valid session required." }, { status: 401 });
-        }
+        
+        // 🛡️ VERROU RBAC
+        const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
+        if (!guard.isValid) return guard.response!;
 
-        // 💡 IDENTITÉ INFALSIFIABLE DE L'AGENT DEPUIS LE SERVEUR
-        const serverAgentId = session.user.id;
-        const serverAgentName = session.user.name || "Unknown Agent";
+        const { companyId, userId: serverAgentId } = guard;
+        const serverAgentName = session.user?.name || "Unknown Agent";
 
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
+        // Vérifier que le dossier appartient bien à l'entreprise
+        const existingCustomer = await prisma.verificationRequest.findUnique({
+            where: { id: customerId, companyId: companyId! }
+        });
+
+        if (!existingCustomer) {
+            return NextResponse.json({ message: "Customer not found or unauthorized." }, { status: 404 });
+        }
+
         const body = await req.json();
         
-        // 💡 Logique de gestion du Flag pour Audit
+        // --- 💡 Logique de gestion du Flag pour Audit ---
         if (body.action === "FLAG_AUDIT") {
             const flaggedCustomer = await prisma.verificationRequest.update({
                 where: { id: customerId },
@@ -68,7 +81,8 @@ export async function PATCH(
                         create: {
                             action: "FLAGGED",
                             details: `Profile manually flagged for internal security audit by ${serverAgentName}. Immediate attention required.`,
-                            agentId: serverAgentId // 👈 IDENTITÉ SERVEUR
+                            agentId: serverAgentId!,
+                            companyId: companyId! // 💡 UNIFIED AUDIT TRAIL
                         }
                     }
                 }
@@ -77,7 +91,6 @@ export async function PATCH(
         }
 
         // --- Logique Standard Approve/Reject ---
-        // ❌ agentId EST SUPPRIMÉ DU BODY. Le client n'a plus le droit de dicter son identité.
         const { status, rejectionReason } = body; 
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
@@ -103,7 +116,8 @@ export async function PATCH(
                     create: {
                         action: actionName,
                         details: logDetails,
-                        agentId: serverAgentId // 👈 IDENTITÉ SERVEUR INFALSIFIABLE
+                        agentId: serverAgentId!,
+                        companyId: companyId! // 💡 UNIFIED AUDIT TRAIL
                     }
                 }
             },

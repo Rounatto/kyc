@@ -388,7 +388,8 @@ export async function POST(req: Request) {
                     create: {
                         action: "CREATED",
                         details: `KYC Pipeline initialized. Modules processed: Biometrics, Age Check (${clientAge}yo), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
-                        agentId: serverAgentId! 
+                        agentId: serverAgentId!, 
+                        companyId: companyId!
                     }
                 }
             },

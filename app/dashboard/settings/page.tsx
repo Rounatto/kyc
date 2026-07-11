@@ -2,19 +2,28 @@
 
 import Header from "@/components/header";
 import { useState } from "react";
-import { User, Lock, Bell, Code, Pencil, Smartphone, Plus, Eye, Trash2, Info } from "lucide-react";
+import { useSession } from "next-auth/react"; // 💡 IMPORT OBLIGATOIRE POUR LE RBAC
+import { User, Lock, Bell, Code, ShieldAlert } from "lucide-react";
 import ProfSetting from "@/components/ProfSetting";
 import SecurSetting from "@/components/SecurSetting";
 import ApIwebhooksSetting from "@/components/API&webhooksSetting";
 import NotifSetting from "@/components/NotifSetting";
+import AuditSetting from "@/components/AuditSetting";
+
 export default function Settings() {
+    const { data: session } = useSession();
     const [activeSetting, setActiveSetting] = useState("Profile Info");
 
+    // 🛡️ VERROU RBAC FRONTEND : Détermine si l'utilisateur est un Administrateur
+    const isAdmin = (session?.user as any)?.role === "COMPANY_ADMIN";
+
+    // 💡 TABLEAU DYNAMIQUE : L'onglet Audit Trail ne s'ajoute que si isAdmin est true
     const menuItems = [
         { name: "Profile Info", icon: User },
         { name: "Security", icon: Lock },
         { name: "Notifications", icon: Bell },
         { name: "API & Webhooks", icon: Code },
+        ...(isAdmin ? [{ name: "Audit Trail", icon: ShieldAlert }] : []),
     ];
 
     const renderContent = () => {
@@ -27,10 +36,14 @@ export default function Settings() {
                 return <NotifSetting />;
             case "API & Webhooks":
                 return <ApIwebhooksSetting />;
+            // 💡 AJOUT DU NOUVEAU COMPOSANT
+            case "Audit Trail":
+                return isAdmin ? <AuditSetting /> : null;
             default:
                 return null;
         }
     };
+
     return (
         <div className="w-full min-h-screen bg-gray-50 pb-12">
             <Header />

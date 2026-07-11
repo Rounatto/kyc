@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { verifyAuthenticationResponse } from "@simplewebauthn/server";
 import { verifySync } from "otplib"; 
+import { logSecurityEvent } from "@/lib/logger"; // 💡 IMPORT DU SYSTÈME D'AUDIT
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -34,11 +35,11 @@ export const authOptions: NextAuthOptions = {
             totpSecret: string | null 
         };
 
+        // 🌟 SCÉNARIO 1 : CONNEXION PAR PASSKEY
         if (credentials.passkeyResponse) {
             if (!user.currentChallenge) throw new Error("Challenge expiré ou invalide");
 
             const response = JSON.parse(credentials.passkeyResponse);
-            
             const passkey = user.passkeys.find(pk => pk.credentialID === response.id);
             if (!passkey) throw new Error("Clé biométrique non reconnue");
 
@@ -57,7 +58,6 @@ export const authOptions: NextAuthOptions = {
                     requireUserVerification: true, 
                 });
             } catch (error) {
-                console.error("Erreur crypto:", error);
                 throw new Error("Échec de la vérification biométrique");
             }
 
@@ -71,28 +71,28 @@ export const authOptions: NextAuthOptions = {
                     data: { currentChallenge: null }
                 });
 
-                return { 
-                    id: user.id, 
-                    email: user.email, 
-                    name: user.fullName, 
-                    image: user.avatarUrl, 
-                    companyId: authUser.companyId, 
-                    role: authUser.role 
-                };
+                // 📜 AUDIT TRAIL : Succès Biométrique
+                if (authUser.companyId) {
+                    await logSecurityEvent({
+                        action: "LOGIN_SUCCESS",
+                        details: "User authenticated successfully via Biometric Passkey.",
+                        companyId: authUser.companyId,
+                        agentId: user.id
+                    });
+                }
+
+                return { id: user.id, email: user.email, name: user.fullName, image: user.avatarUrl, companyId: authUser.companyId, role: authUser.role };
             }
             return null;
         }
 
+        // 🌟 SCÉNARIO 2 : CONNEXION PAR MOT DE PASSE (+ 2FA)
         if (credentials.password && user.password) {
             const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
             if (!isPasswordValid) return null; 
 
             if (authUser.totpEnabled) {
-                
-                if (!credentials.totpCode) {
-                    throw new Error("2FA_REQUIRED");
-                }
-
+                if (!credentials.totpCode) throw new Error("2FA_REQUIRED");
                 if (!authUser.totpSecret) throw new Error("Erreur de configuration 2FA");
                 
                 const { valid: isValidTotp } = verifySync({
@@ -101,18 +101,32 @@ export const authOptions: NextAuthOptions = {
                 });
 
                 if (!isValidTotp) {
+                    // 📜 AUDIT TRAIL : Échec 2FA
+                    if (authUser.companyId) {
+                        await logSecurityEvent({
+                            action: "LOGIN_FAILED",
+                            details: "User provided correct password but failed 2FA verification.",
+                            companyId: authUser.companyId,
+                            agentId: user.id
+                        });
+                    }
                     throw new Error("INVALID_2FA_CODE"); 
                 }
             }
 
+            // 📜 AUDIT TRAIL : Succès Mot de Passe (+ 2FA optionnel)
+            if (authUser.companyId) {
+                await logSecurityEvent({
+                    action: "LOGIN_SUCCESS",
+                    details: `User authenticated successfully via Password${authUser.totpEnabled ? " and 2FA" : ""}.`,
+                    companyId: authUser.companyId,
+                    agentId: user.id
+                });
+            }
+
             return { 
-                id: user.id, 
-                email: user.email, 
-                name: user.fullName, 
-                image: user.avatarUrl, 
-                companyId: authUser.companyId, 
-                role: authUser.role,
-                rememberMe: credentials.rememberMe === "true" 
+                id: user.id, email: user.email, name: user.fullName, image: user.avatarUrl, 
+                companyId: authUser.companyId, role: authUser.role, rememberMe: credentials.rememberMe === "true" 
             };
         }
 
@@ -120,15 +134,13 @@ export const authOptions: NextAuthOptions = {
       }
     }),
     
+    // 🌟 SCÉNARIO 3 : CONNEXION GOOGLE OAUTH
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID as string,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
     })
   ],
-  session: {
-    strategy: "jwt" as const,
-    maxAge: 15 * 24 * 60 * 60, 
-  },
+  session: { strategy: "jwt" as const, maxAge: 15 * 24 * 60 * 60 },
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
@@ -141,65 +153,59 @@ export const authOptions: NextAuthOptions = {
             const newCompany = await txWithCompany.company.create({
                 data: { name: `${user.name || "Google User"} Workspace`, plan: "trial" }
             });
-            await tx.user.create({
+            const newUser = await tx.user.create({
               data: { 
-                  email: user.email as string, 
-                  fullName: user.name || "Google User", 
-                  avatarUrl: user.image,
-                  companyId: newCompany.id,
-                  role: "COMPANY_ADMIN"
+                  email: user.email as string, fullName: user.name || "Google User", avatarUrl: user.image,
+                  companyId: newCompany.id, role: "COMPANY_ADMIN"
               }
             });
+            
+            // 📜 AUDIT TRAIL : Nouveau compte Google
+            await txWithCompany.auditLog.create({
+                data: {
+                    action: "ACCOUNT_CREATED", details: "Company Workspace created via Google OAuth Sign-in.",
+                    companyId: newCompany.id, agentId: newUser.id
+                }
+            });
           });
+        } else {
+            // 📜 AUDIT TRAIL : Succès Google
+            if (existingUser.companyId) {
+                await logSecurityEvent({
+                    action: "LOGIN_SUCCESS", details: "User authenticated successfully via Google OAuth.",
+                    companyId: existingUser.companyId, agentId: existingUser.id
+                });
+            }
         }
       }
       return true;
     },
     async jwt({ token, user, trigger, session, account }) {
       if (account || user) {
-        const dbUser = await prisma.user.findUnique({ 
-            where: { email: token.email as string },
-        });
+        const dbUser = await prisma.user.findUnique({ where: { email: token.email as string } });
         if (dbUser) {
             const typedDbUser = dbUser as typeof dbUser & { companyId?: string | null; role?: string | null };
-            token.id = dbUser.id;
-            token.name = dbUser.fullName;
-            token.image = dbUser.avatarUrl;
-            token.companyId = typedDbUser.companyId; 
-            token.role = typedDbUser.role;          
-            token.companyName = (dbUser as any).companyName;
-            // 💡 Injection de l'état 2FA
-            token.totpEnabled = (dbUser as any).totpEnabled;
+            token.id = dbUser.id; token.name = dbUser.fullName; token.image = dbUser.avatarUrl;
+            token.companyId = typedDbUser.companyId; token.role = typedDbUser.role;          
+            token.companyName = (dbUser as any).companyName; token.totpEnabled = (dbUser as any).totpEnabled;
         }
       }
-      
       if (trigger === "update" && session?.user) {
-        token.name = session.user.name;
-        token.image = session.user.image;
-        token.companyName = session.user.companyName; 
-        // 💡 Mise à jour à chaud
-        token.totpEnabled = session.user.totpEnabled;
+        token.name = session.user.name; token.image = session.user.image;
+        token.companyName = session.user.companyName; token.totpEnabled = session.user.totpEnabled;
       }
       return token;
     },
     async session({ session, token }) {
       if (token && session.user) {
-        session.user.id = token.id as string;
-        session.user.name = token.name;
-        session.user.image = token.image as string;
-        
-        (session.user as any).companyId = token.companyId as string;
-        (session.user as any).role = token.role as string;
-        (session.user as any).companyName = token.companyName as string;
-        // 💡 Exposition au Frontend
-        (session.user as any).totpEnabled = token.totpEnabled as boolean;
+        session.user.id = token.id as string; session.user.name = token.name; session.user.image = token.image as string;
+        (session.user as any).companyId = token.companyId as string; (session.user as any).role = token.role as string;
+        (session.user as any).companyName = token.companyName as string; (session.user as any).totpEnabled = token.totpEnabled as boolean;
       }
       return session;
     }
   },
-  pages: {
-    signIn: "/login",
-  }
+  pages: { signIn: "/login" }
 };
 
 const handler = NextAuth(authOptions);
