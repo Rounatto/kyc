@@ -115,3 +115,43 @@ export const sendAgentInvitationEmail = async (
     html: htmlContent,
   });
 };
+
+// ============================================================================
+// 📩 NOUVEAU : EMAIL DE VÉRIFICATION OTP (Phase 6)
+// ============================================================================
+export const sendVerificationOtpEmail = async (
+  to: string, 
+  otpCode: string
+) => {
+  const subject = "Verify Your Business Email";
+  
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
+      <div style="margin-bottom: 24px;">
+        <span style="background-color: #e0e7ff; color: #3730a3; font-weight: bold; font-size: 12px; padding: 6px 12px; rounded-full: 9999px; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 12px;">Security Check</span>
+      </div>
+      <h2 style="color: #111827; font-size: 24px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Email Verification</h2>
+      <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">You are attempting to register a new Workspace on the Compliance Portal. To verify your identity and secure your account, please enter the following 6-digit verification code:</p>
+      
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 24px; border-radius: 8px; margin: 32px 0; text-align: center;">
+        <p style="margin: 0; font-size: 40px; font-family: monospace; font-weight: 900; color: #1d4ed8; letter-spacing: 0.2em;">${otpCode}</p>
+      </div>
+      
+      <p style="font-size: 13px; line-height: 1.6; color: #6b7280; text-align: center;">
+        This code is highly confidential and will expire in exactly 10 minutes. Do not share this code with anyone.
+      </p>
+
+      <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
+        Securely yours,<br/>
+        <strong style="color: #4b5563;">The Security Operations Team</strong>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: `"Security Operations" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html: htmlContent,
+  });
+};

@@ -159,3 +159,13 @@ model Passkey {
   createdAt           DateTime @default(now())
   lastUsedAt          DateTime @default(now())
 }
+// =====================================================================
+// 📩 ONBOARDING SÉCURISÉ : VÉRIFICATION OTP (Phase 6)
+// =====================================================================
+model OtpCode {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  code      String   // Le code à 6 chiffres
+  expiresAt DateTime // Date d'expiration (ex: dans 10 minutes)
+  createdAt DateTime @default(now())
+}
