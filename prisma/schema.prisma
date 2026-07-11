@@ -29,17 +29,20 @@ model Company {
 // =====================================================================
 // 🧑‍💻 UTILISATEURS ET IAM (IDENTITY & ACCESS MANAGEMENT)
 // =====================================================================
+// =====================================================================
+// 🧑‍💻 UTILISATEURS ET IAM (IDENTITY & ACCESS MANAGEMENT)
+// =====================================================================
 model User {
   id                   String                @id @default(cuid())
   fullName             String
-  companyName          String?               // Gardé temporairement pour ne pas casser l'ancien code
+  companyName          String?               
   
   // 🏢 RELATION ENTREPRISE
   companyId            String?
   company              Company?              @relation(fields: [companyId], references: [id])
   
-  // 🛡️ SÉCURITÉ & RÔLES (Phase 2 & 4)
-  role                 String                @default("AGENT") // SUPER_ADMIN, COMPANY_ADMIN, AGENT, AUDITOR
+  // 🛡️ SÉCURITÉ & RÔLES
+  role                 String                @default("AGENT") 
   
   email                String                @unique
   password             String?
@@ -51,11 +54,15 @@ model User {
   currentChallenge     String?
   passkeys             Passkey[]
   
-  // 📱 2FA TOTP (Préparation Phase 2)
+  // 📱 2FA TOTP
   totpEnabled          Boolean               @default(false)
-  totpSecret           String?               // ⚠️ Devra être chiffré
-  backupCodes          String?               // Codes de secours stockés hashés
+  totpSecret           String?               
+  backupCodes          String?               
   
+  // 💡 NOUVEAU : INVITATION SÉCURISÉE B2B
+  invitationToken      String?               @unique
+  invitationExpires    DateTime?
+
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
   userSessions         UserSession[]         

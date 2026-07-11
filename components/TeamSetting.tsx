@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Users, UserPlus, Trash2, ShieldCheck, ShieldAlert, Loader2, Mail, Lock, User as UserIcon } from "lucide-react";
+import { Users, UserPlus, Trash2, ShieldCheck, ShieldAlert, Loader2, Mail, User as UserIcon } from "lucide-react";
 
 interface TeamMember {
     id: string;
@@ -17,10 +17,9 @@ export default function TeamSetting() {
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     
-    // États du formulaire
+    // États du formulaire (Zéro-Knowledge : plus de mot de passe)
     const [fullName, setFullName] = useState("");
     const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -52,23 +51,23 @@ export default function TeamSetting() {
             const res = await fetch("/api/settings/team", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ fullName, email, password }),
+                body: JSON.stringify({ fullName, email }), // 💡 On n'envoie que le nom et l'email
             });
 
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Failed to create agent");
 
-            setStatusMessage({ type: "success", text: "Agent account successfully created." });
+            setStatusMessage({ type: "success", text: "Secure invitation link sent to agent's email." });
             setMembers([...members, data.member]);
             
             // Reset form
             setFullName("");
             setEmail("");
-            setPassword("");
+            
             setTimeout(() => {
                 setIsModalOpen(false);
                 setStatusMessage(null);
-            }, 2000);
+            }, 2500);
 
         } catch (error: any) {
             setStatusMessage({ type: "error", text: error.message });
@@ -185,7 +184,7 @@ export default function TeamSetting() {
                 )}
             </div>
 
-            {/* MODAL D'INVITATION */}
+            {/* MODAL D'INVITATION SÉCURISÉE */}
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                     <div className="bg-white rounded-md shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200 border border-gray-200">
@@ -215,21 +214,13 @@ export default function TeamSetting() {
                                     <Mail className="w-4 h-4 text-gray-400" />
                                     <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane.doe@company.com" className="w-full outline-none text-sm" />
                                 </div>
-                            </div>
-
-                            <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-semibold text-gray-700">Temporary Password</label>
-                                <div className="flex items-center gap-2 border border-gray-300 rounded-sm py-2 px-3 focus-within:border-blue-500 bg-white">
-                                    <Lock className="w-4 h-4 text-gray-400" />
-                                    <input type="password" required minLength={12} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min. 12 characters" className="w-full outline-none text-sm" />
-                                </div>
-                                <p className="text-[10px] text-gray-500">Provide this to the agent securely. They must change it upon first login.</p>
+                                <p className="text-[10px] text-gray-500 mt-1">A secure activation link will be sent to this address.</p>
                             </div>
 
                             <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-gray-100">
                                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-sm transition-colors">Cancel</button>
-                                <button type="submit" disabled={isSubmitting} className="flex justify-center items-center px-5 py-2 bg-blue-700 text-white text-sm font-bold rounded-sm hover:bg-blue-800 transition-colors min-w-[120px] disabled:opacity-50">
-                                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Provision Agent"}
+                                <button type="submit" disabled={isSubmitting} className="flex justify-center items-center px-5 py-2 bg-blue-700 text-white text-sm font-bold rounded-sm hover:bg-blue-800 transition-colors min-w-[150px] disabled:opacity-50">
+                                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Invitation Link"}
                                 </button>
                             </div>
                         </form>
