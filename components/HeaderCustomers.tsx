@@ -45,7 +45,6 @@ export default function HeaderCustomers() {
     const userEmail = session?.user?.email || "chargement...";
     const userInitial = userName.charAt(0).toUpperCase();
     const userImage = session?.user?.image;
-    // const companyName = (session?.user as any)?.companyName || "";
 
     // --- ÉTATS DU MOTEUR DE RECHERCHE ---
     const [searchTerm, setSearchTerm] = useState("");
@@ -163,16 +162,21 @@ export default function HeaderCustomers() {
 
             {/* Right Side: Exact profile container */}
             <div className="flex items-center gap-2 mt-2 md:mt-3">
+                
+                {/* 🔔 La cloche sera dynamique à la Phase 11 */}
                 <button className="text-gray-700 hover:text-gray-500 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200 cursor-pointer">
                     <span className="sr-only">Notifications</span>
-                    <Bell />
+                    <Bell className="w-5 h-5" />
                 </button>
-                <button className="text-gray-700 hover:text-gray-500 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200 cursor-pointer">
-                    <span className="sr-only">Information</span>
-                    <CircleQuestionMark />
-                </button>
+                
+                {/* 💡 LE BOUTON SUPPORT DEVENU DYNAMIQUE */}
+                <Link href="/dashboard/support" className="text-gray-700 hover:text-blue-600 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-blue-50 cursor-pointer">
+                    <span className="sr-only">Information & Support</span>
+                    <CircleQuestionMark className="w-5 h-5" />
+                </Link>
+                
                 <div className="relative">
-                    <div onClick={() => setIsMenuOpen(!isMenuOpen)} className={`w-9 h-10 mr-2 md:mr-3 ${userImage ? 'bg-transparent' : 'bg-blue-200/70 border border-gray-200'} rounded-xl overflow-hidden cursor-pointer`}>
+                    <div onClick={() => setIsMenuOpen(!isMenuOpen)} className={`w-9 h-10 mr-2 md:mr-3 ${userImage ? 'bg-transparent' : 'bg-blue-200/70 border border-gray-200'} rounded-xl overflow-hidden cursor-pointer flex items-center justify-center relative`}>
                         {userImage ? (
                             <img src={userImage} alt="Avatar" className="w-full h-full object-cover" />
                         ) : (
@@ -180,19 +184,21 @@ export default function HeaderCustomers() {
                         )}
                     </div>
                     {isMenuOpen && (
-                        <div className="absolute right-2 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg py-1 z-50">
-                            <div className="px-4 py-2 border-b border-gray-100">
-                                <p className="text-sm font-medium text-gray-800 truncate">{userName}</p>
-                                <p className="text-xs text-gray-500 truncate">{userEmail}</p>
+                        <>
+                            <div className="fixed inset-0 z-40" onClick={() => setIsMenuOpen(false)}></div>
+                            <div className="absolute right-2 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg py-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                                <div className="px-4 py-2 border-b border-gray-100">
+                                    <p className="text-sm font-medium text-gray-800 truncate">{userName}</p>
+                                    <p className="text-xs text-gray-500 truncate">{userEmail}</p>
+                                </div>
+                                <Link href="/dashboard/settings" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                                    <User className="w-4 h-4" /> Account Settings
+                                </Link>
+                                <button onClick={() => signOut({ callbackUrl: "/login"})} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-100 transition-colors mt-1 border-t border-gray-100 cursor-pointer">
+                                    <LogOut className="w-4 h-4" />Logout
+                                </button>
                             </div>
-                            <Link href="/dashboard/settings" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                                <User className="w-4 h-4" />
-                                Account Settings
-                            </Link>
-                            <button onClick={() => signOut({ callbackUrl: "/login"})} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-100 transition-colors mt-1 border-t border-gray-100 cursor-pointer">
-                                <LogOut className="w-4 h-4" />Logout
-                            </button>
-                        </div>
+                        </>
                     )}
                 </div>
             </div>

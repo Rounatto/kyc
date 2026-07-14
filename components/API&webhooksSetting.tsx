@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Plus, Eye, Trash2, Info, Loader2, ShieldAlert, CheckCircle2, Copy, X } from "lucide-react";
+import Link from "next/link";
 
 interface ApiKeyRecord {
     id: string;
@@ -57,7 +58,7 @@ export default function ApIwebhooksSetting() {
                 setNewlyGeneratedKey(data.keyData.keyValue);
                 setNewKeyName("");
                 setShowGenerateForm(false);
-                fetchKeys(); // Met à jour la table
+                fetchKeys();
             } else {
                 alert(data.error);
             }
@@ -99,7 +100,6 @@ export default function ApIwebhooksSetting() {
     return (
         <div className="flex flex-col gap-6">
             
-            {/* ALERTE SÉCURITÉ : AFFICHAGE UNIQUE DE LA CLÉ */}
             {newlyGeneratedKey && (
                 <div className="w-full bg-blue-50 border border-blue-200 rounded-xl p-5 md:p-6 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
                     <div className="flex items-center gap-2 mb-2">
@@ -132,7 +132,6 @@ export default function ApIwebhooksSetting() {
                 </div>
             )}
 
-            {/* TABLEAU ET GESTION */}
             <div className="flex flex-col w-full bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="flex flex-row justify-between items-center px-4 md:px-6 py-4 md:py-5 border-b border-gray-200 bg-gray-50/50 gap-4">
                     <h3 className="text-base md:text-lg font-bold text-gray-900 shrink-0">API Access Keys</h3>
@@ -146,7 +145,6 @@ export default function ApIwebhooksSetting() {
                     </button>
                 </div>
                 
-                {/* FORMULAIRE DE GÉNÉRATION DÉROULANT */}
                 {showGenerateForm && !newlyGeneratedKey && (
                     <div className="p-4 md:p-6 bg-blue-50/30 border-b border-gray-200 animate-in slide-in-from-top-2 duration-200">
                         <form onSubmit={handleGenerateKey} className="flex flex-col sm:flex-row gap-3">
@@ -234,7 +232,7 @@ export default function ApIwebhooksSetting() {
                 </div>
             </div>
 
-            {/* DOCUMENTATION BLOCK */}
+            {/* 💡 LE BOUTON DYNAMIQUE VERS LE HUB SUPPORT */}
             <div className="flex flex-row items-start gap-3 md:gap-4 p-5 md:p-6 bg-blue-50/60 rounded-xl border border-blue-100/80">
                 <Info className="w-5 h-5 md:w-6 md:h-6 text-blue-600 shrink-0 mt-0.5" />
                 <div className="flex flex-col gap-1.5 md:gap-2">
@@ -242,9 +240,9 @@ export default function ApIwebhooksSetting() {
                     <p className="text-xs md:text-sm text-gray-600 leading-relaxed">
                         Need help integrating TrustVerify into your application? Explore our comprehensive API documentation and SDK guides.
                     </p>
-                    <button className="text-xs md:text-sm font-bold text-blue-700 mt-1 md:mt-2 hover:underline w-max flex items-center cursor-pointer">
+                    <Link href="/dashboard/support" className="text-xs md:text-sm font-bold text-blue-700 mt-1 md:mt-2 hover:underline w-max flex items-center cursor-pointer">
                         Read Documentation <span className="ml-1 text-lg leading-none">→</span>
-                    </button>
+                    </Link>
                 </div>
             </div>
         </div>

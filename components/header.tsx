@@ -7,11 +7,8 @@ import Link from "next/link";
 
 export default function Header() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-    // Récupération de la session en temps réel
     const { data: session, status } = useSession();
     
-    // Valeurs par défaut sécurisées et traduites en anglais Business
     const userName = session?.user?.name || "Compliance Officer";
     const userEmail = session?.user?.email || "Loading...";
     const userInitial = userName.charAt(0).toUpperCase();
@@ -35,18 +32,20 @@ export default function Header() {
             </div>
 
             <div className="flex items-center gap-2 mt-2 md:mt-3">
+                {/* La cloche sera dynamique à la phase 11 */}
                 <button className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer">
                     <span className="sr-only">Notifications</span>
                     <Bell className="w-5 h-5" />
                     <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
                 </button>
-                <button className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer mr-1">
-                    <span className="sr-only">Information</span>
+                
+                {/* 💡 LIEN DYNAMIQUE VERS LE SUPPORT */}
+                <Link href="/dashboard/support" className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer mr-1">
+                    <span className="sr-only">Information & Support</span>
                     <CircleQuestionMark className="w-5 h-5" />
-                </button>
+                </Link>
                 
                 <div className="relative">
-                    {/* Avatar cliquable connecté à Supabase & NextAuth */}
                     <div 
                         onClick={() => setIsMenuOpen(!isMenuOpen)} 
                         className={`w-10 h-10 md:mr-3 ${userImage ? 'bg-transparent' : 'bg-blue-100 border border-blue-200'} rounded-xl overflow-hidden cursor-pointer flex items-center justify-center shadow-sm hover:shadow-md transition-shadow relative`}
@@ -60,7 +59,6 @@ export default function Header() {
                         )}
                     </div>
                     
-                    {/* Menu déroulant */}
                     {isMenuOpen && (
                         <>
                             <div className="fixed inset-0 z-40" onClick={() => setIsMenuOpen(false)}></div>
