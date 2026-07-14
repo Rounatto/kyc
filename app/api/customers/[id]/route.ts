@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { sendKYCEmail } from "@/lib/mail";
+import { sendKYCEmail, sendAgentNotificationEmail } from "@/lib/mail"; // 💡 NOUVEL IMPORT
 import { getServerSession } from "next-auth/next"; 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
@@ -69,6 +69,7 @@ export async function PATCH(
 
         const body = await req.json();
         
+        // --- LOGIQUE DE FLAG MANUEL (AUDIT) ---
         if (body.action === "FLAG_AUDIT") {
             const flaggedCustomer = await prisma.verificationRequest.update({
                 where: { id: customerId },
@@ -83,6 +84,15 @@ export async function PATCH(
                     }
                 }
             });
+
+            // 💡 NOTIFICATION PAR EMAIL (Routage selon Settings: emailNotifAlerts)
+            const alertSubscribers = await prisma.user.findMany({
+                where: { companyId: companyId!, emailNotifAlerts: true }
+            });
+            for (const admin of alertSubscribers) {
+                sendAgentNotificationEmail(admin.email, "ALERT", existingCustomer.customerName, serverAgentName).catch(console.error);
+            }
+
             return NextResponse.json(flaggedCustomer);
         }
 
@@ -123,7 +133,7 @@ export async function PATCH(
             }
         });
 
-        // 💡 NOUVEAU : ENVOI DES NOTIFICATIONS TEMPS RÉEL (SUCCESS ou SYSTEM)
+        // 💡 NOTIFICATIONS TEMPS RÉEL SUR LE DASHBOARD
         if (status === "verified") {
             await prisma.notification.create({
                 data: {
@@ -144,6 +154,29 @@ export async function PATCH(
             });
         }
 
+        // 💡 NOTIFICATION PAR EMAIL (Pour les Agents, basé sur les Settings)
+        try {
+            const subscribers = await prisma.user.findMany({
+                where: { 
+                    companyId: companyId!, 
+                    OR: [
+                        { emailNotifSuccess: status === "verified" },
+                        { emailNotifAlerts: status === "rejected" }
+                    ]
+                }
+            });
+
+            const emailType = status === "verified" ? "SUCCESS" : "ALERT";
+            
+            // On envoie à tous les agents abonnés de manière asynchrone pour ne pas ralentir le serveur
+            for (const sub of subscribers) {
+                sendAgentNotificationEmail(sub.email, emailType, existingCustomer.customerName, serverAgentName).catch(console.error);
+            }
+        } catch (subError) {
+            console.error("Failed to query notification subscribers:", subError);
+        }
+
+        // 💡 EMAIL EXTERNE (Pour le Client final)
         if (status === "verified" || status === "rejected") {
             try {
                 sendKYCEmail(
