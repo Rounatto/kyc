@@ -3,7 +3,7 @@ import prisma from "@/lib/prisma";
 import { sendKYCEmail } from "@/lib/mail";
 import { getServerSession } from "next-auth/next"; 
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { enforceRole } from "@/lib/rbac"; // 💡 IMPORT DU GARDIEN RBAC
+import { enforceRole } from "@/lib/rbac";
 
 export async function GET(
     req: Request, 
@@ -12,7 +12,6 @@ export async function GET(
     try {
         const session = await getServerSession(authOptions);
         
-        // 🛡️ VERROU RBAC
         const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
         if (!guard.isValid) return guard.response!;
 
@@ -23,12 +22,12 @@ export async function GET(
         const customer = await prisma.verificationRequest.findUnique({
             where: { 
                 id: customerId,
-                companyId: companyId! // 🏢 DOUBLE VÉRIFICATION B2B
+                companyId: companyId!
             },
             include: {
                 auditLogs: {
                     orderBy: { timestamp: 'desc' },
-                    include: { agent: { select: { fullName: true } } } // Pour afficher le nom de l'agent dans l'historique
+                    include: { agent: { select: { fullName: true } } }
                 }
             }
         });
@@ -51,17 +50,15 @@ export async function PATCH(
     try {
         const session = await getServerSession(authOptions);
         
-        // 🛡️ VERROU RBAC
         const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
         if (!guard.isValid) return guard.response!;
 
         const { companyId, userId: serverAgentId } = guard;
-        const serverAgentName = session.user?.name || "Unknown Agent";
+        const serverAgentName = session?.user?.name || "Unknown Agent";
 
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
-        // Vérifier que le dossier appartient bien à l'entreprise
         const existingCustomer = await prisma.verificationRequest.findUnique({
             where: { id: customerId, companyId: companyId! }
         });
@@ -72,7 +69,6 @@ export async function PATCH(
 
         const body = await req.json();
         
-        // --- 💡 Logique de gestion du Flag pour Audit ---
         if (body.action === "FLAG_AUDIT") {
             const flaggedCustomer = await prisma.verificationRequest.update({
                 where: { id: customerId },
@@ -82,7 +78,7 @@ export async function PATCH(
                             action: "FLAGGED",
                             details: `Profile manually flagged for internal security audit by ${serverAgentName}. Immediate attention required.`,
                             agentId: serverAgentId!,
-                            companyId: companyId! // 💡 UNIFIED AUDIT TRAIL
+                            companyId: companyId!
                         }
                     }
                 }
@@ -90,7 +86,6 @@ export async function PATCH(
             return NextResponse.json(flaggedCustomer);
         }
 
-        // --- Logique Standard Approve/Reject ---
         const { status, rejectionReason } = body; 
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
@@ -117,7 +112,7 @@ export async function PATCH(
                         action: actionName,
                         details: logDetails,
                         agentId: serverAgentId!,
-                        companyId: companyId! // 💡 UNIFIED AUDIT TRAIL
+                        companyId: companyId!
                     }
                 }
             },
@@ -127,6 +122,27 @@ export async function PATCH(
                 }
             }
         });
+
+        // 💡 NOUVEAU : ENVOI DES NOTIFICATIONS TEMPS RÉEL (SUCCESS ou SYSTEM)
+        if (status === "verified") {
+            await prisma.notification.create({
+                data: {
+                    type: "SUCCESS",
+                    title: "KYC Profile Approved",
+                    message: `The profile for ${existingCustomer.customerName} was manually verified and approved by ${serverAgentName}.`,
+                    companyId: companyId!
+                }
+            });
+        } else if (status === "rejected") {
+            await prisma.notification.create({
+                data: {
+                    type: "SYSTEM",
+                    title: "KYC Profile Rejected",
+                    message: `The profile for ${existingCustomer.customerName} was rejected by ${serverAgentName}.`,
+                    companyId: companyId!
+                }
+            });
+        }
 
         if (status === "verified" || status === "rejected") {
             try {

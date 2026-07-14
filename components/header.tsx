@@ -1,18 +1,35 @@
 "use client";
 
-import { Search, CircleQuestionMark, Bell, LogOut, User, Loader2 } from "lucide-react";
+import { Search, CircleQuestionMark, Bell, LogOut, User, Loader2, TriangleAlert, CheckCircle2, CreditCard, Info, CheckCheck } from "lucide-react";
 import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
+import { useNotifications } from "@/context/NotificationContext"; // 💡 ON IMPORTE LA STATION RADIO
 
 export default function Header() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const [isNotifOpen, setIsNotifOpen] = useState(false);
+
     const { data: session, status } = useSession();
+    
+    // 💡 ON ÉCOUTE LA STATION RADIO EN TEMPS RÉEL (1 seule ligne !)
+    const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications();
     
     const userName = session?.user?.name || "Compliance Officer";
     const userEmail = session?.user?.email || "Loading...";
     const userInitial = userName.charAt(0).toUpperCase();
     const userImage = session?.user?.image;
+
+    // Moteur d'icônes dynamiques
+    const getNotifIcon = (type: string) => {
+        switch (type) {
+            case "HIGH_RISK_ALERT": return <TriangleAlert className="w-5 h-5 text-red-500" />;
+            case "BILLING": return <CreditCard className="w-5 h-5 text-yellow-600" />;
+            case "SUCCESS": return <CheckCircle2 className="w-5 h-5 text-green-500" />;
+            case "SYSTEM":
+            default: return <Info className="w-5 h-5 text-blue-500" />;
+        }
+    };
 
     return (
         <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8 relative z-40">
@@ -32,14 +49,71 @@ export default function Header() {
             </div>
 
             <div className="flex items-center gap-2 mt-2 md:mt-3">
-                {/* La cloche sera dynamique à la phase 11 */}
-                <button className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer">
-                    <span className="sr-only">Notifications</span>
-                    <Bell className="w-5 h-5" />
-                    <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
-                </button>
                 
-                {/* 💡 LIEN DYNAMIQUE VERS LE SUPPORT */}
+                {/* 🔔 LA CLOCHE CONNECTÉE */}
+                <div className="relative">
+                    <button 
+                        onClick={() => { setIsNotifOpen(!isNotifOpen); setIsMenuOpen(false); }}
+                        className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer"
+                    >
+                        <span className="sr-only">Notifications</span>
+                        <Bell className="w-5 h-5" />
+                        {unreadCount > 0 && (
+                            <span className="absolute top-2.5 right-2.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-red-500 border border-white text-[9px] font-bold text-white"></span>
+                        )}
+                    </button>
+
+                    {isNotifOpen && (
+                        <>
+                            <div className="fixed inset-0 z-40" onClick={() => setIsNotifOpen(false)}></div>
+                            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white border border-gray-200 rounded-xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                                <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="text-sm font-bold text-gray-900">Alerts</h3>
+                                        {unreadCount > 0 && <span className="text-xs text-blue-700 font-bold bg-blue-100 px-2 py-0.5 rounded-full">{unreadCount} unread</span>}
+                                    </div>
+                                    {unreadCount > 0 && (
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); markAllAsRead(); }} 
+                                            className="text-xs font-bold text-gray-500 hover:text-blue-700 transition-colors flex items-center gap-1 cursor-pointer"
+                                        >
+                                            <CheckCheck className="w-3.5 h-3.5" /> Mark all read
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="max-h-[350px] overflow-y-auto divide-y divide-gray-50">
+                                    {notifications.length === 0 ? (
+                                        <div className="p-8 text-center text-sm text-gray-500 flex flex-col items-center gap-2">
+                                            <Bell className="w-8 h-8 text-gray-300" />
+                                            No recent alerts or notifications.
+                                        </div>
+                                    ) : (
+                                        notifications.map((notif) => (
+                                            <div 
+                                                key={notif.id} 
+                                                onClick={() => markAsRead(notif.id)}
+                                                className={`p-4 flex gap-3 hover:bg-gray-50 cursor-pointer transition-colors ${!notif.isRead ? 'bg-blue-50/40' : ''}`}
+                                            >
+                                                <div className="shrink-0 mt-0.5">
+                                                    {getNotifIcon(notif.type)}
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <p className={`text-sm ${!notif.isRead ? 'font-bold text-gray-900' : 'font-medium text-gray-700'}`}>{notif.title}</p>
+                                                    <p className="text-xs text-gray-500 line-clamp-2 mt-0.5 leading-relaxed">{notif.message}</p>
+                                                    <p className="text-[10px] text-gray-400 mt-2 font-medium uppercase tracking-wider">{new Date(notif.createdAt).toLocaleString()}</p>
+                                                </div>
+                                                {!notif.isRead && (
+                                                    <div className="w-2 h-2 bg-blue-600 rounded-full shrink-0 mt-1.5 ml-auto"></div>
+                                                )}
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+                
                 <Link href="/dashboard/support" className="text-gray-500 hover:text-blue-600 transition-colors relative flex items-center justify-center w-10 h-10 rounded-full hover:bg-blue-50 cursor-pointer mr-1">
                     <span className="sr-only">Information & Support</span>
                     <CircleQuestionMark className="w-5 h-5" />
@@ -47,7 +121,7 @@ export default function Header() {
                 
                 <div className="relative">
                     <div 
-                        onClick={() => setIsMenuOpen(!isMenuOpen)} 
+                        onClick={() => { setIsMenuOpen(!isMenuOpen); setIsNotifOpen(false); }} 
                         className={`w-10 h-10 md:mr-3 ${userImage ? 'bg-transparent' : 'bg-blue-100 border border-blue-200'} rounded-xl overflow-hidden cursor-pointer flex items-center justify-center shadow-sm hover:shadow-md transition-shadow relative`}
                     >
                         {status === "loading" ? (
