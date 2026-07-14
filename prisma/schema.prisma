@@ -24,7 +24,7 @@ model Company {
   // L'écosystème Développeur
   apiKeys              ApiKey[]
 
-  // 💡 NOUVEAU PHASE 11 : Les notifications de l'entreprise
+  // Les notifications de l'entreprise
   notifications        Notification[]
 }
 
@@ -62,6 +62,11 @@ model User {
   invitationToken      String?               @unique
   invitationExpires    DateTime?
 
+  // 💡 NOUVEAU : Préférences de routage des e-mails (Settings)
+  emailNotifSuccess    Boolean               @default(false)
+  emailNotifAlerts     Boolean               @default(true)
+  emailNotifWeekly     Boolean               @default(false)
+
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
   userSessions         UserSession[] 
@@ -69,7 +74,7 @@ model User {
   // Clés API générées par cet utilisateur        
   createdApiKeys       ApiKey[]
 
-  // 💡 NOUVEAU PHASE 11 : Notifications ciblées pour cet utilisateur
+  // Notifications ciblées pour cet utilisateur
   notifications        Notification[]
 }
 
@@ -198,7 +203,7 @@ model ApiKey {
 // =====================================================================
 model Notification {
   id          String   @id @default(cuid())
-  type        String   // Ex: "HIGH_RISK_ALERT", "SYSTEM", "SUCCESS"
+  type        String   // Ex: "HIGH_RISK_ALERT", "SYSTEM", "SUCCESS", "BILLING"
   title       String
   message     String
   isRead      Boolean  @default(false)
