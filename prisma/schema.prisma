@@ -19,16 +19,12 @@ model Company {
   
   users                User[]
   verificationRequests VerificationRequest[]
-  auditLogs            AuditLog[]            // 💡 AJOUT : L'entreprise possède désormais son registre global
+  auditLogs            AuditLog[]            
+  
+  // 💡 NOUVEAU PHASE 9 : L'écosystème Développeur
+  apiKeys              ApiKey[]
 }
-  // Préparation Phase 4 (L'écosystème Développeur B2B)
-  // apiKeys              ApiKey[]
-  // webhooks             Webhook[]
 
-
-// =====================================================================
-// 🧑‍💻 UTILISATEURS ET IAM (IDENTITY & ACCESS MANAGEMENT)
-// =====================================================================
 // =====================================================================
 // 🧑‍💻 UTILISATEURS ET IAM (IDENTITY & ACCESS MANAGEMENT)
 // =====================================================================
@@ -59,13 +55,16 @@ model User {
   totpSecret           String?               
   backupCodes          String?               
   
-  // 💡 NOUVEAU : INVITATION SÉCURISÉE B2B
+  // 💡 INVITATION SÉCURISÉE B2B
   invitationToken      String?               @unique
   invitationExpires    DateTime?
 
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
-  userSessions         UserSession[]         
+  userSessions         UserSession[] 
+
+  // 💡 NOUVEAU PHASE 9 : Clés API générées par cet utilisateur        
+  createdApiKeys       ApiKey[]
 }
 
 // =====================================================================
@@ -99,7 +98,6 @@ model VerificationRequest {
   company      Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   // ⚖️ CONFORMITÉ LÉGALE (SetNull au lieu de Cascade)
-  // Le dossier KYC doit survivre si l'agent est supprimé de la BDD.
   userId       String?  
   user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   
@@ -115,11 +113,10 @@ model AuditLog {
   details     String?  
   timestamp   DateTime @default(now())
 
-  // 💡 NOUVEAU : Centralisation B2B obligatoire (Tout log appartient à l'entreprise)
+  // Centralisation B2B obligatoire
   companyId   String
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  // 💡 CORRECTION : Rendu optionnel (?) car un log de Login n'a pas de dossier KYC !
   requestId   String?
   request     VerificationRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -159,6 +156,7 @@ model Passkey {
   createdAt           DateTime @default(now())
   lastUsedAt          DateTime @default(now())
 }
+
 // =====================================================================
 // 📩 ONBOARDING SÉCURISÉ : VÉRIFICATION OTP (Phase 6)
 // =====================================================================
@@ -168,4 +166,23 @@ model OtpCode {
   code      String   // Le code à 6 chiffres
   expiresAt DateTime // Date d'expiration (ex: dans 10 minutes)
   createdAt DateTime @default(now())
+}
+
+// =====================================================================
+// 🔌 ÉCOSYSTÈME B2B : API KEYS (Phase 9)
+// =====================================================================
+model ApiKey {
+  id          String   @id @default(cuid())
+  name        String   // Ex: "Serveur de Production NodeJS"
+  key         String   @unique // La vraie clé (ex: tv_live_xxx)
+  lastUsedAt  DateTime? // Pour savoir si elle est active
+  createdAt   DateTime @default(now())
+
+  // Apparentée à l'entreprise
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Créée par un admin
+  createdBy   String
+  user        User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 }
