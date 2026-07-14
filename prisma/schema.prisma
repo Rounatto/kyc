@@ -21,8 +21,11 @@ model Company {
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            
   
-  // 💡 NOUVEAU PHASE 9 : L'écosystème Développeur
+  // L'écosystème Développeur
   apiKeys              ApiKey[]
+
+  // 💡 NOUVEAU PHASE 11 : Les notifications de l'entreprise
+  notifications        Notification[]
 }
 
 // =====================================================================
@@ -55,7 +58,7 @@ model User {
   totpSecret           String?               
   backupCodes          String?               
   
-  // 💡 INVITATION SÉCURISÉE B2B
+  // INVITATION SÉCURISÉE B2B
   invitationToken      String?               @unique
   invitationExpires    DateTime?
 
@@ -63,8 +66,11 @@ model User {
   auditLogs            AuditLog[]            
   userSessions         UserSession[] 
 
-  // 💡 NOUVEAU PHASE 9 : Clés API générées par cet utilisateur        
+  // Clés API générées par cet utilisateur        
   createdApiKeys       ApiKey[]
+
+  // 💡 NOUVEAU PHASE 11 : Notifications ciblées pour cet utilisateur
+  notifications        Notification[]
 }
 
 // =====================================================================
@@ -185,4 +191,24 @@ model ApiKey {
   // Créée par un admin
   createdBy   String
   user        User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+}
+
+// =====================================================================
+// 🔔 MOTEUR DE NOTIFICATIONS (Phase 11)
+// =====================================================================
+model Notification {
+  id          String   @id @default(cuid())
+  type        String   // Ex: "HIGH_RISK_ALERT", "SYSTEM", "SUCCESS"
+  title       String
+  message     String
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  // La notification appartient au Workspace (Entreprise)
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Optionnel : Lié à un utilisateur spécifique
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
