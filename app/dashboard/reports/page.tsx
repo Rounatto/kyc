@@ -88,19 +88,63 @@ export default function Report() {
             const element = document.getElementById('dashboard-report-content');
             if (!element) return;
 
+            // --- 🛠️ DÉBUT DU FIX D'EXPORT ---
+            // 1. On enlève le centrage automatique qui décale l'image à droite
+            element.classList.remove('mx-auto');
+
+            // 2. On enlève les "overflow" pour que le tableau de Rayen se déplie entièrement
+            const scrollContainers = element.querySelectorAll('.overflow-x-auto, .overflow-hidden');
+            scrollContainers.forEach(el => {
+                if (el.classList.contains('overflow-x-auto')) {
+                    el.classList.remove('overflow-x-auto');
+                    el.classList.add('temporarily-removed-overflow-x');
+                }
+                if (el.classList.contains('overflow-hidden')) {
+                    el.classList.remove('overflow-hidden');
+                    el.classList.add('temporarily-removed-overflow-hidden');
+                }
+            });
+
+            // 3. On laisse 150ms au navigateur pour recalculer la nouvelle taille
+            await new Promise(resolve => setTimeout(resolve, 150));
+
+            // On prend les dimensions complètes (maintenant que le tableau est déplié)
+            const targetWidth = element.scrollWidth;
+            const targetHeight = element.scrollHeight;
+
             const dataUrl = await htmlToImage.toPng(element, {
                 quality: 1,
                 backgroundColor: '#f9fafb',
                 pixelRatio: 2, 
-                height: element.scrollHeight,
+                width: targetWidth,
+                height: targetHeight,
+                style: {
+                    transform: 'none',
+                    margin: '0', // Force 0 margin dans le canvas pour éviter le décalage
+                },
                 filter: (node: any) => node.id !== 'action-buttons'
             });
             
+            // --- RESTAURATION DU DOM (Pour ne pas casser l'interface) ---
+            element.classList.add('mx-auto');
+            scrollContainers.forEach(el => {
+                if (el.classList.contains('temporarily-removed-overflow-x')) {
+                    el.classList.add('overflow-x-auto');
+                    el.classList.remove('temporarily-removed-overflow-x');
+                }
+                if (el.classList.contains('temporarily-removed-overflow-hidden')) {
+                    el.classList.add('overflow-hidden');
+                    el.classList.remove('temporarily-removed-overflow-hidden');
+                }
+            });
+            // --- FIN DU FIX ---
+
+            // Calcul dynamique du PDF pour ne rien écraser
             const pdfWidth = 210; 
-            const pdfHeight = (element.scrollHeight * pdfWidth) / element.scrollWidth;
+            const pdfHeight = (targetHeight * pdfWidth) / targetWidth;
             
             const pdf = new jsPDF({
-                orientation: 'p',
+                orientation: pdfHeight > pdfWidth ? 'p' : 'l',
                 unit: 'mm',
                 format: [pdfWidth, pdfHeight] 
             });
