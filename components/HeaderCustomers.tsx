@@ -6,6 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useNotifications } from "@/context/NotificationContext"; // 💡 ON IMPORTE LA STATION RADIO
+import PlanBadge from "@/components/PlanBadge";
 
 const highlightText = (text: string | null | undefined, highlight: string) => {
     if (!text) return null;
@@ -139,7 +140,10 @@ export default function HeaderCustomers() {
             </div>
 
             <div className="flex items-center gap-2 mt-2 md:mt-3">
-                
+
+                {/* 💎 PLAN ACTUEL DE LA COMPANY */}
+                <PlanBadge />
+
                 {/* 🔔 LA CLOCHE CONNECTÉE AU CONTEXT */}
                 <div className="relative">
                     <button 

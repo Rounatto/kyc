@@ -29,6 +29,15 @@ export async function POST(req: Request) {
                 data: { cancelAtPeriodEnd: true } 
             });
 
+            await prisma.notification.create({
+                data: {
+                    type: "BILLING",
+                    title: "Subscription Cancellation Scheduled",
+                    message: "Your subscription will cancel at the end of the current billing period.",
+                    companyId: user.companyId
+                }
+            });
+
             return NextResponse.json({ message: "Subscription set to cancel at period end" });
         }
 

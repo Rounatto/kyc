@@ -5,6 +5,7 @@ import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useNotifications } from "@/context/NotificationContext"; // 💡 ON IMPORTE LA STATION RADIO
+import PlanBadge from "@/components/PlanBadge";
 
 export default function Header() {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -49,7 +50,10 @@ export default function Header() {
             </div>
 
             <div className="flex items-center gap-2 mt-2 md:mt-3">
-                
+
+                {/* 💎 PLAN ACTUEL DE LA COMPANY */}
+                <PlanBadge />
+
                 {/* 🔔 LA CLOCHE CONNECTÉE */}
                 <div className="relative">
                     <button 

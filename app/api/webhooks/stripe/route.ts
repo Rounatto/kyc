@@ -46,6 +46,15 @@ export async function POST(req: Request) {
                 }
             });
 
+            await prisma.notification.create({
+                data: {
+                    type: "SUCCESS",
+                    title: "Billing Upgrade Confirmed",
+                    message: `Your workspace is now on the ${plan} plan.`,
+                    companyId
+                }
+            });
+
             console.log(`✅ SUCCESS: Company ${companyId} upgraded to ${plan}`);
         }
     }

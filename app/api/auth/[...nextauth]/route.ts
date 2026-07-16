@@ -181,28 +181,34 @@ export const authOptions: NextAuthOptions = {
       return true;
     },
     async jwt({ token, user, trigger, session, account }) {
-      if (account || user) {
-        const dbUser = await prisma.user.findUnique({ where: { email: token.email as string } });
+    if (account || user) {
+        const dbUser = await prisma.user.findUnique({
+        where: { email: token.email as string },
+        include: { company: { select: { plan: true } } }
+        });
         if (dbUser) {
             const typedDbUser = dbUser as typeof dbUser & { companyId?: string | null; role?: string | null };
             token.id = dbUser.id; token.name = dbUser.fullName; token.image = dbUser.avatarUrl;
             token.companyId = typedDbUser.companyId; token.role = typedDbUser.role;          
             token.companyName = (dbUser as any).companyName; token.totpEnabled = (dbUser as any).totpEnabled;
+            token.companyPlan = dbUser.company?.plan ?? "trial";
         }
-      }
-      if (trigger === "update" && session?.user) {
+    }
+    if (trigger === "update" && session?.user) {
         token.name = session.user.name; token.image = session.user.image;
         token.companyName = session.user.companyName; token.totpEnabled = session.user.totpEnabled;
-      }
-      return token;
+        token.companyPlan = session.user.companyPlan;
+    }
+    return token;
     },
     async session({ session, token }) {
-      if (token && session.user) {
+    if (token && session.user) {
         session.user.id = token.id as string; session.user.name = token.name; session.user.image = token.image as string;
         (session.user as any).companyId = token.companyId as string; (session.user as any).role = token.role as string;
         (session.user as any).companyName = token.companyName as string; (session.user as any).totpEnabled = token.totpEnabled as boolean;
-      }
-      return session;
+        (session.user as any).companyPlan = token.companyPlan as string;
+    }
+    return session;
     }
   },
   pages: { signIn: "/login" }

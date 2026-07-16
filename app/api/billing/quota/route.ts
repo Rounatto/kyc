@@ -29,6 +29,14 @@ export async function GET(req: Request) {
                 where: { id: user.companyId },
                 data: { plan: "trial", cancelAtPeriodEnd: false, currentPeriodEnd: null }
             });
+            await prisma.notification.create({
+                data: {
+                    type: "BILLING",
+                    title: "Plan Downgraded to Trial",
+                    message: "Your subscription ended and the workspace was downgraded to the trial plan.",
+                    companyId: user.companyId
+                }
+            });
             company.plan = "trial";
             company.cancelAtPeriodEnd = false;
             company.currentPeriodEnd = null;
