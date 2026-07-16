@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react"; 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X } from "lucide-react"; 
+import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X, Lock, Zap } from "lucide-react"; 
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
@@ -40,14 +40,33 @@ export default function NewVerificationPage() {
     const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
     const [globalError, setGlobalError] = useState("");
 
+    // 💡 NOUVEAU : ETATS DU PAYWALL (BILLING)
+    const [isCheckingQuota, setIsCheckingQuota] = useState(true);
+    const [quotaReached, setQuotaReached] = useState(false);
+    const [usageStats, setUsageStats] = useState({ current: 0, limit: 5 });
+
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
     const { startUpload } = useUploadThing("kycDocumentUploader");
 
-    // 💡 CHARGEMENT DES MODELES DE DEEP LEARNING AU MONTAGE
+    // 💡 VERIFICATION DU QUOTA ET CHARGEMENT DE L'IA
     useEffect(() => {
-        const loadModels = async () => {
+        const initializePage = async () => {
             try {
-                // Les modèles doivent être placés dans un dossier 'public/models'
+                // 1. Vérification du Billing (Paywall Check)
+                const quotaRes = await fetch("/api/billing/quota");
+                if (quotaRes.ok) {
+                    const quotaData = await quotaRes.json();
+                    setUsageStats({ current: quotaData.current, limit: quotaData.limit });
+                    if (quotaData.isLocked) {
+                        setQuotaReached(true);
+                        setIsCheckingQuota(false);
+                        return; // On stoppe ici, inutile de charger l'IA si c'est bloqué
+                    }
+                }
+                
+                setIsCheckingQuota(false);
+
+                // 2. Chargement de l'IA (Seulement si le quota le permet)
                 await Promise.all([
                     faceapi.nets.ssdMobilenetv1.loadFromUri('/models'),
                     faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
@@ -55,51 +74,32 @@ export default function NewVerificationPage() {
                 ]);
                 console.log("✅ Deep Learning Vision Models loaded successfully.");
             } catch (err) {
-                console.error("⚠️ Failed to load AI models. Make sure they are in /public/models", err);
+                console.error("⚠️ System initialization error", err);
+                setIsCheckingQuota(false);
             }
         };
-        loadModels();
+        initializePage();
     }, []);
 
-    // 💡 LA FONCTION MAGIQUE DE COMPARAISON BIOMÉTRIQUE
-    // 💡 3. LE MOTEUR DE COMPARAISON BIOMÉTRIQUE (FACE MATCHING) MIS À JOUR
     const compareFaces = async (idUrl: string, selfieUrl: string): Promise<number | null> => {
         try {
-            console.log("🔍 Démarrage de l'analyse biométrique...");
             const idImg = new Image(); idImg.src = idUrl; idImg.crossOrigin = "anonymous";
-            const selfieImg = new Image(); selfieUrl; selfieImg.src = selfieUrl; selfieImg.crossOrigin = "anonymous";
+            const selfieImg = new Image(); selfieImg.src = selfieUrl; selfieImg.crossOrigin = "anonymous";
 
-            // On attend que les images soient prêtes
             await Promise.all([
                 new Promise((resolve, reject) => { idImg.onload = resolve; idImg.onerror = reject; }),
                 new Promise((resolve, reject) => { selfieImg.onload = resolve; selfieImg.onerror = reject; })
             ]);
-            console.log("📸 Images chargées en mémoire avec succès.");
 
-            // 💡 L'ASTUCE ICI : On baisse la confiance requise à 30% pour lire la carte d'identité
             const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
 
-            console.log("🤖 Scan de la carte d'identité en cours...");
             const idFace = await faceapi.detectSingleFace(idImg, options).withFaceLandmarks().withFaceDescriptor();
-            if (!idFace) console.warn("❌ ÉCHEC : L'IA ne trouve pas de visage sur la CARTE D'IDENTITÉ.");
-            else console.log("✅ Visage trouvé sur la carte d'identité !");
-
-            console.log("🤖 Scan du selfie en cours...");
             const selfieFace = await faceapi.detectSingleFace(selfieImg, options).withFaceLandmarks().withFaceDescriptor();
-            if (!selfieFace) console.warn("❌ ÉCHEC : L'IA ne trouve pas de visage sur le SELFIE.");
-            else console.log("✅ Visage trouvé sur le selfie !");
 
-            if (!idFace || !selfieFace) {
-                return null; // On abandonne si un visage manque
-            }
+            if (!idFace || !selfieFace) return null;
 
-            // Calcul de l'écart mathématique entre les deux visages
             const distance = faceapi.euclideanDistance(idFace.descriptor, selfieFace.descriptor);
-            console.log(`📏 Distance mathématique calculée : ${distance.toFixed(4)}`);
-            
-            // Conversion en pourcentage
             let similarity = Math.max(0, Math.min(100, (1 - (distance / 1.2)) * 100)); 
-            console.log(`📊 Score de similarité final : ${similarity.toFixed(2)}%`);
             
             return similarity;
         } catch (err) {
@@ -227,12 +227,10 @@ export default function NewVerificationPage() {
                     throw new Error("Document upload failed. Please try again.");
                 }
 
-                // 💡 APPEL DE L'IA BIOMÉTRIQUE ICI AVANT D'ENVOYER AU BACKEND
                 setLoadingText("Executing Deep Learning Biometrics...");
                 let biometricScore: number | null = null;
                 if (idCardPreview && selfiePreview) {
                     biometricScore = await compareFaces(idCardPreview, selfiePreview);
-                    console.log("Biometric Similarity Score:", biometricScore);
                 }
 
                 setLoadingText("Analyzing AI Risk & Creating Profile...");
@@ -252,7 +250,7 @@ export default function NewVerificationPage() {
                         userId: (session?.user as any)?.id,
                         idCardUrl: uploadedIdCardUrl,
                         selfieUrl: uploadedSelfieUrl,
-                        biometricScore: biometricScore // 💡 ON ENVOIE LE SCORE AU BACKEND
+                        biometricScore: biometricScore 
                     }),
                 });
 
@@ -262,7 +260,13 @@ export default function NewVerificationPage() {
                     resolve(data);
                     setTimeout(() => router.push("/dashboard"), 1500);
                 } else {
-                    reject(data.error || "An error occurred during registration.");
+                    // Si on attrape l'erreur 402 du backend
+                    if (response.status === 402) {
+                        setQuotaReached(true);
+                        reject("Payment Required: Trial limit reached.");
+                    } else {
+                        reject(data.error || "An error occurred during registration.");
+                    }
                 }
             } catch (error: any) {
                 reject(error.message || "Network error. Failed to initiate pipeline.");
@@ -278,6 +282,17 @@ export default function NewVerificationPage() {
         });
     };
 
+    if (isCheckingQuota) {
+        return (
+            <div className="w-full min-h-screen bg-gray-50 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-gray-500 font-medium">Verifying workspace permissions...</p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="w-full min-h-screen bg-gray-50 pb-12">
             <Header />
@@ -287,217 +302,251 @@ export default function NewVerificationPage() {
                     <ArrowLeft className="w-4 h-4" /> Back to Directory
                 </Link>
 
-                <div className="bg-white border border-gray-200 shadow-sm rounded-xl p-6 md:p-8">
-                    <h2 className="text-2xl font-bold text-gray-900 mb-2">New Identity Verification</h2>
-                    <p className="text-sm text-gray-500 mb-8">Register a new client or entity to initiate the KYC/KYB pipeline.</p>
+                <div className="relative bg-white border border-gray-200 shadow-sm rounded-xl p-6 md:p-8 overflow-hidden">
                     
-                    {globalError && (
-                        <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3 text-sm font-medium">
-                            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" /> 
-                            <span>{globalError}</span>
+                    {/* 💡 LE FAMEUX PAYWALL */}
+                    {quotaReached && (
+                        <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center p-6">
+                            <div className="bg-white border border-gray-200 shadow-2xl rounded-2xl p-8 max-w-md w-full text-center flex flex-col items-center transform scale-100 animate-in fade-in zoom-in duration-300">
+                                <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mb-4 border border-red-100">
+                                    <Lock className="w-8 h-8 text-red-600" />
+                                </div>
+                                <h2 className="text-2xl font-black text-gray-900 mb-2">Usage Limit Reached</h2>
+                                <p className="text-sm text-gray-500 mb-6 leading-relaxed">
+                                    Your workspace has exhausted its <strong className="text-gray-900">Free Trial</strong> quota ({usageStats.limit}/{usageStats.limit} verifications). Upgrade your plan to continue onboarding customers automatically.
+                                </p>
+                                <button onClick={() => router.push('/dashboard/settings')} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors">
+                                    <Zap className="w-5 h-5" /> Upgrade to Premium
+                                </button>
+                                <button onClick={() => router.push('/dashboard/customers')} className="w-full mt-3 bg-white text-gray-600 font-bold py-3.5 px-4 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors">
+                                    Cancel and Return
+                                </button>
+                            </div>
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit} className="flex flex-col gap-8">
-                        
-                        <div className="flex flex-col gap-5">
-                            <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">1. Personal Information</h3>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Full Name <span className="text-red-500">*</span></label>
-                                    <div className="relative">
-                                        <User className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <input type="text" placeholder="Ex: Eleanor Lewis" value={customerName} onChange={(e) => setCustomerName(e.target.value)} disabled={loading} required className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 text-gray-800 disabled:bg-gray-50" />
-                                    </div>
-                                </div>
-
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Email Address <span className="text-red-500">*</span></label>
-                                    <div className="relative">
-                                        <Mail className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.email ? 'text-red-500' : 'text-gray-400'}`} />
-                                        <input type="email" placeholder="Ex: e.lewis@corporate.com" value={email} onChange={(e) => {setEmail(e.target.value); setFieldErrors({...fieldErrors, email: ""})}} disabled={loading} required className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.email ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
-                                    </div>
-                                    {fieldErrors.email && <p className="text-xs text-red-600 font-medium">{fieldErrors.email}</p>}
-                                </div>
+                    <div className={quotaReached ? "opacity-20 pointer-events-none filter blur-sm transition-all" : ""}>
+                        <div className="flex justify-between items-start mb-8">
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-900 mb-2">New Identity Verification</h2>
+                                <p className="text-sm text-gray-500">Register a new client or entity to initiate the KYC/KYB pipeline.</p>
                             </div>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Nationality <span className="text-red-500">*</span></label>
-                                    <div className="relative">
-                                        <Globe className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <select value={nationality} onChange={(e) => {setNationality(e.target.value); setFieldErrors({...fieldErrors, cin: "", localPhone: ""})}} disabled={loading} required className="w-full border border-gray-300 bg-white rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer disabled:bg-gray-50">
-                                            <option value="">Select a country...</option>
-                                            {getCountries().map((country) => (
-                                                <option key={country} value={country}>{en[country as keyof typeof en]}</option>
-                                            ))}
-                                        </select>
-                                    </div>
+                            {!quotaReached && (
+                                <div className="hidden md:flex items-center gap-2 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-100">
+                                    <Zap className="w-4 h-4" />
+                                    <span className="text-xs font-bold">{usageStats.limit - usageStats.current} credits left</span>
                                 </div>
-
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Phone Number</label>
-                                    <div className={`flex items-center w-full border rounded-lg overflow-hidden transition-all h-[42px] ${loading ? 'bg-gray-50' : 'bg-white'} ${fieldErrors.localPhone ? 'border-red-500 ring-1 ring-red-500' : 'border-gray-300 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500'}`}>
-                                        <div className={`relative flex items-center justify-center gap-1.5 border-r border-gray-300 px-3 h-full text-sm text-gray-700 font-semibold ${loading ? 'bg-gray-100' : 'bg-gray-50'}`}>
-                                            {nationality ? <img src={`https://flagcdn.com/${nationality.toLowerCase()}.svg`} alt={nationality} className="w-5 h-3.5 object-cover rounded-[2px]" /> : <div className="w-5 h-3.5 bg-gray-200 rounded-[2px]"></div>}
-                                            <select value={nationality} onChange={(e) => setNationality(e.target.value)} disabled={loading} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed">
-                                                <option value="">Select...</option>
-                                                {getCountries().map((country) => (<option key={country} value={country}>{en[country as keyof typeof en]}</option>))}
-                                            </select>
-                                            <span>{callingCode ? `+${callingCode}` : "+"}</span>
-                                        </div>
-                                        <input type="tel" placeholder="Ex: 98 123 456" value={localPhone} onChange={(e) => {setLocalPhone(e.target.value.replace(/[^0-9\s]/g, '')); setFieldErrors({...fieldErrors, localPhone: ""})}} disabled={loading} className="flex-1 text-sm text-gray-800 outline-none bg-transparent px-3 h-full disabled:cursor-not-allowed" />
-                                    </div>
-                                    {fieldErrors.localPhone && <p className="text-xs text-red-600 font-medium">{fieldErrors.localPhone}</p>}
-                                </div>
-                            </div>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Date of Birth</label>
-                                    <div className="relative">
-                                        <Calendar className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.dateOfBirth ? 'text-red-500' : 'text-gray-400'}`} />
-                                        <input type="date" value={dateOfBirth} onChange={(e) => {setDateOfBirth(e.target.value); setFieldErrors({...fieldErrors, dateOfBirth: ""})}} disabled={loading} className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.dateOfBirth ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
-                                    </div>
-                                    {fieldErrors.dateOfBirth && <p className="text-xs text-red-600 font-medium">{fieldErrors.dateOfBirth}</p>}
-                                </div>
-                                <div className="hidden sm:block flex-1"></div>
-                            </div>
-                        </div>
-
-                        <div className="flex flex-col gap-5">
-                            <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">2. Official Identification</h3>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                <div className="w-full sm:w-1/3 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Document Type <span className="text-red-500">*</span></label>
-                                    <select value={documentType} onChange={(e) => {setDocumentType(e.target.value); setFieldErrors({...fieldErrors, cin: ""})}} disabled={loading} className="w-full border border-gray-300 bg-white rounded-lg py-2.5 px-3 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer disabled:bg-gray-50">
-                                        <option value="CIN">National ID (CIN)</option>
-                                        <option value="Passport">Passport</option>
-                                        <option value="Driving License">Driving License</option>
-                                    </select>
-                                </div>
-
-                                <div className="w-full sm:w-2/3 flex flex-col gap-2">
-                                    <label className="text-sm font-semibold text-gray-700">Unique ID Number <span className="text-red-500">*</span></label>
-                                    <div className="relative">
-                                        <CreditCard className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.cin ? 'text-red-500' : 'text-gray-400'}`} />
-                                        <input type="text" placeholder={nationality === "TN" && documentType === "CIN" ? "Ex: 14066711 (8 digits)" : "Ex: 12345678"} value={cin} onChange={(e) => {setCin(e.target.value.toUpperCase()); setFieldErrors({...fieldErrors, cin: ""})}} disabled={loading} required className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.cin ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
-                                    </div>
-                                    {fieldErrors.cin && <p className="text-xs text-red-600 font-medium">{fieldErrors.cin}</p>}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex flex-col gap-5">
-                            <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">3. Document Vault</h3>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                {/* Upload ID Card */}
-                                <div className="flex-1 flex flex-col gap-1">
-                                    <input type="file" accept="image/*" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} disabled={loading} />
-                                    <div 
-                                        onClick={() => !loading && idCardInputRef.current?.click()}
-                                        className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
-                                    >
-                                        {idCardPreview ? (
-                                            <>
-                                                <img src={idCardPreview} alt="ID Preview" className="absolute inset-0 w-full h-full object-cover" />
-                                                {!loading && (
-                                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                        <p className="text-white text-sm font-bold">Change Image</p>
-                                                    </div>
-                                                )}
-                                                {!loading && (
-                                                    <button type="button" onClick={(e) => removeFile("idCard", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
-                                                        <X className="w-4 h-4" />
-                                                    </button>
-                                                )}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
-                                                    <FileText className={`w-5 h-5 ${fieldErrors.idCardFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
-                                                </div>
-                                                <p className="text-sm font-bold text-gray-700 mb-1">Upload Front ID</p>
-                                                <p className="text-xs text-gray-500">PNG, JPG up to 5MB</p>
-                                            </>
-                                        )}
-                                    </div>
-                                    {fieldErrors.idCardFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.idCardFile}</p>}
-                                </div>
-
-                                {/* Upload Selfie */}
-                                <div className="flex-1 flex flex-col gap-1">
-                                    <input type="file" accept="image/*" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} disabled={loading} />
-                                    <div 
-                                        onClick={() => !loading && selfieInputRef.current?.click()}
-                                        className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.selfieFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
-                                    >
-                                        {selfiePreview ? (
-                                            <>
-                                                <img src={selfiePreview} alt="Selfie Preview" className="absolute inset-0 w-full h-full object-cover" />
-                                                {!loading && (
-                                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                        <p className="text-white text-sm font-bold">Change Image</p>
-                                                    </div>
-                                                )}
-                                                {!loading && (
-                                                    <button type="button" onClick={(e) => removeFile("selfie", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
-                                                        <X className="w-4 h-4" />
-                                                    </button>
-                                                )}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
-                                                    <Camera className={`w-5 h-5 ${fieldErrors.selfieFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
-                                                </div>
-                                                <p className="text-sm font-bold text-gray-700 mb-1">Upload Selfie</p>
-                                                <p className="text-xs text-gray-500">PNG or JPG file</p>
-                                            </>
-                                        )}
-                                    </div>
-                                    {fieldErrors.selfieFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.selfieFile}</p>}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex flex-col gap-4 bg-gray-50 p-5 rounded-xl border border-gray-200 mt-2">
-                            <h3 className="text-xs uppercase tracking-wider font-bold text-gray-500 mb-1">System Processing Settings</h3>
-                            
-                            <div className="flex flex-col sm:flex-row gap-5">
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <label className="text-xs font-semibold text-gray-700">Procedure Type</label>
-                                    <div className="relative">
-                                        <Shield className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                                        <select value={type} onChange={(e) => setType(e.target.value)} disabled={loading} className="w-full border border-gray-300 bg-white rounded-lg py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 text-gray-800 cursor-pointer disabled:bg-gray-50">
-                                            <option value="Individual KYC (Standard)">Individual KYC (Standard)</option>
-                                            <option value="Individual KYC (Enhanced)">Individual KYC (Enhanced - Biometrics)</option>
-                                            <option value="Corporate KYB (Standard)">Corporate KYB (Standard)</option>
-                                            <option value="Corporate KYB (UBO)">Corporate KYB (UBO Discovery)</option>
-                                            <option value="AML/PEP Screening">AML & Sanctions Screening</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div className="hidden sm:block flex-1"></div>
-                            </div>
-                        </div>
-
-                        <button type="submit" disabled={loading} className="mt-4 flex items-center justify-center gap-2 w-full px-6 py-3.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 cursor-not-allowed text-sm">
-                            {loading ? (
-                                <>
-                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                                    {loadingText || "Processing..."}
-                                </>
-                            ) : (
-                                <>
-                                    <PlusCircle className="w-5 h-5" /> Initiate Verification Pipeline
-                                </>
                             )}
-                        </button>
-                    </form>
+                        </div>
+                        
+                        {globalError && (
+                            <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3 text-sm font-medium">
+                                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" /> 
+                                <span>{globalError}</span>
+                            </div>
+                        )}
+
+                        <form onSubmit={handleSubmit} className="flex flex-col gap-8">
+                            
+                            <div className="flex flex-col gap-5">
+                                <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">1. Personal Information</h3>
+                                
+                                <div className="flex flex-col sm:flex-row gap-5">
+                                    <div className="flex-1 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Full Name <span className="text-red-500">*</span></label>
+                                        <div className="relative">
+                                            <User className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                            <input type="text" placeholder="Ex: Eleanor Lewis" value={customerName} onChange={(e) => setCustomerName(e.target.value)} disabled={loading} required className="w-full border border-gray-300 rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 text-gray-800 disabled:bg-gray-50" />
+                                        </div>
+                                    </div>
+
+                                    <div className="flex-1 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Email Address <span className="text-red-500">*</span></label>
+                                        <div className="relative">
+                                            <Mail className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.email ? 'text-red-500' : 'text-gray-400'}`} />
+                                            <input type="email" placeholder="Ex: e.lewis@corporate.com" value={email} onChange={(e) => {setEmail(e.target.value); setFieldErrors({...fieldErrors, email: ""})}} disabled={loading} required className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.email ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
+                                        </div>
+                                        {fieldErrors.email && <p className="text-xs text-red-600 font-medium">{fieldErrors.email}</p>}
+                                    </div>
+                                </div>
+                                
+                                <div className="flex flex-col sm:flex-row gap-5">
+                                    <div className="flex-1 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Nationality <span className="text-red-500">*</span></label>
+                                        <div className="relative">
+                                            <Globe className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                            <select value={nationality} onChange={(e) => {setNationality(e.target.value); setFieldErrors({...fieldErrors, cin: "", localPhone: ""})}} disabled={loading} required className="w-full border border-gray-300 bg-white rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer disabled:bg-gray-50">
+                                                <option value="">Select a country...</option>
+                                                {getCountries().map((country) => (
+                                                    <option key={country} value={country}>{en[country as keyof typeof en]}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex-1 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Phone Number</label>
+                                        <div className={`flex items-center w-full border rounded-lg overflow-hidden transition-all h-[42px] ${loading ? 'bg-gray-50' : 'bg-white'} ${fieldErrors.localPhone ? 'border-red-500 ring-1 ring-red-500' : 'border-gray-300 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500'}`}>
+                                            <div className={`relative flex items-center justify-center gap-1.5 border-r border-gray-300 px-3 h-full text-sm text-gray-700 font-semibold ${loading ? 'bg-gray-100' : 'bg-gray-50'}`}>
+                                                {nationality ? <img src={`https://flagcdn.com/${nationality.toLowerCase()}.svg`} alt={nationality} className="w-5 h-3.5 object-cover rounded-[2px]" /> : <div className="w-5 h-3.5 bg-gray-200 rounded-[2px]"></div>}
+                                                <select value={nationality} onChange={(e) => setNationality(e.target.value)} disabled={loading} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed">
+                                                    <option value="">Select...</option>
+                                                    {getCountries().map((country) => (<option key={country} value={country}>{en[country as keyof typeof en]}</option>))}
+                                                </select>
+                                                <span>{callingCode ? `+${callingCode}` : "+"}</span>
+                                            </div>
+                                            <input type="tel" placeholder="Ex: 98 123 456" value={localPhone} onChange={(e) => {setLocalPhone(e.target.value.replace(/[^0-9\s]/g, '')); setFieldErrors({...fieldErrors, localPhone: ""})}} disabled={loading} className="flex-1 text-sm text-gray-800 outline-none bg-transparent px-3 h-full disabled:cursor-not-allowed" />
+                                        </div>
+                                        {fieldErrors.localPhone && <p className="text-xs text-red-600 font-medium">{fieldErrors.localPhone}</p>}
+                                    </div>
+                                </div>
+                                
+                                <div className="flex flex-col sm:flex-row gap-5">
+                                    <div className="flex-1 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Date of Birth</label>
+                                        <div className="relative">
+                                            <Calendar className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.dateOfBirth ? 'text-red-500' : 'text-gray-400'}`} />
+                                            <input type="date" value={dateOfBirth} onChange={(e) => {setDateOfBirth(e.target.value); setFieldErrors({...fieldErrors, dateOfBirth: ""})}} disabled={loading} className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.dateOfBirth ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
+                                        </div>
+                                        {fieldErrors.dateOfBirth && <p className="text-xs text-red-600 font-medium">{fieldErrors.dateOfBirth}</p>}
+                                    </div>
+                                    <div className="hidden sm:block flex-1"></div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col gap-5">
+                                <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">2. Official Identification</h3>
+                                
+                                <div className="flex flex-col sm:flex-row gap-5">
+                                    <div className="w-full sm:w-1/3 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Document Type <span className="text-red-500">*</span></label>
+                                        <select value={documentType} onChange={(e) => {setDocumentType(e.target.value); setFieldErrors({...fieldErrors, cin: ""})}} disabled={loading} className="w-full border border-gray-300 bg-white rounded-lg py-2.5 px-3 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer disabled:bg-gray-50">
+                                            <option value="CIN">National ID (CIN)</option>
+                                            <option value="Passport">Passport</option>
+                                            <option value="Driving License">Driving License</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="w-full sm:w-2/3 flex flex-col gap-2">
+                                        <label className="text-sm font-semibold text-gray-700">Unique ID Number <span className="text-red-500">*</span></label>
+                                        <div className="relative">
+                                            <CreditCard className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${fieldErrors.cin ? 'text-red-500' : 'text-gray-400'}`} />
+                                            <input type="text" placeholder={nationality === "TN" && documentType === "CIN" ? "Ex: 14066711 (8 digits)" : "Ex: 12345678"} value={cin} onChange={(e) => {setCin(e.target.value.toUpperCase()); setFieldErrors({...fieldErrors, cin: ""})}} disabled={loading} required className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.cin ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`} />
+                                        </div>
+                                        {fieldErrors.cin && <p className="text-xs text-red-600 font-medium">{fieldErrors.cin}</p>}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col gap-5">
+                                <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">3. Document Vault</h3>
+                                
+                                <div className="flex flex-col sm:flex-row gap-5">
+                                    {/* Upload ID Card */}
+                                    <div className="flex-1 flex flex-col gap-1">
+                                        <input type="file" accept="image/*" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} disabled={loading} />
+                                        <div 
+                                            onClick={() => !loading && idCardInputRef.current?.click()}
+                                            className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
+                                        >
+                                            {idCardPreview ? (
+                                                <>
+                                                    <img src={idCardPreview} alt="ID Preview" className="absolute inset-0 w-full h-full object-cover" />
+                                                    {!loading && (
+                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                            <p className="text-white text-sm font-bold">Change Image</p>
+                                                        </div>
+                                                    )}
+                                                    {!loading && (
+                                                        <button type="button" onClick={(e) => removeFile("idCard", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
+                                                        <FileText className={`w-5 h-5 ${fieldErrors.idCardFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
+                                                    </div>
+                                                    <p className="text-sm font-bold text-gray-700 mb-1">Upload Front ID</p>
+                                                    <p className="text-xs text-gray-500">PNG, JPG up to 5MB</p>
+                                                </>
+                                            )}
+                                        </div>
+                                        {fieldErrors.idCardFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.idCardFile}</p>}
+                                    </div>
+
+                                    {/* Upload Selfie */}
+                                    <div className="flex-1 flex flex-col gap-1">
+                                        <input type="file" accept="image/*" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} disabled={loading} />
+                                        <div 
+                                            onClick={() => !loading && selfieInputRef.current?.click()}
+                                            className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.selfieFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
+                                        >
+                                            {selfiePreview ? (
+                                                <>
+                                                    <img src={selfiePreview} alt="Selfie Preview" className="absolute inset-0 w-full h-full object-cover" />
+                                                    {!loading && (
+                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                            <p className="text-white text-sm font-bold">Change Image</p>
+                                                        </div>
+                                                    )}
+                                                    {!loading && (
+                                                        <button type="button" onClick={(e) => removeFile("selfie", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
+                                                        <Camera className={`w-5 h-5 ${fieldErrors.selfieFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
+                                                    </div>
+                                                    <p className="text-sm font-bold text-gray-700 mb-1">Upload Selfie</p>
+                                                    <p className="text-xs text-gray-500">PNG or JPG file</p>
+                                                </>
+                                            )}
+                                        </div>
+                                        {fieldErrors.selfieFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.selfieFile}</p>}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col gap-4 bg-gray-50 p-5 rounded-xl border border-gray-200 mt-2">
+                                <h3 className="text-xs uppercase tracking-wider font-bold text-gray-500 mb-1">System Processing Settings</h3>
+                                
+                                <div className="flex flex-col sm:flex-row gap-5">
+                                    <div className="flex-1 flex flex-col gap-2">
+                                        <label className="text-xs font-semibold text-gray-700">Procedure Type</label>
+                                        <div className="relative">
+                                            <Shield className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                            <select value={type} onChange={(e) => setType(e.target.value)} disabled={loading} className="w-full border border-gray-300 bg-white rounded-lg py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 text-gray-800 cursor-pointer disabled:bg-gray-50">
+                                                <option value="Individual KYC (Standard)">Individual KYC (Standard)</option>
+                                                <option value="Individual KYC (Enhanced)">Individual KYC (Enhanced - Biometrics)</option>
+                                                <option value="Corporate KYB (Standard)">Corporate KYB (Standard)</option>
+                                                <option value="Corporate KYB (UBO)">Corporate KYB (UBO Discovery)</option>
+                                                <option value="AML/PEP Screening">AML & Sanctions Screening</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="hidden sm:block flex-1"></div>
+                                </div>
+                            </div>
+
+                            <button type="submit" disabled={loading} className="mt-4 flex items-center justify-center gap-2 w-full px-6 py-3.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 cursor-not-allowed text-sm">
+                                {loading ? (
+                                    <>
+                                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        {loadingText || "Processing..."}
+                                    </>
+                                ) : (
+                                    <>
+                                        <PlusCircle className="w-5 h-5" /> Initiate Verification Pipeline
+                                    </>
+                                )}
+                            </button>
+                        </form>
+                    </div>
                 </div>
             </div>
         </div>

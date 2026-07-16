@@ -16,6 +16,9 @@ model Company {
   name                 String
   plan                 String                @default("trial") // trial, starter, growth, enterprise
   createdAt            DateTime              @default(now())
+
+  currentPeriodEnd     DateTime?             
+  cancelAtPeriodEnd    Boolean               @default(false)
   
   users                User[]
   verificationRequests VerificationRequest[]

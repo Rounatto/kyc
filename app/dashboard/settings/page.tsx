@@ -3,13 +3,14 @@
 import Header from "@/components/header";
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { User, Lock, Bell, Code, ShieldAlert, Users } from "lucide-react"; // 💡 Import de l'icône Users
+import { User, Lock, Bell, Code, ShieldAlert, Users, CreditCard } from "lucide-react"; 
 import ProfSetting from "@/components/ProfSetting";
 import SecurSetting from "@/components/SecurSetting";
 import ApIwebhooksSetting from "@/components/API&webhooksSetting";
 import NotifSetting from "@/components/NotifSetting";
 import AuditSetting from "@/components/AuditSetting";
-import TeamSetting from "@/components/TeamSetting"; // 💡 Import du nouveau composant
+import TeamSetting from "@/components/TeamSetting";
+import BillingSetting from "@/components/BillingTabSetting"; // 💡 IMPORT DU COMPOSANT BILLING (Renomme ton fichier BillingTab.tsx en BillingSetting.tsx si besoin)
 
 export default function Settings() {
     const { data: session } = useSession();
@@ -17,14 +18,15 @@ export default function Settings() {
 
     const isAdmin = (session?.user as any)?.role === "COMPANY_ADMIN";
 
-    // 💡 TABLEAU DYNAMIQUE MIS À JOUR
+    // 💡 TABLEAU DYNAMIQUE MIS À JOUR AVEC LE BILLING
     const menuItems = [
         { name: "Profile Info", icon: User },
         { name: "Security", icon: Lock },
         { name: "Notifications", icon: Bell },
         { name: "API & Webhooks", icon: Code },
         ...(isAdmin ? [
-            { name: "Team Management", icon: Users }, // 👈 Ajout de l'onglet Team
+            { name: "Team Management", icon: Users },
+            { name: "Billing & Plans", icon: CreditCard }, // 👈 Ajout de l'onglet Facturation
             { name: "Audit Trail", icon: ShieldAlert }
         ] : []),
     ];
@@ -39,11 +41,15 @@ export default function Settings() {
                 return <NotifSetting />;
             case "API & Webhooks":
                 return <ApIwebhooksSetting />;
-            // 💡 CÂBLAGE DES DEUX ONGLETS ADMIN
+            
+            // 💡 CÂBLAGE DES TROIS ONGLETS ADMIN
             case "Team Management":
                 return isAdmin ? <TeamSetting /> : null;
+            case "Billing & Plans":
+                return isAdmin ? <BillingSetting /> : null; // 👈 Le composant injecté ici
             case "Audit Trail":
                 return isAdmin ? <AuditSetting /> : null;
+            
             default:
                 return null;
         }
