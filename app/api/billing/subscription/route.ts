@@ -16,37 +16,23 @@ export async function POST(req: Request) {
         if (!user?.companyId) return NextResponse.json({ error: "No company attached" }, { status: 400 });
 
         const body = await req.json();
-        const { action, plan } = body;
+        const { action } = body;
 
-        if (action === "UPGRADE") {
-            const validPlans = ["starter", "growth", "enterprise"];
-            if (!validPlans.includes(plan)) return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
+        // 🛡️ SÉCURITÉ : L'Upgrade est désormais géré par Stripe (Checkout + Webhook).
+        // Si un hacker tente d'envoyer "UPGRADE" ici, il sera rejeté par le "Invalid action" en bas.
 
-            // Simulation Stripe : On donne 30 jours à partir d'aujourd'hui
-            const thirtyDaysFromNow = new Date();
-            thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-
-            await prisma.company.update({
-                where: { id: user.companyId },
-                data: { 
-                    plan: plan,
-                    currentPeriodEnd: thirtyDaysFromNow,
-                    cancelAtPeriodEnd: false 
-                }
-            });
-
-            return NextResponse.json({ message: "Subscription upgraded successfully" });
-        }
-
+        // ACTION 1 : CANCEL (Le client demande l'annulation de son plan)
         if (action === "CANCEL") {
             await prisma.company.update({
                 where: { id: user.companyId },
-                data: { cancelAtPeriodEnd: true }
+                // On active la bascule d'annulation à la fin de la période
+                data: { cancelAtPeriodEnd: true } 
             });
 
             return NextResponse.json({ message: "Subscription set to cancel at period end" });
         }
 
+        // Si l'action n'est pas CANCEL, on rejette la requête.
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
     } catch (error) {

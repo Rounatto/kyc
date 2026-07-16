@@ -3,11 +3,15 @@
 import { useState, useEffect } from "react";
 import { Zap, CheckCircle2, AlertTriangle, XCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useSearchParams, useRouter } from "next/navigation"; // 💡 IMPORT POUR LIRE L'URL DE STRIPE
 
-export default function BillingTab() {
+export default function BillingSetting() { // J'ai renommé en BillingSetting pour coller à ton fichier Settings.tsx
     const [loading, setLoading] = useState(true);
-    const [actionLoading, setActionLoading] = useState(false);
+    const [actionLoading, setActionLoading] = useState<string | null>(null); // 💡 Permet de savoir QUEL bouton tourne
     const [billingData, setBillingData] = useState<any>(null);
+    
+    const searchParams = useSearchParams();
+    const router = useRouter();
 
     const fetchQuota = async () => {
         try {
@@ -23,29 +27,56 @@ export default function BillingTab() {
         }
     };
 
+    // 💡 DÉTECTION DES RETOURS STRIPE
     useEffect(() => {
+        const paymentStatus = searchParams.get("payment");
+        if (paymentStatus === "success") {
+            toast.success("Payment successful! Your subscription is now active.");
+            // On nettoie l'URL pour que le toast ne réapparaisse pas au rafraîchissement
+            router.replace("/dashboard/settings");
+        } else if (paymentStatus === "cancelled") {
+            toast.info("Payment process was cancelled.");
+            router.replace("/dashboard/settings");
+        }
+        
         fetchQuota();
-    }, []);
+    }, [searchParams, router]);
 
     const handleSubscriptionAction = async (action: "UPGRADE" | "CANCEL", plan?: string) => {
-        setActionLoading(true);
+        setActionLoading(action === "UPGRADE" ? plan || "upgrade" : "cancel");
         try {
-            const res = await fetch("/api/billing/subscription", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action, plan })
-            });
+            if (action === "UPGRADE") {
+                const res = await fetch("/api/billing/checkout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ plan })
+                });
 
-            if (res.ok) {
-                toast.success(action === "UPGRADE" ? "Plan upgraded successfully!" : "Subscription cancelled.");
-                await fetchQuota(); 
+                const data = await res.json();
+                if (res.ok && data.url) {
+                    window.location.href = data.url; 
+                } else {
+                    toast.error(data.error || "Failed to initialize payment gateway.");
+                    setActionLoading(null);
+                }
             } else {
-                toast.error("An error occurred processing your request.");
+                const res = await fetch("/api/billing/subscription", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action })
+                });
+                
+                if (res.ok) {
+                    toast.success("Subscription cancelled. You will retain access until the end of your billing cycle.");
+                    await fetchQuota(); 
+                } else {
+                    toast.error("An error occurred processing your request.");
+                }
+                setActionLoading(null);
             }
         } catch (error) {
             toast.error("Network error.");
-        } finally {
-            setActionLoading(false);
+            setActionLoading(null);
         }
     };
 
@@ -112,10 +143,11 @@ export default function BillingTab() {
                     </ul>
                     <button 
                         onClick={() => handleSubscriptionAction("UPGRADE", "starter")}
-                        disabled={actionLoading || billingData.plan === "starter"}
-                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 ${billingData.plan === 'starter' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white hover:bg-gray-50 text-gray-900 border-gray-300'}`}
+                        disabled={!!actionLoading || billingData.plan === "starter"}
+                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 flex items-center justify-center gap-2 ${billingData.plan === 'starter' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white hover:bg-gray-50 text-gray-900 border-gray-300'}`}
                     >
-                        {billingData.plan === "starter" ? "Current Plan" : "Upgrade to Starter"}
+                        {actionLoading === "starter" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                        {actionLoading === "starter" ? "Redirecting..." : billingData.plan === "starter" ? "Current Plan" : "Upgrade to Starter"}
                     </button>
                 </div>
 
@@ -133,10 +165,11 @@ export default function BillingTab() {
                     </ul>
                     <button 
                         onClick={() => handleSubscriptionAction("UPGRADE", "growth")}
-                        disabled={actionLoading || billingData.plan === "growth"}
-                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 ${billingData.plan === 'growth' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-blue-700 hover:bg-blue-800 text-white border-blue-700'}`}
+                        disabled={!!actionLoading || billingData.plan === "growth"}
+                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 flex items-center justify-center gap-2 ${billingData.plan === 'growth' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-blue-700 hover:bg-blue-800 text-white border-blue-700'}`}
                     >
-                        {billingData.plan === "growth" ? "Current Plan" : "Upgrade to Growth"}
+                        {actionLoading === "growth" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                        {actionLoading === "growth" ? "Redirecting..." : billingData.plan === "growth" ? "Current Plan" : "Upgrade to Growth"}
                     </button>
                 </div>
 
@@ -166,10 +199,11 @@ export default function BillingTab() {
                         </div>
                         <button 
                             onClick={() => handleSubscriptionAction("CANCEL")}
-                            disabled={actionLoading}
-                            className="px-4 py-2 bg-white border border-red-200 text-red-600 font-bold text-sm rounded-lg hover:bg-red-50 transition-colors shrink-0 flex items-center gap-2"
+                            disabled={!!actionLoading}
+                            className="px-4 py-2 bg-white border border-red-200 text-red-600 font-bold text-sm rounded-lg hover:bg-red-50 transition-colors shrink-0 flex items-center gap-2 disabled:opacity-50"
                         >
-                            <XCircle className="w-4 h-4" /> Cancel Plan
+                            {actionLoading === "cancel" ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />} 
+                            {actionLoading === "cancel" ? "Canceling..." : "Cancel Plan"}
                         </button>
                     </div>
                 </div>
