@@ -4,6 +4,13 @@ import { sendWeeklyReportEmail } from "@/lib/mail";
 
 // Cette route est appelée par le robot Vercel CRON, pas par un utilisateur depuis le navigateur.
 export async function GET(req: Request) {
+    // 🔒 Vercel Cron auth: reject any caller that doesn't present the shared secret,
+    // BEFORE touching the database. Vercel sends "Authorization: Bearer <CRON_SECRET>".
+    const authHeader = req.headers.get("authorization");
+    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     try {
         // 1. Trouver tous les utilisateurs qui ont activé l'option Weekly Report
         const subscribers = await prisma.user.findMany({
