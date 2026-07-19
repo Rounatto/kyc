@@ -1,7 +1,16 @@
+// ============================================================================
+// 📂 DOSSIER KYC INDIVIDUEL — DÉTAIL (GET) + DÉCISION AGENT (PATCH)
+// ============================================================================
+// GET renvoie un dossier avec tout son historique d'audit (pour l'écran de
+// détail). PATCH est LA route où un agent humain rend sa décision finale
+// (approuver/rejeter) après avoir revu le score automatique du moteur KYC —
+// c'est le point de contrôle humain du pipeline (human-in-the-loop), et
+// chaque décision déclenche en cascade : ligne d'audit, notification interne
+// dashboard, email aux agents abonnés, email au client final.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { sendKYCEmail, sendAgentNotificationEmail } from "@/lib/mail"; // 💡 NOUVEL IMPORT
-import { getServerSession } from "next-auth/next"; 
+import { sendKYCEmail, sendAgentNotificationEmail } from "@/lib/mail";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
 
@@ -68,8 +77,11 @@ export async function PATCH(
         }
 
         const body = await req.json();
-        
+
         // --- LOGIQUE DE FLAG MANUEL (AUDIT) ---
+        // Un agent peut signaler un dossier pour revue interne SANS changer
+        // son statut KYC (ex: doute sur un dossier déjà "verified"). Ça ne
+        // fait qu'ajouter une ligne d'audit + alerter les abonnés "Alerts".
         if (body.action === "FLAG_AUDIT") {
             const flaggedCustomer = await prisma.verificationRequest.update({
                 where: { id: customerId },
@@ -96,7 +108,8 @@ export async function PATCH(
             return NextResponse.json(flaggedCustomer);
         }
 
-        const { status, rejectionReason } = body; 
+        // --- DÉCISION FINALE DE L'AGENT (le vrai changement de statut KYC) ---
+        const { status, rejectionReason } = body;
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
             return NextResponse.json({ message: "Invalid status value." }, { status: 400 });
@@ -177,6 +190,13 @@ export async function PATCH(
         }
 
         // 💡 EMAIL EXTERNE (Pour le Client final)
+        // `customerName`/`rejectionReason` finissent interpolés tels quels dans
+        // le HTML du template (voir lib/mail.ts) — pas d'échappement HTML ici.
+        // ⚠️ Piège JS : `sendKYCEmail(...)` n'est PAS "await"é, donc le
+        // try/catch autour ne sert à rien pour une erreur d'envoi réelle (le
+        // bloc try est déjà sorti avant que la promesse ne se résolve/rejette) —
+        // une éventuelle erreur SMTP deviendrait une "unhandled promise
+        // rejection" silencieuse plutôt que d'être loguée ici.
         if (status === "verified" || status === "rejected") {
             try {
                 sendKYCEmail(
