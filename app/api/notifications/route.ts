@@ -1,3 +1,12 @@
+// ============================================================================
+// 🔔 CENTRE DE NOTIFICATIONS IN-APP (cloche du dashboard)
+// ============================================================================
+// Ne pas confondre avec settings/notifications (préférences email par
+// utilisateur) : ici on lit/marque comme lues les notifications du modèle
+// `Notification`, scopées par ENTREPRISE (pas par utilisateur individuel) —
+// tous les agents d'une même entreprise voient les mêmes notifications
+// (alertes high-risk, facturation, clés API créées...). Consommé par
+// NotificationContext côté frontend, probablement via polling périodique.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";

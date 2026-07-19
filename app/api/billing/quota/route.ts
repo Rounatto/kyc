@@ -1,3 +1,14 @@
+// ============================================================================
+// 📈 QUOTA D'USAGE (vérifications KYC/mois selon le plan de l'entreprise)
+// ============================================================================
+// Appelé par le frontend pour savoir si l'entreprise a atteint sa limite
+// mensuelle de dossiers KYC (et donc si le bouton "Nouvelle Vérification"
+// doit être bloqué). Fait aussi 2 choses en plus d'une simple lecture :
+//   - Auto-downgrade : si un abonnement annulé (cancelAtPeriodEnd) a dépassé
+//     sa date de fin, on repasse silencieusement l'entreprise en plan "trial"
+//     ICI, à la prochaine consultation (pas de cron dédié pour ça).
+//   - Alerte quota : si la limite est atteinte, crée une notification —
+//     mais au plus une par 24h (`recentAlert`) pour ne pas spammer.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
@@ -56,7 +67,9 @@ export async function GET(req: Request) {
             }
         });
 
-        let limit = 5; 
+        // Palier par plan. "enterprise" utilise une valeur très haute plutôt
+        // qu'un vrai "illimité" — suffisant en pratique mais pas explicite.
+        let limit = 5;
         if (plan === "starter") limit = 50;
         if (plan === "growth") limit = 500;
         if (plan === "enterprise") limit = 999999;

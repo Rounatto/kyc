@@ -1,3 +1,11 @@
+// ============================================================================
+// 📊 CRON HEBDOMADAIRE — RAPPORTS DE COMPLIANCE PAR EMAIL
+// ============================================================================
+// Planifié dans vercel.json (`0 8 * * 1` = tous les lundis 8h). Pas de file
+// d'attente/job asynchrone : la route boucle simplement sur tous les abonnés
+// et envoie les emails de façon séquentielle dans le temps d'exécution de la
+// requête HTTP — acceptable au volume actuel, mais à surveiller si le nombre
+// d'entreprises abonnées grandit (risque de timeout serverless).
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendWeeklyReportEmail } from "@/lib/mail";

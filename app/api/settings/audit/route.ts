@@ -1,8 +1,17 @@
+// ============================================================================
+// 📜 LECTURE DU REGISTRE D'AUDIT (écran "Audit Trail" des Settings)
+// ============================================================================
+// Réservé aux COMPANY_ADMIN (contrairement aux dossiers KYC, consultables par
+// les AGENT aussi) — la piste d'audit complète de l'entreprise est une donnée
+// sensible de gouvernance. Les lignes elles-mêmes sont écrites ailleurs (voir
+// lib/logger.ts et les `auditLogs: { create: ... }` dans customers/route.ts,
+// customers/[id]/route.ts, settings/team, settings/apikeys...) — cette route
+// ne fait que les lire, jamais les modifier (le registre doit rester immuable).
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { enforceRole } from "@/lib/rbac"; // 💡 NOTRE GARDIEN PHASE 3
+import { enforceRole } from "@/lib/rbac";
 
 export async function GET(req: Request) {
     try {

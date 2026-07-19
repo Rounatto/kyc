@@ -1,14 +1,23 @@
+// ============================================================================
+// 🧑‍🤝‍🧑 GESTION D'ÉQUIPE — INVITER / LISTER / RÉVOQUER DES AGENTS
+// ============================================================================
+// Réservé aux COMPANY_ADMIN. POST ne crée PAS un compte utilisable immédiatement :
+// il crée un User SANS mot de passe (`password` reste null) + un token
+// d'invitation à usage unique + envoie un email avec un lien. C'est
+// app/api/auth/setup (voir Lot 2) qui complète l'activation quand l'agent
+// invité clique sur ce lien et choisit son mot de passe.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { z } from "zod";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { enforceRole } from "@/lib/rbac"; 
-import { logSecurityEvent } from "@/lib/logger"; 
-import { sendAgentInvitationEmail } from "@/lib/mail"; 
-import crypto from "crypto"; // 💡 Générateur cryptographique de Node.js
+import { enforceRole } from "@/lib/rbac";
+import { logSecurityEvent } from "@/lib/logger";
+import { sendAgentInvitationEmail } from "@/lib/mail";
+import crypto from "crypto";
 
-// 💡 Validation allégée : L'admin ne fournit que le nom et l'email !
+// L'admin ne fournit que nom + email : le mot de passe sera choisi par
+// l'agent lui-même via le lien d'invitation, jamais par l'admin.
 const agentSchema = z.object({
     fullName: z.string().min(2, "Name must be at least 2 characters"),
     email: z.string().email("Invalid email format"),

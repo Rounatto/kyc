@@ -1,13 +1,23 @@
+// ============================================================================
+// 💳 CRÉATION D'UNE SESSION DE PAIEMENT STRIPE (UPGRADE DE PLAN)
+// ============================================================================
+// Ne débloque RIEN directement : cette route ne fait que créer une page de
+// paiement hébergée par Stripe et renvoie son URL au frontend, qui redirige
+// l'utilisateur dessus. Le déblocage réel du plan se fait uniquement quand
+// Stripe confirme le paiement via app/api/webhooks/stripe (événement
+// `checkout.session.completed`) — jamais directement depuis cette route,
+// pour ne jamais faire confiance à un simple retour de redirection navigateur.
+//
+// `client_reference_id: user.companyId` est le fil qui relie cette session à
+// l'entreprise : c'est ce champ que le webhook relira pour savoir QUI upgrader.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import Stripe from "stripe";
 
-// Initialisation de Stripe avec ta clé secrète de TEST (à mettre dans ton fichier .env)
-// STRIPE_SECRET_KEY=sk_test_...
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-    apiVersion: "2026-06-24.dahlia", 
+    apiVersion: "2026-06-24.dahlia",
 });
 
 export async function POST(req: Request) {
@@ -25,7 +35,9 @@ export async function POST(req: Request) {
         const body = await req.json();
         const { plan } = body;
 
-        // Définition des prix factices pour le Test Mode
+        // Prix codés en dur ici plutôt que via des Stripe Price IDs préconfigurés
+        // dans le Dashboard Stripe — simple pour un MVP, mais moins flexible
+        // (changer un prix veut dire redéployer le code).
         let amount = 0;
         let planName = "";
         if (plan === "starter") { amount = 4900; planName = "Starter Plan"; } // 4900 centimes = 49.00$

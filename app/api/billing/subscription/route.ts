@@ -1,3 +1,12 @@
+// ============================================================================
+// 📉 GESTION D'ABONNEMENT — ANNULATION UNIQUEMENT
+// ============================================================================
+// Volontairement minimaliste : la SEULE action supportée ici est "CANCEL"
+// (programmer l'annulation en fin de période, gérée ensuite par le check
+// d'auto-downgrade dans billing/quota/route.ts). L'upgrade de plan passe
+// exclusivement par billing/checkout + webhooks/stripe — un payload
+// "UPGRADE" envoyé ici serait simplement rejeté par le "Invalid action" en
+// bas, ce qui empêche un client malveillant de s'auto-upgrader sans payer.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";

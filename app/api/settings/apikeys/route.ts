@@ -1,3 +1,16 @@
+// ============================================================================
+// 🔌 CLÉS API B2B — GÉNÉRATION / LISTE / RÉVOCATION
+// ============================================================================
+// Réservé aux COMPANY_ADMIN. Permet à une entreprise cliente de générer des
+// clés `tv_live_...` destinées (à terme) à authentifier des appels depuis LEUR
+// propre backend vers une API publique TrustVerify.
+//
+// ⚠️ Écosystème incomplet (roadmap Phase D) : aucune route publique de ce
+// projet ne consomme encore ces clés (pas de middleware qui les vérifie) —
+// c'est une fonctionnalité "vitrine" pour l'instant, la clé générée n'ouvre
+// aucun accès réel.
+// ⚠️ La clé est stockée EN CLAIR en base (`key: rawApiKey`, voir schema.prisma) —
+// idéalement on stockerait un hash SHA-256 + un préfixe affichable.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
@@ -74,12 +87,17 @@ export async function POST(req: Request) {
             }
         });
 
-        return NextResponse.json({ 
+        // Pattern "show-once" : la clé en clair n'est renvoyée qu'ICI, au
+        // moment de sa création. Le GET plus haut ne la réexpose jamais — si
+        // l'utilisateur ferme la fenêtre sans la copier, elle est perdue et
+        // il doit en régénérer une nouvelle (comportement standard des APIs
+        // type Stripe/GitHub).
+        return NextResponse.json({
             message: "API Key generated successfully.",
             keyData: {
                 id: newKey.id,
                 name: newKey.name,
-                keyValue: rawApiKey, 
+                keyValue: rawApiKey,
                 createdAt: newKey.createdAt
             }
         }, { status: 201 });

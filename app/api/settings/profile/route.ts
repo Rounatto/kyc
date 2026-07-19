@@ -1,8 +1,19 @@
+// ============================================================================
+// 👤 MISE À JOUR DU PROFIL (personnel + organisation, selon le rôle)
+// ============================================================================
+// Une seule route sert 2 usages différents selon le rôle de l'appelant :
+//   - COMPANY_AGENT : ne peut renommer que SON PROPRE profil (fullName, avatar).
+//   - COMPANY_ADMIN : peut EN PLUS renommer l'entreprise elle-même (`Company.name`).
+// La distinction est faite via `isAdmin` dérivé du rôle de la session (jamais
+// d'un champ envoyé par le client), donc un agent ne peut pas se faire passer
+// pour un admin en modifiant juste le payload envoyé.
+// Upload d'avatar : passe directement par l'API Storage de Supabase (pas par
+// Uploadthing, utilisé lui pour les documents KYC) — voir la note MIME plus bas.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { enforceRole } from "@/lib/rbac"; // 💡 IMPORT DU GARDIEN RBAC
+import { enforceRole } from "@/lib/rbac";
 
 export async function POST(req: Request) {
     try {
@@ -32,6 +43,11 @@ export async function POST(req: Request) {
         let newAvatarUrl = null;
 
         // --- GESTION DE L'IMAGE (SUPABASE) ---
+        // ⚠️ Aucune validation stricte du type MIME ici (`file.type` est
+        // envoyé par le navigateur, donc falsifiable) : un fichier `image/svg+xml`
+        // contenant du JavaScript embarqué serait accepté et stocké comme avatar,
+        // ce qui est un vecteur XSS classique si le SVG est ensuite affiché
+        // directement (plutôt que converti en PNG/rasterisé).
         if (file && file.size > 0) {
             const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
             const filename = `${uniqueSuffix}-${file.name.replace(/\s+/g, "-")}`;
