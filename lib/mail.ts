@@ -1,6 +1,20 @@
+// ============================================================================
+// ✉️ SERVICE D'ENVOI D'EMAILS — TOUS LES TEMPLATES TRANSACTIONNELS
+// ============================================================================
+// Pourquoi ce fichier existe : centralise l'unique transporteur SMTP (Nodemailer
+// + Gmail) et les 5 templates HTML utilisés par l'application, pour ne pas
+// dupliquer la config d'envoi ni le style visuel dans chaque route API.
+//
+// ⚠️ Point de vigilance connu : les valeurs interpolées dans le HTML (nom du
+// client, motif de rejet, etc.) viennent de formulaires utilisateurs et ne sont
+// PAS échappées avant d'être injectées dans le template — un `customerName`
+// contenant du HTML/JS partirait tel quel dans un email envoyé depuis ce domaine.
+// (Voir roadmap Phase A — tâche d'échappement HTML, à traiter séparément.)
 import nodemailer from "nodemailer";
 
-// Configuration globale du transporteur sécurisé
+// Un seul transporteur, réutilisé par toutes les fonctions ci-dessous.
+// Utilise le compte Gmail défini par EMAIL_USER / EMAIL_APP_PASSWORD (mot de
+// passe d'application Google, pas le mot de passe du compte).
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -11,6 +25,11 @@ const transporter = nodemailer.createTransport({
 
 // ============================================================================
 // 📁 EMAILS DE STATUT KYC (Pour le Client Final)
+// ============================================================================
+// Envoyé au CLIENT FINAL (la personne dont l'identité est vérifiée) quand un
+// agent traite son dossier. `status` détermine le template : approbation ou
+// rejet (avec motif). C'est la seule fonction de ce fichier qui s'adresse à
+// quelqu'un d'externe à l'entreprise cliente de TrustVerify.
 // ============================================================================
 export const sendKYCEmail = async (
   to: string, 
@@ -74,6 +93,11 @@ export const sendKYCEmail = async (
 // ============================================================================
 // 🛡️ EMAILS D'INVITATION D'ÉQUIPE
 // ============================================================================
+// Envoyé par un COMPANY_ADMIN quand il invite un nouvel agent à rejoindre son
+// entreprise. `setupLink` contient un token d'invitation à usage unique (généré
+// et validé côté serveur, voir app/api/settings/team + app/setup-account) qui
+// permet au destinataire de définir son mot de passe et d'activer son compte.
+// ============================================================================
 export const sendAgentInvitationEmail = async (
   to: string, 
   name: string, 
@@ -115,6 +139,11 @@ export const sendAgentInvitationEmail = async (
 // ============================================================================
 // 📩 EMAIL DE VÉRIFICATION OTP (Phase 6)
 // ============================================================================
+// Envoyé à l'inscription d'une nouvelle entreprise, pour prouver que le créateur
+// du compte possède bien l'adresse email fournie (anti-inscription frauduleuse).
+// Le code à 6 chiffres est généré et stocké dans le modèle `OtpCode` (expire
+// après 10 minutes) et vérifié par app/api/auth/verify-register.
+// ============================================================================
 export const sendVerificationOtpEmail = async (to: string, otpCode: string) => {
   const subject = "Verify Your Business Email";
   const htmlContent = `
@@ -149,7 +178,13 @@ export const sendVerificationOtpEmail = async (to: string, otpCode: string) => {
 };
 
 // ============================================================================
-// 🔔 NOUVEAU : EMAILS DE NOTIFICATION INTERNE (Pour les Agents, basé sur les Settings)
+// 🔔 EMAILS DE NOTIFICATION INTERNE (Pour les Agents, basé sur les Settings)
+// ============================================================================
+// Envoyé à un AGENT/ADMIN interne (pas au client final) quand un dossier KYC
+// change de statut, SEULEMENT si l'utilisateur a activé cette préférence dans
+// ses réglages (`emailNotifSuccess` / `emailNotifAlerts` en base — voir
+// app/api/settings/notifications). `type` détermine le ton : succès ou alerte
+// nécessitant une revue.
 // ============================================================================
 export const sendAgentNotificationEmail = async (
   to: string, 
@@ -198,7 +233,12 @@ export const sendAgentNotificationEmail = async (
 };
 
 // ============================================================================
-// 📊 NOUVEAU : EMAIL DE RAPPORT HEBDOMADAIRE (CRON JOB)
+// 📊 EMAIL DE RAPPORT HEBDOMADAIRE (CRON JOB)
+// ============================================================================
+// Déclenché une fois par semaine par app/api/cron/weekly-report (planifié dans
+// vercel.json, protégé par CRON_SECRET), pour chaque utilisateur ayant activé
+// `emailNotifWeekly`. Résume l'activité KYC des 7 derniers jours de SON
+// entreprise (les métriques sont déjà filtrées par companyId en amont).
 // ============================================================================
 export const sendWeeklyReportEmail = async (
   to: string, 

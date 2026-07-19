@@ -1,9 +1,22 @@
-// Configuration du client Prisma
+// ============================================================================
+// 🗺️ SCHÉMA DE DONNÉES — TRUSTVERIFY (KYC B2B MULTI-TENANT)
+// ============================================================================
+// Vue d'ensemble de l'architecture : `Company` est la racine du multi-tenant —
+// PRESQUE tous les autres modèles portent un `companyId` pour garantir que les
+// données d'une entreprise cliente ne sont jamais visibles par une autre
+// (le cloisonnement est appliqué au niveau applicatif via lib/rbac.ts, pas par
+// des policies Postgres — chaque requête Prisma doit filtrer par companyId).
+//
+// Convention de suppression en cascade utilisée dans ce schéma :
+// - onDelete: Cascade → l'enfant n'a aucun sens sans son parent (ex: un dossier
+//   KYC sans entreprise), donc il est supprimé avec elle.
+// - onDelete: SetNull → l'enfant doit SURVIVRE à la suppression du parent pour
+//   des raisons légales/traçabilité (ex: un AuditLog ou un dossier KYC doit
+//   rester consultable même si l'agent qui l'a traité quitte l'entreprise).
 generator client {
   provider = "prisma-client-js"
 }
 
-// Connexion à la base de données (PostgreSQL)
 datasource db {
   provider = "postgresql"
 }
@@ -57,9 +70,12 @@ model User {
   passkeys             Passkey[]
   
   // 📱 2FA TOTP
+  // ⚠️ totpSecret est stocké EN CLAIR (pas chiffré) — voir roadmap Phase B pour
+  // le chiffrement AES-256-GCM à ajouter avant tout déploiement avec vraies données.
+  // backupCodes existe dans le schéma mais rien ne le génère actuellement côté API.
   totpEnabled          Boolean               @default(false)
-  totpSecret           String?               
-  backupCodes          String?               
+  totpSecret           String?
+  backupCodes          String?
   
   // INVITATION SÉCURISÉE B2B
   invitationToken      String?               @unique
@@ -176,6 +192,8 @@ model Passkey {
 // =====================================================================
 model OtpCode {
   id        String   @id @default(cuid())
+  // @unique sur l'email : un seul code actif par adresse à la fois — générer un
+  // nouveau code écrase (upsert) l'ancien plutôt que d'en accumuler plusieurs.
   email     String   @unique
   code      String   // Le code à 6 chiffres
   expiresAt DateTime // Date d'expiration (ex: dans 10 minutes)
@@ -188,7 +206,10 @@ model OtpCode {
 model ApiKey {
   id          String   @id @default(cuid())
   name        String   // Ex: "Serveur de Production NodeJS"
-  key         String   @unique // La vraie clé (ex: tv_live_xxx)
+  // ⚠️ Clé stockée EN CLAIR (ex: tv_live_xxx). Idéalement on stockerait un hash
+  // SHA-256 + un préfixe affichable, pour qu'une fuite de DB ne compromette pas
+  // les clés API des clients (voir roadmap Phase D).
+  key         String   @unique
   lastUsedAt  DateTime? // Pour savoir si elle est active
   createdAt   DateTime @default(now())
 
