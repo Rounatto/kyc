@@ -1,3 +1,12 @@
+// ============================================================================
+// 🔑 ACTIVATION DE COMPTE — DERNIÈRE ÉTAPE DE L'INVITATION D'UN AGENT
+// ============================================================================
+// Un COMPANY_ADMIN invite un agent depuis app/api/settings/team, ce qui génère
+// un `invitationToken` unique + une date d'expiration et envoie un email avec
+// un lien contenant ce token (voir sendAgentInvitationEmail). Cette route est
+// appelée quand l'agent clique sur ce lien et choisit son mot de passe — elle
+// ne demande PAS l'email/mot de passe habituel car l'identité est déjà prouvée
+// par la possession du token (envoyé uniquement à l'email invité).
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";

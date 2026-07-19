@@ -1,3 +1,15 @@
+// ============================================================================
+// ✅ INSCRIPTION — ÉTAPE 2/2 : VÉRIFICATION OTP + CRÉATION DU WORKSPACE
+// ============================================================================
+// Fonctionne en tandem avec app/api/register (étape 1) : register génère un
+// code à 6 chiffres et l'envoie par email, SANS créer aucun compte. Ce n'est
+// qu'ICI, une fois le bon code fourni, que l'entreprise (Company) et son
+// administrateur (User, role=COMPANY_ADMIN) sont réellement créés. Cette
+// séparation empêche de créer des comptes avec des emails qu'on ne possède pas.
+//
+// ⚠️ Pas de compteur de tentatives sur `otpRecord.code !== otpCode` : un code à
+// 6 chiffres (1M de combinaisons) est brute-forçable tant qu'il n'a pas expiré
+// (10 min) — voir roadmap Phase B pour le rate limiting à ajouter.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";

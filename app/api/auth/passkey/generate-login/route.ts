@@ -1,11 +1,26 @@
+// ============================================================================
+// 🔐 WEBAUTHN — GÉNÉRATION DU CHALLENGE DE CONNEXION (1/2)
+// ============================================================================
+// Première moitié du flux passkey côté LOGIN (l'autre moitié, l'enregistrement
+// d'une nouvelle clé, se fait dans app/api/settings/security/passkey/*).
+// Principe WebAuthn : le serveur génère un "challenge" aléatoire à usage
+// unique, l'appareil de l'utilisateur (Face ID, empreinte, clé USB...) le
+// signe avec sa clé privée, et NextAuth (voir [...nextauth]/route.ts,
+// scénario 1) vérifie cette signature avec la clé publique enregistrée.
+// Le challenge est stocké en DB (`user.currentChallenge`) pour être comparé
+// au moment de la vérification.
 import { NextResponse } from "next/server";
 import { generateAuthenticationOptions, type AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 
 export async function POST(req: Request) {
     try {
-        const { email } = await req.json(); 
+        const { email } = await req.json();
         if (!email) return NextResponse.json({ error: "Email required" }, { status: 400 });
+
+        // ⚠️ Énumération de comptes : la réponse 404 ci-dessous diffère selon que
+        // l'email existe ou non, ce qui permet à un attaquant de deviner quels
+        // emails sont enregistrés. Voir roadmap Phase B (anti-énumération).
 
         // 1. On cherche l'utilisateur et ses clés
         const user = await prisma.user.findUnique({

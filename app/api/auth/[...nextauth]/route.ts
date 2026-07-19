@@ -1,11 +1,24 @@
+// ============================================================================
+// 🔐 CONFIGURATION NEXTAUTH — POINT D'ENTRÉE UNIQUE DE L'AUTHENTIFICATION
+// ============================================================================
+// Ce fichier définit TOUTES les façons de se connecter à TrustVerify. Le
+// provider "Credentials" gère à lui seul 2 scénarios différents (passkey OU
+// mot de passe+2FA) car NextAuth n'autorise qu'un seul provider Credentials —
+// on distingue les scénarios en inspectant quels champs sont remplis dans
+// `credentials`. Le provider Google gère l'OAuth (scénario 3).
+//
+// Stratégie de session : "jwt" (pas de table Session en DB) — les infos
+// utilisateur (rôle, companyId, plan) sont embarquées dans le token signé,
+// synchronisées à chaque connexion/refresh via les callbacks `jwt` et
+// `session` en bas de ce fichier.
 import NextAuth, { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { verifyAuthenticationResponse } from "@simplewebauthn/server";
-import { verifySync } from "otplib"; 
-import { logSecurityEvent } from "@/lib/logger"; // 💡 IMPORT DU SYSTÈME D'AUDIT
+import { verifySync } from "otplib"; // Vérifie un code TOTP de façon synchrone (pas d'appel réseau)
+import { logSecurityEvent } from "@/lib/logger"; // Piste d'audit : chaque login réussi/échoué est tracé
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -35,7 +48,10 @@ export const authOptions: NextAuthOptions = {
             totpSecret: string | null 
         };
 
-        // 🌟 SCÉNARIO 1 : CONNEXION PAR PASSKEY
+        // 🌟 SCÉNARIO 1 : CONNEXION PAR PASSKEY (WebAuthn)
+        // Le frontend a déjà appelé /api/auth/passkey/generate-login pour obtenir
+        // un "challenge" aléatoire, l'a fait signer par l'appareil (Face ID, empreinte,
+        // clé de sécurité...) et renvoie ici la réponse signée à vérifier.
         if (credentials.passkeyResponse) {
             if (!user.currentChallenge) throw new Error("Challenge expiré ou invalide");
 
@@ -86,15 +102,18 @@ export const authOptions: NextAuthOptions = {
             return null;
         }
 
-        // 🌟 SCÉNARIO 2 : CONNEXION PAR MOT DE PASSE (+ 2FA)
+        // 🌟 SCÉNARIO 2 : CONNEXION PAR MOT DE PASSE (+ 2FA optionnelle)
         if (credentials.password && user.password) {
             const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
-            if (!isPasswordValid) return null; 
+            if (!isPasswordValid) return null;
 
             if (authUser.totpEnabled) {
+                // Le frontend envoie un premier POST sans totpCode ; NextAuth relaie
+                // cette erreur "2FA_REQUIRED" jusqu'au formulaire de login, qui affiche
+                // alors le champ code à 6 chiffres et renvoie une 2e tentative complète.
                 if (!credentials.totpCode) throw new Error("2FA_REQUIRED");
                 if (!authUser.totpSecret) throw new Error("Erreur de configuration 2FA");
-                
+
                 const { valid: isValidTotp } = verifySync({
                   token: credentials.totpCode,
                   secret: authUser.totpSecret,
@@ -146,7 +165,12 @@ export const authOptions: NextAuthOptions = {
       if (account?.provider === "google") {
         if (!user.email) return false;
         const existingUser = await prisma.user.findUnique({ where: { email: user.email } });
-        
+
+        // Première connexion Google jamais vue : on crée automatiquement une
+        // nouvelle entreprise ET son compte admin dans la même transaction —
+        // pas de formulaire "nom d'entreprise" pour l'OAuth, contrairement au
+        // flux email/mot de passe (app/api/register). Le nom est dérivé du
+        // nom Google et renommable ensuite dans les Settings.
         if (!existingUser) {
           await prisma.$transaction(async (tx) => {
             const txWithCompany = tx as any;
@@ -180,6 +204,13 @@ export const authOptions: NextAuthOptions = {
       }
       return true;
     },
+    // Le token JWT est la SEULE source de vérité entre les requêtes (pas de
+    // session en DB) : on doit donc y recopier manuellement tout ce dont le
+    // reste de l'app a besoin (rôle, companyId, plan...). Ce callback tourne
+    // à chaque connexion (`user`/`account` définis) ET peut être forcé à se
+    // rafraîchir manuellement via `trigger === "update"` (ex: après un
+    // changement d'avatar dans les Settings, sans obliger l'utilisateur à se
+    // reconnecter).
     async jwt({ token, user, trigger, session, account }) {
     if (account || user) {
         const dbUser = await prisma.user.findUnique({

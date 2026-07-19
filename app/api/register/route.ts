@@ -1,7 +1,14 @@
+// ============================================================================
+// 📝 INSCRIPTION — ÉTAPE 1/2 : VALIDATION + ENVOI DU CODE OTP
+// ============================================================================
+// Cette route NE CRÉE AUCUN COMPTE. Elle valide juste que l'email et le nom
+// d'entreprise sont disponibles, puis envoie un code à 6 chiffres par email.
+// La création réelle du Workspace + de l'administrateur se fait dans
+// app/api/auth/verify-register (étape 2/2), une fois ce code confirmé.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { z } from "zod";
-import { sendVerificationOtpEmail } from "@/lib/mail"; // 💡 IMPORT DE L'EMAIL OTP
+import { sendVerificationOtpEmail } from "@/lib/mail";
 
 // Schéma Zod strict pour la production
 const registerSchema = z.object({
