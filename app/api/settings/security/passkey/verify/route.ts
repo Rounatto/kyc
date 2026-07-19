@@ -1,8 +1,17 @@
+// ============================================================================
+// 🔐 WEBAUTHN — ENREGISTREMENT D'UNE NOUVELLE PASSKEY, ÉTAPE 2/2
+// ============================================================================
+// Reçoit la réponse signée par l'appareil (Face ID, empreinte, clé USB...) en
+// réaction au challenge généré par ./generate, la fait valider par
+// SimpleWebAuthn contre le challenge stocké (`user.currentChallenge`), puis
+// persiste la clé publique + le compteur anti-rejeu dans le modèle `Passkey`.
+// Ce `counter` est incrémenté à chaque connexion (voir [...nextauth]/route.ts)
+// pour détecter un clonage de clé (une valeur qui ne progresse pas = suspect).
 import { NextResponse } from "next/server";
 import { verifyRegistrationResponse } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LE GARDIEN PHASE 0
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 export async function POST(req: Request) {
     try {

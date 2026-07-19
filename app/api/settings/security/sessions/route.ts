@@ -1,8 +1,18 @@
+// ============================================================================
+// 💻 GESTION DES SESSIONS ACTIVES (onglet "Appareils connectés" des Settings)
+// ============================================================================
+// ⚠️ À ne pas confondre avec la session NextAuth (JWT) qui authentifie chaque
+// requête : `UserSession` est un modèle Prisma à part, purement informatif/
+// UX, qui liste les appareils vus pour cet utilisateur. GET fait doublement
+// office de "lecture" ET d'"enregistrement" (upsert implicite par détection) :
+// à chaque appel, si le user-agent courant n'est pas encore connu, on l'ajoute.
+// DELETE ne fait qu'un soft-delete (`isActive: false`) — la ligne reste en
+// base pour l'historique, elle disparaît juste de la liste affichée.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 
-// 1. Notre fameux détective
+// Détecte un type d'appareil lisible à partir du user-agent brut du navigateur.
 function detectDevice(userAgent: string): string {
     if (userAgent.includes("Windows")) return "Windows PC";
     if (userAgent.includes("iPhone")) return "iOS iPhone";
@@ -82,6 +92,12 @@ export async function DELETE(req: Request) {
             return NextResponse.json({ error: "Missing session ID" }, { status: 400 });
         }
 
+        // 🚨 FAILLE IDOR (nouvelle, non documentée dans la roadmap) : aucune
+        // vérification que `sessionId` appartient bien à `session.user` avant
+        // la mise à jour. N'IMPORTE QUEL utilisateur connecté (n'importe quelle
+        // entreprise) peut désactiver la session de N'IMPORTE QUEL AUTRE
+        // utilisateur en devinant/énumérant un id de UserSession. Il manque un
+        // filtre `where: { id: sessionId, userId: user.id }`.
         await prisma.userSession.update({
             where: { id: sessionId },
             data: { isActive: false }

@@ -1,10 +1,20 @@
+// ============================================================================
+// 🔐 WEBAUTHN — ENREGISTREMENT D'UNE NOUVELLE PASSKEY, ÉTAPE 1/2
+// ============================================================================
+// ⚠️ Ne pas confondre avec app/api/auth/passkey/generate-login (Lot 2) : cette
+// route-ci sert à un utilisateur DÉJÀ CONNECTÉ qui veut AJOUTER une nouvelle
+// clé biométrique depuis ses Settings (`generateRegistrationOptions`), alors
+// que l'autre sert à un visiteur NON connecté qui veut SE CONNECTER avec une
+// clé déjà enregistrée (`generateAuthenticationOptions`). Deux cérémonies
+// WebAuthn différentes, deux jeux d'API SimpleWebAuthn différents.
+// `excludeCredentials` empêche de ré-enregistrer une clé déjà connue du compte.
 import { NextResponse } from "next/server";
 import { generateRegistrationOptions } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"; // 💡 LE GARDIEN PHASE 0
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-const rpName = "TrustVerify KYC B2B"; // 🏢 Touche Pro
+const rpName = "TrustVerify KYC B2B";
 
 export async function GET() {
     try {

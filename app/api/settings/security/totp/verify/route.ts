@@ -1,3 +1,17 @@
+// ============================================================================
+// 📱 2FA TOTP — ÉTAPE 2/2 : VÉRIFICATION + ACTIVATION DÉFINITIVE
+// ============================================================================
+// Reçoit le `secret` généré par ../generate (renvoyé au client, pas encore en
+// DB) + le code à 6 chiffres que l'utilisateur vient de lire dans son app
+// authenticator. Si le code correspond, on considère que l'utilisateur a bien
+// configuré son app correctement, et SEULEMENT MAINTENANT on écrit le secret
+// en base + on active le flag `totpEnabled`.
+//
+// ⚠️ Le secret est écrit en clair (`totpSecret: secret`, voir schema.prisma) —
+// pas de chiffrement au repos pour l'instant (roadmap Phase B).
+// ⚠️ La ligne `console.log` ci-dessous n'est PAS la piste d'audit officielle
+// (celle-ci passe par lib/logger.ts → table AuditLog) : c'est juste un log
+// console, invisible dans l'écran "Audit Trail" de l'app.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";

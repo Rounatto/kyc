@@ -1,7 +1,15 @@
+// ============================================================================
+// 🔑 CHANGEMENT DE MOT DE PASSE (depuis les Settings, utilisateur déjà connecté)
+// ============================================================================
+// Note : `getServerSession()` est appelé ici SANS lui passer `authOptions`,
+// contrairement à la plupart des autres routes de settings/security (qui font
+// `getServerSession(authOptions)`). Ça fonctionne car NextAuth peut retrouver
+// la config automatiquement dans l'App Router, mais c'est une incohérence de
+// style à uniformiser si on refactore ce module plus tard.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
-import bcrypt from "bcryptjs"; 
+import bcrypt from "bcryptjs";
 
 export async function POST(req: Request) {
     try {
@@ -34,6 +42,9 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "User not found" }, { status: 404 });
         }
 
+        // Compte créé via Google OAuth : `password` est null (jamais défini).
+        // Ce garde-fou évite un crash de bcrypt.compare() sur une valeur null
+        // et renvoie un message clair plutôt qu'une 500 opaque.
         if (!user.password) {
             return NextResponse.json({ error: "No password is set for this user" }, { status: 400 });
         }

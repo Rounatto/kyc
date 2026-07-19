@@ -1,3 +1,12 @@
+// ============================================================================
+// 📱 2FA TOTP — ÉTAPE 1/2 : GÉNÉRATION DU SECRET + QR CODE
+// ============================================================================
+// Fonctionne en tandem avec ./verify/route.ts (étape 2/2). Cette route génère
+// un nouveau secret TOTP et son QR code à CHAQUE appel, mais NE L'ENREGISTRE
+// PAS en base — voir le commentaire "ARCHITECTURE STATELESS" plus bas : tant
+// que l'utilisateur n'a pas prouvé (à l'étape 2) qu'il a bien scanné le QR et
+// que son app génère les bons codes, on ne veut pas activer une 2FA qu'il ne
+// pourrait pas honorer (ce qui le verrouillerait hors de son compte).
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
