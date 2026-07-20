@@ -1,3 +1,8 @@
+// Bouton "Sign in" générique — pas branché à une logique propre : c'est un
+// simple `type="submit"` conçu pour être placé DANS un <form> parent qui gère
+// le vrai `onSubmit` (ex: usage prévu sur app/login/page.tsx, qui en réalité
+// n'importe même pas ce composant et redéfinit son propre bouton inline —
+// voir la note dans login/page.tsx, Lot 6, sur l'import LoginBtn inutilisé).
 export default function LoginBtn() {
     return (
         <button 

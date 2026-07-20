@@ -1,5 +1,15 @@
 "use client";
 
+// ============================================================================
+// 📋 TABLE COMPACTE — "RECENT VERIFICATION REQUESTS" (dashboard principal)
+// ============================================================================
+// ⚠️ Duplication étendue avec components/VerificationLogTable.tsx : le menu
+// contextuel (⋮ → Review/Copy ID/Contact/Flag), `handleCopyId`, `handleMailTo`,
+// `handleFlagAudit` et la logique de fermeture au clic extérieur sont
+// quasiment identiques ligne pour ligne dans les deux fichiers — seule
+// différence structurelle : celui-ci n'a pas de pagination (affiche une liste
+// fixe passée en props) alors que VerificationLogTable gère page/limite.
+// Bon candidat à factoriser (composant de menu partagé + table paramétrable).
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { MoreVertical, Eye, Copy, Mail, Flag, Check } from "lucide-react";

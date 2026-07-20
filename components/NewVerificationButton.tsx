@@ -1,5 +1,14 @@
 "use client";
 
+// ============================================================================
+// ➕ BOUTON "NOUVELLE VÉRIFICATION" — 2 VARIANTES RESPONSIVE
+// ============================================================================
+// Un seul composant rend 2 boutons DIFFÉRENTS selon la taille d'écran plutôt
+// que de cacher/afficher le même élément en CSS : un bouton texte classique
+// en desktop (`hidden lg:flex`), un bouton flottant circulaire (FAB) fixé en
+// bas à droite en mobile (`md:hidden`). `mobileOnly` permet aux pages qui ont
+// déjà leur propre bouton desktop ailleurs (ex: dashboard/page.tsx) de ne
+// monter QUE la variante mobile ici, pour éviter un doublon visuel.
 import { Plus } from "lucide-react";
 import Link from "next/link";
 

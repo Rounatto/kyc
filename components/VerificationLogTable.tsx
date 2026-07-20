@@ -1,5 +1,14 @@
 "use client";
 
+// ============================================================================
+// 📋 TABLE PAGINÉE — "VERIFICATION LOG" (annuaire clients complet)
+// ============================================================================
+// Version "complète" de components/VerificationTable.tsx (Lot 9) : mêmes
+// actions de menu contextuel (dupliquées, voir note dans VerificationTable),
+// mais ajoute la pagination (page/limite pilotées par le parent via props,
+// ce composant est "stateless" côté pagination — customers/page.tsx détient
+// `currentPage`/`totalPages` et les redescend ici) et une colonne "AI Risk
+// Level" en plus du score brut.
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { MoreVertical, Eye, Copy, Mail, Flag, ChevronLeft, ChevronRight, Check } from "lucide-react";

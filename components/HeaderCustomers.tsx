@@ -1,13 +1,26 @@
 "use client"
 
+// ============================================================================
+// 🧭 HEADER DE L'ANNUAIRE CLIENTS — VARIANTE AVEC RECHERCHE FONCTIONNELLE
+// ============================================================================
+// ⚠️ Duplication : ce composant est ~80% identique à components/header.tsx
+// (même cloche de notifications, même menu utilisateur, mêmes imports) — mais
+// contrairement à `header.tsx` dont la barre de recherche est décorative
+// (Lot 9), CELLE-CI est réellement branchée : debounce 300ms, appel
+// `/api/customers?search=...`, dropdown de résultats avec surlignage du texte
+// recherché (`highlightText`). Deux fichiers séparés plutôt qu'un seul
+// paramétrable (`<Header searchEnabled />`) — candidat à fusionner.
 import { Search, CircleQuestionMark, Bell, LogOut, User, Loader2, TriangleAlert, CheckCircle2, CreditCard, Info, CheckCheck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useNotifications } from "@/context/NotificationContext"; // 💡 ON IMPORTE LA STATION RADIO
+import { useNotifications } from "@/context/NotificationContext";
 import PlanBadge from "@/components/PlanBadge";
 
+// Entoure d'un <strong> chaque occurrence du terme recherché dans un texte —
+// découpe le texte via une regex construite dynamiquement à partir du terme
+// (échappé pour éviter qu'un caractère spécial ne casse la regex).
 const highlightText = (text: string | null | undefined, highlight: string) => {
     if (!text) return null;
     if (!highlight.trim()) return <span>{text}</span>;

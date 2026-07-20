@@ -1,10 +1,21 @@
 "use client";
 
+// ============================================================================
+// 🧭 HEADER DU DASHBOARD — RECHERCHE, PLAN, NOTIFICATIONS, MENU UTILISATEUR
+// ============================================================================
+// `useNotifications()` vient d'un Context React global (NotificationContext,
+// monté dans dashboard/layout.tsx) — probablement du polling périodique côté
+// contexte, ce composant se contente de LIRE l'état déjà synchronisé
+// (`notifications`, `unreadCount`) sans faire son propre fetch.
+//
+// ⚠️ La barre de recherche ("Search identities or audits...") n'a ni
+// `value` ni `onChange` : c'est un champ purement décoratif, on ne peut
+// littéralement rien taper d'utile dedans, aucune recherche n'est déclenchée.
 import { Search, CircleQuestionMark, Bell, LogOut, User, Loader2, TriangleAlert, CheckCircle2, CreditCard, Info, CheckCheck } from "lucide-react";
 import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
-import { useNotifications } from "@/context/NotificationContext"; // 💡 ON IMPORTE LA STATION RADIO
+import { useNotifications } from "@/context/NotificationContext";
 import PlanBadge from "@/components/PlanBadge";
 
 export default function Header() {
@@ -41,9 +52,10 @@ export default function Header() {
                     <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors" aria-hidden="true">
                         <Search className="w-4 h-4" />
                     </span>
-                    <input 
-                        type="text" 
-                        placeholder="Search identities or audits..." 
+                    {/* ⚠️ Champ non fonctionnel : pas de value/onChange, décoratif pour l'instant */}
+                    <input
+                        type="text"
+                        placeholder="Search identities or audits..."
                         className="w-full bg-transparent border-none rounded-lg py-2.5 pl-8 pr-4 text-sm outline-none text-gray-800 placeholder-gray-400"
                     />
                 </div>
