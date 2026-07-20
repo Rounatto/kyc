@@ -9,6 +9,13 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // ⚠️ DIRECT_URL, pas DATABASE_URL. `DATABASE_URL` pointe vers le pooler
+    // Supabase (pgbouncer, mode transaction) : il convient parfaitement aux
+    // requêtes applicatives, mais les commandes de schéma de Prisma
+    // (`db push`, `migrate`) posent un advisory lock Postgres que le pooler
+    // ne sait pas relayer — la commande reste alors bloquée indéfiniment sans
+    // message d'erreur. `DIRECT_URL` est la connexion directe (port 5432),
+    // seule utilisable pour faire évoluer le schéma.
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

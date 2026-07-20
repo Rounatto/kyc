@@ -30,9 +30,21 @@ model Company {
   plan                 String                @default("trial") // trial, starter, growth, enterprise
   createdAt            DateTime              @default(now())
 
-  currentPeriodEnd     DateTime?             
+  currentPeriodEnd     DateTime?
   cancelAtPeriodEnd    Boolean               @default(false)
-  
+
+  // 💳 LIEN VERS STRIPE
+  // Sans ces deux identifiants, l'annulation ne pouvait exister QUE dans notre
+  // base : on posait `cancelAtPeriodEnd = true` sans jamais prévenir Stripe,
+  // qui continuait donc à facturer le client — et surtout, il devenait
+  // impossible de "reprendre" l'abonnement puisqu'on n'avait aucune référence
+  // à l'objet Subscription à réactiver. Ces champs sont nullables car les
+  // entreprises créées avant cette évolution (ou passées en plan payant
+  // manuellement) n'en ont pas : le code doit toujours prévoir un repli
+  // "DB seule" quand ils sont absents.
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+
   users                User[]
   verificationRequests VerificationRequest[]
   auditLogs            AuditLog[]            

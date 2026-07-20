@@ -10,20 +10,23 @@
 // pour l'annulation. `searchParams.get("payment")` détecte le retour de Stripe
 // après paiement (?payment=success|cancelled, voir success_url/cancel_url
 // dans billing/checkout/route.ts) pour afficher un toast puis nettoyer l'URL.
-import { useState, useEffect } from "react";
-import { Zap, CheckCircle2, AlertTriangle, XCircle, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Zap, CheckCircle2, AlertTriangle, XCircle, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
+import { notifyBillingChanged } from "@/lib/billing-events";
 
 export default function BillingSetting() {
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null); // 💡 Permet de savoir QUEL bouton tourne
     const [billingData, setBillingData] = useState<any>(null);
-    
+
     const searchParams = useSearchParams();
     const router = useRouter();
+    const { update: updateSession } = useSession();
 
-    const fetchQuota = async () => {
+    const fetchQuota = useCallback(async () => {
         try {
             const res = await fetch("/api/billing/quota");
             if (res.ok) {
@@ -35,55 +38,84 @@ export default function BillingSetting() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     // 💡 DÉTECTION DES RETOURS STRIPE
     useEffect(() => {
         const paymentStatus = searchParams.get("payment");
         if (paymentStatus === "success") {
             toast.success("Payment successful! Your subscription is now active.");
+            // Le plan vient de changer côté serveur : on prévient le reste de
+            // l'app (badge du header) et on rafraîchit le JWT, qui porte encore
+            // l'ancien `companyPlan`.
+            notifyBillingChanged();
+            updateSession?.();
             // On nettoie l'URL pour que le toast ne réapparaisse pas au rafraîchissement
             router.replace("/dashboard/settings");
         } else if (paymentStatus === "cancelled") {
             toast.info("Payment process was cancelled.");
             router.replace("/dashboard/settings");
         }
-        
+
         fetchQuota();
-    }, [searchParams, router]);
+    }, [searchParams, router, fetchQuota, updateSession]);
 
-    const handleSubscriptionAction = async (action: "UPGRADE" | "CANCEL", plan?: string) => {
-        setActionLoading(action === "UPGRADE" ? plan || "upgrade" : "cancel");
+    // Annulation ET reprise passent par la même route : seule l'action change.
+    const handleSubscriptionChange = async (action: "CANCEL" | "RESUME") => {
+        setActionLoading(action === "CANCEL" ? "cancel" : "resume");
         try {
-            if (action === "UPGRADE") {
-                const res = await fetch("/api/billing/checkout", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ plan })
-                });
+            const res = await fetch("/api/billing/subscription", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action })
+            });
 
-                const data = await res.json();
-                if (res.ok && data.url) {
-                    window.location.href = data.url; 
-                } else {
-                    toast.error(data.error || "Failed to initialize payment gateway.");
-                    setActionLoading(null);
-                }
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok) {
+                toast.success(
+                    action === "CANCEL"
+                        ? "Subscription cancelled. You will retain access until the end of your billing cycle."
+                        : "Subscription resumed. Your plan will renew automatically."
+                );
+                await fetchQuota();
+                notifyBillingChanged();
             } else {
-                const res = await fetch("/api/billing/subscription", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action })
-                });
-                
-                if (res.ok) {
-                    toast.success("Subscription cancelled. You will retain access until the end of your billing cycle.");
-                    await fetchQuota(); 
-                } else {
-                    toast.error("An error occurred processing your request.");
-                }
-                setActionLoading(null);
+                toast.error(data.error || "An error occurred processing your request.");
             }
+        } catch (error) {
+            toast.error("Network error.");
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const handleUpgrade = async (plan: string) => {
+        setActionLoading(plan);
+        try {
+            const res = await fetch("/api/billing/checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ plan })
+            });
+
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok && data.url) {
+                window.location.href = data.url;
+                return; // on quitte la page : inutile de rendre la main au bouton
+            }
+
+            // 409 + shouldResume : l'abonnement existe déjà et n'est "que"
+            // programmé en annulation. On reprend au lieu de faire repayer.
+            if (res.status === 409 && data.shouldResume) {
+                setActionLoading(null);
+                await handleSubscriptionChange("RESUME");
+                return;
+            }
+
+            toast.error(data.error || "Failed to initialize payment gateway.");
+            setActionLoading(null);
         } catch (error) {
             toast.error("Network error.");
             setActionLoading(null);
@@ -94,6 +126,46 @@ export default function BillingSetting() {
 
     const usagePercent = Math.min(100, Math.round((billingData.current / billingData.limit) * 100));
     const isPremium = billingData.plan !== "trial";
+    const isCanceling = Boolean(billingData.cancelAtPeriodEnd);
+
+    // Libellé et action du bouton d'un plan donné. Toute la correction du bug
+    // tient ici : quand l'abonnement est programmé en annulation, le bouton du
+    // plan courant ne doit plus être un "Current Plan" grisé — c'est ce qui
+    // enfermait le client, sans aucun chemin de retour vers un abonnement actif.
+    const planButtonState = (plan: string) => {
+        const isCurrent = billingData.plan === plan;
+
+        if (isCurrent && isCanceling) {
+            return {
+                label: actionLoading === "resume" ? "Reactivating..." : "Reactivate Plan",
+                disabled: !!actionLoading,
+                busy: actionLoading === "resume",
+                onClick: () => handleSubscriptionChange("RESUME"),
+                highlight: true,
+            };
+        }
+
+        if (isCurrent) {
+            return {
+                label: "Current Plan",
+                disabled: true,
+                busy: false,
+                onClick: () => {},
+                highlight: false,
+            };
+        }
+
+        return {
+            label: actionLoading === plan ? "Redirecting..." : `Upgrade to ${plan.charAt(0).toUpperCase() + plan.slice(1)}`,
+            disabled: !!actionLoading,
+            busy: actionLoading === plan,
+            onClick: () => handleUpgrade(plan),
+            highlight: false,
+        };
+    };
+
+    const starterButton = planButtonState("starter");
+    const growthButton = planButtonState("growth");
 
     return (
         <div className="w-full max-w-5xl mx-auto">
@@ -102,14 +174,25 @@ export default function BillingSetting() {
                 <p className="text-sm text-gray-500 mt-1">Manage your subscription, check your quota, and update payment methods.</p>
             </div>
 
-            {/* ALERTE D'ANNULATION */}
-            {billingData.cancelAtPeriodEnd && (
-                <div className="mb-6 p-4 bg-orange-50 border border-orange-200 rounded-xl flex items-start gap-3">
-                    <AlertTriangle className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
-                    <div>
-                        <h4 className="text-sm font-bold text-orange-800">Subscription Canceled</h4>
-                        <p className="text-sm text-orange-700 mt-1">You will retain access to your Premium quota until <strong>{new Date(billingData.resetDate).toLocaleDateString()}</strong>. After this date, your workspace will be downgraded to the Free Trial plan.</p>
+            {/* ALERTE D'ANNULATION — avec la sortie de secours */}
+            {isCanceling && (
+                <div className="mb-6 p-4 bg-orange-50 border border-orange-200 rounded-xl flex flex-col md:flex-row md:items-center gap-4">
+                    <div className="flex items-start gap-3 flex-1">
+                        <AlertTriangle className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
+                        <div>
+                            <h4 className="text-sm font-bold text-orange-800">Subscription Canceled</h4>
+                            <p className="text-sm text-orange-700 mt-1">You will retain access to your Premium quota until <strong>{new Date(billingData.resetDate).toLocaleDateString()}</strong>. After this date, your workspace will be downgraded to the Free Trial plan.</p>
+                            <p className="text-sm text-orange-700 mt-1">Changed your mind? Resume now and your plan will keep renewing normally — you will not be charged again before {new Date(billingData.resetDate).toLocaleDateString()}.</p>
+                        </div>
                     </div>
+                    <button
+                        onClick={() => handleSubscriptionChange("RESUME")}
+                        disabled={!!actionLoading}
+                        className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-bold text-sm rounded-lg transition-colors shrink-0 flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                        {actionLoading === "resume" ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                        {actionLoading === "resume" ? "Resuming..." : "Resume Subscription"}
+                    </button>
                 </div>
             )}
 
@@ -117,9 +200,19 @@ export default function BillingSetting() {
             <div className="bg-white border border-gray-200 shadow-sm rounded-xl p-6 mb-8">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="text-md font-bold text-gray-900 flex items-center gap-2"><Zap className="w-4 h-4 text-blue-600" /> Current Usage</h3>
-                    <span className="px-3 py-1 bg-gray-100 text-gray-700 text-[10px] font-bold rounded-full uppercase tracking-wider border border-gray-200">
-                        {billingData.plan} PLAN
-                    </span>
+                    <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-gray-100 text-gray-700 text-[10px] font-bold rounded-full uppercase tracking-wider border border-gray-200">
+                            {billingData.plan} PLAN
+                        </span>
+                        {/* Un plan payant annulé reste payant jusqu'à la fin de
+                            période : on affiche donc bien deux informations
+                            distinctes (le plan, et son état de renouvellement). */}
+                        {isPremium && (
+                            <span className={`px-3 py-1 text-[10px] font-bold rounded-full uppercase tracking-wider border ${isCanceling ? "bg-orange-50 text-orange-700 border-orange-200" : "bg-green-50 text-green-700 border-green-200"}`}>
+                                {isCanceling ? "Canceling" : "Active"}
+                            </span>
+                        )}
+                    </div>
                 </div>
 
                 <div className="mb-2 flex justify-between text-sm">
@@ -151,13 +244,13 @@ export default function BillingSetting() {
                     <ul className="flex flex-col gap-3 mb-6 flex-1">
                         <li className="flex items-center gap-2 text-xs font-medium text-gray-700"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> 50 Verifications</li>
                     </ul>
-                    <button 
-                        onClick={() => handleSubscriptionAction("UPGRADE", "starter")}
-                        disabled={!!actionLoading || billingData.plan === "starter"}
-                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 flex items-center justify-center gap-2 ${billingData.plan === 'starter' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white hover:bg-gray-50 text-gray-900 border-gray-300'}`}
+                    <button
+                        onClick={starterButton.onClick}
+                        disabled={starterButton.disabled}
+                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 flex items-center justify-center gap-2 ${starterButton.highlight ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-600' : billingData.plan === 'starter' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white hover:bg-gray-50 text-gray-900 border-gray-300'}`}
                     >
-                        {actionLoading === "starter" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                        {actionLoading === "starter" ? "Redirecting..." : billingData.plan === "starter" ? "Current Plan" : "Upgrade to Starter"}
+                        {starterButton.busy ? <Loader2 className="w-4 h-4 animate-spin" /> : starterButton.highlight ? <RotateCcw className="w-4 h-4" /> : null}
+                        {starterButton.label}
                     </button>
                 </div>
 
@@ -173,13 +266,13 @@ export default function BillingSetting() {
                     <ul className="flex flex-col gap-3 mb-6 flex-1">
                         <li className="flex items-center gap-2 text-xs font-medium text-gray-700"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> 500 Verifications</li>
                     </ul>
-                    <button 
-                        onClick={() => handleSubscriptionAction("UPGRADE", "growth")}
-                        disabled={!!actionLoading || billingData.plan === "growth"}
-                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 flex items-center justify-center gap-2 ${billingData.plan === 'growth' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-blue-700 hover:bg-blue-800 text-white border-blue-700'}`}
+                    <button
+                        onClick={growthButton.onClick}
+                        disabled={growthButton.disabled}
+                        className={`w-full py-2.5 rounded-lg font-bold text-sm transition-colors border disabled:opacity-50 flex items-center justify-center gap-2 ${growthButton.highlight ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-600' : billingData.plan === 'growth' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-blue-700 hover:bg-blue-800 text-white border-blue-700'}`}
                     >
-                        {actionLoading === "growth" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                        {actionLoading === "growth" ? "Redirecting..." : billingData.plan === "growth" ? "Current Plan" : "Upgrade to Growth"}
+                        {growthButton.busy ? <Loader2 className="w-4 h-4 animate-spin" /> : growthButton.highlight ? <RotateCcw className="w-4 h-4" /> : null}
+                        {growthButton.label}
                     </button>
                 </div>
 
@@ -200,8 +293,9 @@ export default function BillingSetting() {
                 </div>
             </div>
 
-            {/* DANGER ZONE : CANCEL */}
-            {isPremium && !billingData.cancelAtPeriodEnd && (
+            {/* DANGER ZONE : CANCEL — masquée si une annulation est déjà
+                programmée, le bandeau orange du haut prend alors le relais. */}
+            {isPremium && !isCanceling && (
                 <div className="mt-10 pt-6 border-t border-gray-200">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center p-5 bg-red-50 border border-red-100 rounded-xl gap-4">
                         <div>
@@ -209,7 +303,7 @@ export default function BillingSetting() {
                             <p className="text-xs text-red-700 mt-1 max-w-xl">You will lose access to premium features at the end of your billing cycle.</p>
                         </div>
                         <button 
-                            onClick={() => handleSubscriptionAction("CANCEL")}
+                            onClick={() => handleSubscriptionChange("CANCEL")}
                             disabled={!!actionLoading}
                             className="px-4 py-2 bg-white border border-red-200 text-red-600 font-bold text-sm rounded-lg hover:bg-red-50 transition-colors shrink-0 flex items-center gap-2 disabled:opacity-50"
                         >
