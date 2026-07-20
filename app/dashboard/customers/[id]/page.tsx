@@ -1,15 +1,38 @@
 "use client";
 
+// ============================================================================
+// 🔍 ÉCRAN DE DÉTAIL D'UN DOSSIER KYC — "VERIFICATION STUDIO" DE L'AGENT
+// ============================================================================
+// Vue complète d'un dossier (documents, métadonnées, score IA, audit trail)
+// + les 2 actions qui appellent PATCH /api/customers/[id] (Lot 4) : approuver
+// (`handleDecision("verified")`) ou rejeter avec un motif (modale dédiée,
+// motifs prédéfinis + option "Custom Reason"). `params` est une Promise (pas
+// un objet direct) car ce projet utilise le nouveau modèle asynchrone des
+// route params de Next.js — d'où le hook `use(params)` pour la déballer.
+//
+// ⚠️ Le "Verification Studio" (modale plein écran de comparaison zoomable)
+// étiquette la photo du selfie "Live Selfie" — mais comme documenté dans
+// new-verification/page.tsx (Lot 7), ce n'est PAS une capture live, c'est un
+// fichier uploadé comme un autre. Ce libellé renforce une fausse impression
+// de preuve de vie pour l'agent qui prend la décision d'approuver/rejeter.
+//
+// Note mineure : `handleDecision` envoie `agentId: session?.user?.id` dans le
+// body PATCH, mais le serveur (customers/[id]/route.ts) ignore ce champ et
+// utilise `serverAgentId` dérivé de la session — bon réflexe côté serveur
+// (jamais confiance au body pour l'identité), donc cette valeur envoyée ici
+// est simplement inutile, pas un risque de sécurité.
 import { useState, useEffect, use } from "react";
-import { useSession } from "next-auth/react"; 
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import Image from "next/image"; 
+import Image from "next/image";
 import { ArrowLeft, Loader2, Check, X, FileText, ShieldAlert, User, Clock, History, Maximize2, ZoomIn, ZoomOut, RotateCcw, AlertCircle, ShieldCheck, Mail, Phone, Calendar, Flag, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
 
-// 💡 Raisons de refus professionnelles
+// Motifs de rejet standardisés, réutilisables — évite que chaque agent
+// invente sa propre formulation (cohérence des emails envoyés au client,
+// voir sendKYCEmail dans lib/mail.ts).
 const PREDEFINED_REASONS = [
     "The provided ID document is blurry, pixelated or unreadable.",
     "The edges of the document are cropped or cut off.",
@@ -429,6 +452,7 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
 
                         <div className="flex-1 bg-gray-900 rounded-2xl border border-white/10 flex flex-col relative overflow-hidden">
                             <div className="absolute top-4 left-4 z-10 bg-black/70 backdrop-blur-md px-3 py-2 rounded-xl border border-white/10 flex items-center gap-4 shadow-xl">
+                                {/* ⚠️ Libellé trompeur : c'est un fichier uploadé, pas une capture live — voir note en tête de fichier */}
                                 <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Live Selfie</span>
                                 <div className="w-px h-4 bg-white/20"></div>
                                 <button onClick={() => setSelfieZoom(z => Math.max(0.5, z - 0.5))} className="text-gray-400 hover:text-white cursor-pointer"><ZoomOut className="w-4 h-4"/></button>

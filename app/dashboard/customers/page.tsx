@@ -1,5 +1,27 @@
 "use client"
 
+// ============================================================================
+// 📋 ANNUAIRE DES CLIENTS KYC — LISTE FILTRÉE/PAGINÉE + STATS + EXPORT CSV
+// ============================================================================
+// Trois `useEffect` indépendants, chacun avec sa propre responsabilité :
+//   1. `fetchGlobalStats` : KPIs + graphique 7 jours (une seule fois, fenêtre
+//      fixe "30d" — indépendante des filtres appliqués à la table plus bas).
+//   2. `fetchCustomers` : la table paginée elle-même, redéclenchée à chaque
+//      changement de page/limite/filtre (`activeFilters`).
+//   3. `fetchLiveCriticalRisks` : mini-liste des 3 dossiers les plus à risque
+//      (une seule fois au montage, indépendante des filtres aussi).
+// Les filtres suivent un pattern "brouillon / appliqué" : `draftFilters` se
+// modifie librement dans le panneau, `activeFilters` (qui déclenche vraiment
+// le fetch) n'est mis à jour qu'au clic sur "Apply Filters" — évite de
+// spammer l'API à chaque clic dans le panneau de filtres.
+// `initialRisk`/`initialStatus` lisent l'URL (`?risk=high`) pour permettre un
+// lien direct filtré depuis le dashboard (ex: carte "High Risk Alerts") — ce
+// qui impose d'envelopper ce composant dans un `<Suspense>` tout en bas
+// (`useSearchParams` l'exige en Next.js App Router, comme pour setup-account).
+//
+// Export CSV 100% côté client (refait un fetch avec limit=1000, transforme en
+// texte, télécharge) — même logique que le PDF de dashboard/reports, sans
+// endpoint serveur dédié à l'export.
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import VerificationLogTable from "@/components/VerificationLogTable";
@@ -11,7 +33,7 @@ import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 function CustomerPageContent() {
     const searchParams = useSearchParams();
-    
+
     const initialRisk = searchParams.get("risk") || "all";
     const initialStatus = searchParams.get("status") || "all";
 
@@ -217,6 +239,9 @@ function CustomerPageContent() {
     const handlePrevPage = () => { if (currentPage > 1) { setCurrentPage((prev) => prev - 1); } };
     const handleLimitChange = (newLimit: number) => { setLimitPerPage(newLimit); setCurrentPage(1); }
 
+    // ⚠️ Duplication : ce composant est identique à celui défini dans
+    // dashboard/page.tsx (Lot 6) — candidat naturel à extraire en composant
+    // partagé (components/) plutôt que copié-collé dans chaque page.
     const TrendIndicator = ({ value = 0, invertColors = false, neutral = false }: { value?: number, invertColors?: boolean, neutral?: boolean }) => {
         const safeValue = Number(value) || 0;
         const isPositive = safeValue > 0;

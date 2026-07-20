@@ -1,9 +1,36 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react"; 
+// ============================================================================
+// 🆕 FORMULAIRE DE NOUVELLE VÉRIFICATION KYC — LE CŒUR DU PRODUIT
+// ============================================================================
+// Flux complet : formulaire d'identité → upload pièce d'identité + selfie
+// (Uploadthing) → comparaison biométrique locale (face-api.js, dans le
+// navigateur) → POST /api/customers qui relance TOUT le pipeline serveur
+// (OCR, AML, moteur de règles — voir Lot 4) avec le score biométrique déjà
+// calculé ici comme simple donnée d'entrée.
+//
+// 🚨 CONFIRMATION DE LA FAILLE LIVENESS (déjà documentée côté serveur au Lot 4) :
+// aucune trace de `getUserMedia`, de `<video>` ou de capture caméra en direct
+// dans tout ce fichier (vérifié par recherche). Le "selfie" est un `<input
+// type="file">` classique (`selfieInputRef`/`handleFileChange`) — EXACTEMENT
+// le même mécanisme que l'upload de la pièce d'identité. Concrètement :
+// n'importe qui peut uploader une photo trouvée en ligne de la personne à la
+// place d'un vrai selfie, et `compareFaces` (juste en dessous) comparera
+// gentiment deux fichiers statiques sans jamais savoir si un humain était
+// devant un appareil photo. Il n'y a ni challenge-response (tourner la tête,
+// cligner des yeux), ni détection d'écran/photo-d'une-photo (anti-spoofing).
+// C'est le plus gros écart avec un vrai acteur KYC (Sumsub, Onfido, Veriff).
+//
+// Autre détail : le sélecteur "Procedure Type" propose "Individual KYC
+// (Enhanced - Biometrics)" comme option distincte de "Standard", mais AUCUNE
+// branche du code ne change de comportement selon cette valeur — la
+// comparaison faciale (`compareFaces`) s'exécute de toute façon dans tous les
+// cas où un selfie est fourni. Le champ est cosmétique, envoyé tel quel au
+// serveur (`type`) sans influencer la logique de vérification.
+import { useState, useRef, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X, Lock, Zap } from "lucide-react"; 
+import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X, Lock, Zap } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
@@ -11,7 +38,6 @@ import { getCountries, getCountryCallingCode } from 'react-phone-number-input/in
 import en from 'react-phone-number-input/locale/en';
 import { useUploadThing } from "@/utils/uploadthing";
 
-// 💡 IMPORTATION DE L'INTELLIGENCE ARTIFICIELLE
 import * as faceapi from 'face-api.js';
 
 export default function NewVerificationPage() {
@@ -48,7 +74,10 @@ export default function NewVerificationPage() {
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
     const { startUpload } = useUploadThing("kycDocumentUploader");
 
-    // 💡 VERIFICATION DU QUOTA ET CHARGEMENT DE L'IA
+    // Au montage : vérifie d'abord le quota (paywall) — si l'entreprise a
+    // atteint sa limite, on affiche le mur de paiement SANS charger les
+    // modèles d'IA (inutile de télécharger plusieurs Mo de réseaux de
+    // neurones si l'utilisateur ne pourra de toute façon rien soumettre).
     useEffect(() => {
         const initializePage = async () => {
             try {
@@ -66,7 +95,11 @@ export default function NewVerificationPage() {
                 
                 setIsCheckingQuota(false);
 
-                // 2. Chargement de l'IA (Seulement si le quota le permet)
+                // 2. Chargement de l'IA (Seulement si le quota le permet) : 3 réseaux
+                // de neurones pré-entraînés servis en fichiers statiques depuis
+                // /public/models — détection de visage (SSD MobileNet), 68 points
+                // de repère du visage (landmarks), et l'encodeur qui transforme un
+                // visage en vecteur numérique (descriptor) comparable mathématiquement.
                 await Promise.all([
                     faceapi.nets.ssdMobilenetv1.loadFromUri('/models'),
                     faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
@@ -81,6 +114,17 @@ export default function NewVerificationPage() {
         initializePage();
     }, []);
 
+    // Compare le visage détecté sur la pièce d'identité et celui du "selfie"
+    // (rappel : n'importe quelle image uploadée, pas forcément une vraie
+    // capture live — voir la note en tête de fichier). Les deux images sont
+    // chargées comme de simples <img> DOM (pas de flux vidéo), passées au
+    // détecteur, puis chaque visage est réduit à un "descriptor" (vecteur de
+    // 128 nombres qui encode les traits du visage). La distance euclidienne
+    // entre les deux vecteurs mesure la dissemblance ; elle est ensuite
+    // transformée en un score de similarité 0-100% via une formule linéaire
+    // calibrée empiriquement (distance de 1.2 ≈ 0% de similarité).
+    // Retourne `null` si un visage n'est détecté sur aucune des deux images
+    // (traité côté serveur comme "vérification biométrique ignorée").
     const compareFaces = async (idUrl: string, selfieUrl: string): Promise<number | null> => {
         try {
             const idImg = new Image(); idImg.src = idUrl; idImg.crossOrigin = "anonymous";
@@ -99,8 +143,8 @@ export default function NewVerificationPage() {
             if (!idFace || !selfieFace) return null;
 
             const distance = faceapi.euclideanDistance(idFace.descriptor, selfieFace.descriptor);
-            let similarity = Math.max(0, Math.min(100, (1 - (distance / 1.2)) * 100)); 
-            
+            let similarity = Math.max(0, Math.min(100, (1 - (distance / 1.2)) * 100));
+
             return similarity;
         } catch (err) {
             console.error("❌ Erreur critique dans le moteur biométrique :", err);
@@ -108,6 +152,13 @@ export default function NewVerificationPage() {
         }
     };
 
+    // Validation client seulement — un attaquant appelant /api/customers
+    // directement (sans passer par ce formulaire) contournerait tout ceci,
+    // mais le serveur revalide indépendamment via Zod (voir customers/route.ts,
+    // Lot 4), donc cette couche n'est là que pour le confort/feedback utilisateur.
+    // Les règles de format (CIN/passeport/téléphone) sont spécifiques par pays
+    // (ex: CIN tunisienne = exactement 8 chiffres) avec un repli générique
+    // pour les nationalités non explicitement gérées.
     const validateForm = () => {
         const errors: { [key: string]: string } = {};
         
@@ -160,6 +211,11 @@ export default function NewVerificationPage() {
             setGlobalError("Please upload an image file (PNG, JPG).");
             return;
         }
+        // ⚠️ Incohérence : validé ici à 5 Mo côté client, mais Uploadthing est
+        // configuré à 4 Mo max côté serveur (voir api/uploadthing/core.ts,
+        // `maxFileSize: "4MB"`). Un fichier entre 4 et 5 Mo passe cette
+        // vérification mais sera rejeté par `startUpload` plus bas, avec un
+        // message d'erreur moins clair ("Document upload failed").
         if (file.size > 5 * 1024 * 1024) {
             setGlobalError("File size must be under 5MB.");
             return;
@@ -227,6 +283,13 @@ export default function NewVerificationPage() {
                     throw new Error("Document upload failed. Please try again.");
                 }
 
+                // Le score biométrique est calculé ICI, entièrement dans le
+                // navigateur, puis envoyé au serveur dans le body JSON juste en
+                // dessous. Le serveur (customers/route.ts) fait confiance à ce
+                // chiffre tel quel — c'est le point d'origine exact de la faille
+                // "biometricScore contournable" documentée au Lot 4 : rien
+                // n'empêche d'intercepter cette requête et de remplacer la
+                // valeur calculée par 99.9 avant l'envoi.
                 setLoadingText("Executing Deep Learning Biometrics...");
                 let biometricScore: number | null = null;
                 if (idCardPreview && selfiePreview) {
