@@ -1,12 +1,30 @@
 "use client"
 
+// ============================================================================
+// 🏠 DASHBOARD PRINCIPAL — KPIs + GRAPHIQUE 7 JOURS + DERNIERS DOSSIERS
+// ============================================================================
+// Combine 2 appels API en parallèle au montage : /api/dashboard/stats (KPIs,
+// tendances, graphique) et /api/customers (les 10 derniers dossiers, dont on
+// affiche 5 en table + jusqu'à 3 en "profils à haut risque"). Le time-range
+// choisi dans le <select> ne recharge QUE les stats, pas la table du bas.
+//
+// ⚠️ DEUX INCOHÉRENCES FRONTEND ⟷ BACKEND TROUVÉES ICI :
+//   1. Le <select> propose "1y" (Last Year), mais app/api/dashboard/stats
+//      NE RECONNAÎT PAS cette valeur (seulement 7d/30d/90d/all) — elle tombe
+//      silencieusement dans le cas par défaut (30 jours). Choisir "Last Year"
+//      affiche donc en réalité les 30 derniers jours, sans aucune erreur visible.
+//   2. `trends.pendingDelta` est lu ici avec un fallback à 0, mais l'API
+//      dashboard/stats ne renvoie JAMAIS ce champ (seulement totalDelta,
+//      verifiedDelta, highRiskDelta) — la pastille de tendance sur la carte
+//      "Pending Review" affiche donc toujours "0.0%" (icône neutre), jamais
+//      une vraie évolution.
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import VerificationTable from "@/components/VerificationTable";
 import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import Header from "@/components/header";
-import NewVerificationButton from "@/components/NewVerificationButton"; 
+import NewVerificationButton from "@/components/NewVerificationButton";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function DashboardPage() {
@@ -91,6 +109,10 @@ export default function DashboardPage() {
         fetchDashboardData();
     }, [timeRange]);
 
+    // Génère un CSV/texte 100% côté client à partir des données déjà chargées
+    // en state (aucun appel serveur dédié) et déclenche son téléchargement via
+    // un lien <a> temporaire. Le préfixe "﻿" (BOM) force Excel à détecter
+    // l'UTF-8 correctement plutôt que d'afficher les accents corrompus.
     const handleExportDashboardReport = () => {
         const timestamp = new Date().toLocaleString();
         
@@ -139,7 +161,11 @@ export default function DashboardPage() {
         document.body.removeChild(link);
     };
 
-    // 💡 GARDE-FOU : On s'assure que "value" est un nombre valide avant de lancer toFixed()
+    // Petite pastille +/-X% à côté de chaque KPI. `invertColors` sert pour les
+    // métriques où une hausse est MAUVAISE (ex: Risk Alerts en hausse = rouge,
+    // pas vert) — sans ce flag, +12% serait affiché en vert par défaut.
+    // GARDE-FOU : "value" est recasté en Number avant toFixed() car il peut
+    // arriver `undefined`/`NaN` selon la réponse API.
     const TrendIndicator = ({ value = 0, invertColors = false, neutral = false }: { value?: number, invertColors?: boolean, neutral?: boolean }) => {
         const safeValue = Number(value) || 0; 
         const isPositive = safeValue > 0;
@@ -184,6 +210,7 @@ export default function DashboardPage() {
                             >
                                 <option value="30d">Last 30 Days</option>
                                 <option value="90d">Last Quarter</option>
+                                {/* ⚠️ "1y" n'est pas géré par /api/dashboard/stats, voir note en tête de fichier */}
                                 <option value="1y">Last Year</option>
                             </select>
                             <Calendar className="w-4 h-4 text-gray-500 absolute left-4 top-4 pointer-events-none" />

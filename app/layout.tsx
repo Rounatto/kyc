@@ -1,8 +1,16 @@
+// ============================================================================
+// 🌳 ROOT LAYOUT — ENVELOPPE GLOBALE DE TOUTE L'APPLICATION
+// ============================================================================
+// S'applique à CHAQUE page (login, register, dashboard...) : police, session
+// NextAuth disponible partout via NextAuthProvider (voir providers.tsx), et
+// le composant de toasts globaux (Sonner) monté une seule fois ici pour que
+// n'importe quel composant enfant puisse déclencher `toast.success(...)`
+// sans avoir à remonter son propre `<Toaster />`.
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { NextAuthProvider } from "./providers";
-import { Toaster } from "sonner"; // 💡 IMPORT DE SONNER
+import { Toaster } from "sonner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

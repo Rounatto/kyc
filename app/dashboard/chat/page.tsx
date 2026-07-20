@@ -1,5 +1,13 @@
 "use client";
 
+// ============================================================================
+// 💬 INTERFACE DU CHAT IA — CLIENT DE app/api/chat
+// ============================================================================
+// Historique de conversation géré uniquement en state React (`messages`) —
+// rien n'est persisté en base, un refresh de page efface tout l'échange.
+// ⚠️ Stylé en inline styles (`style={{...}}`) plutôt qu'en classes Tailwind
+// comme le reste de l'app — cohérence visuelle à revoir. Rappel : le endpoint
+// appelé ici (/api/chat) n'a aucune authentification (voir Lot 5).
 import { useState } from "react";
 
 export default function ChatPage() {

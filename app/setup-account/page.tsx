@@ -1,5 +1,17 @@
 "use client";
 
+// ============================================================================
+// 🔑 ACTIVATION DE COMPTE — FRONTEND (appelle POST /api/auth/setup)
+// ============================================================================
+// Page ouverte via le lien reçu par email d'invitation (voir
+// sendAgentInvitationEmail + settings/team/route.ts). Le token est lu depuis
+// l'URL (`?token=...`) via `useSearchParams`, qui EXIGE d'être encapsulé dans
+// un `<Suspense>` en Next.js App Router (sinon erreur de build/hydratation) —
+// d'où la séparation entre `SetupAccountPage` (la coquille visuelle) et
+// `SetupAccountForm` (la vraie logique, suspendue).
+// La règle de robustesse du mot de passe (12+ caractères, 1 symbole spécial)
+// est dupliquée ici pour un feedback instantané, ET revalidée côté serveur
+// dans /api/auth/setup (ne jamais faire confiance à la seule validation client).
 import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Lock, Loader2, CheckCircle2, ShieldAlert } from "lucide-react";

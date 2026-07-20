@@ -1,12 +1,28 @@
 "use client";
 
+// ============================================================================
+// 🔐 PAGE DE CONNEXION — 3 MÉTHODES (mot de passe+2FA / Google / Passkey)
+// ============================================================================
+// Le formulaire mot de passe est une machine à 2 états pilotée par `is2faStep` :
+//   1. L'utilisateur entre email+mot de passe → `signIn("credentials", ...)`.
+//   2. Si le compte a la 2FA active, NextAuth renvoie l'erreur spéciale
+//      "2FA_REQUIRED" (voir [...nextauth]/route.ts) → on bascule l'UI vers le
+//      champ code à 6 chiffres SANS jamais recharger la page ni perdre l'état.
+// Le bouton Passkey utilise `startAuthentication` (SimpleWebAuthn browser) qui
+// déclenche la boîte de dialogue native Face ID/empreinte/clé de sécurité.
+//
+// ⚠️ Le lien "Forgot password?" pointe vers /forgot-password, qui N'EXISTE
+// PAS dans ce projet (aucune page, aucune route API de reset) — fonctionnalité
+// manquante, pas juste un lien mort à corriger.
+// ⚠️ L'icône d'aide (point d'interrogation, en haut à droite) a un curseur
+// "pointer" mais aucun onClick — élément visuellement cliquable qui ne fait rien.
 import { useState } from "react";
 import Link from "next/link";
 import { Eye, Mail, Lock, EyeOff, Fingerprint, CircleQuestionMark, Loader2, ArrowLeft, ShieldAlert } from "lucide-react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import LoginBtn from "@/components/login-btn";
-import { startAuthentication } from "@simplewebauthn/browser"; 
+import LoginBtn from "@/components/login-btn"; // ⚠️ Importé mais jamais utilisé dans ce fichier (le bouton Google est réécrit inline plus bas)
+import { startAuthentication } from "@simplewebauthn/browser";
 
 export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
@@ -95,6 +111,7 @@ export default function Login() {
         <div className="flex min-h-screen w-full flex-col justify-between items-center py-3 bg-gray-100">
             <div className="flex flex-row w-full justify-between items-center px-8">
                 <h1 className="text-xl font-bold text-blue-700">TrustVerify</h1>
+                {/* Icône d'aide statique : curseur "pointer" mais aucun onClick/href */}
                 <span className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg">
                     <CircleQuestionMark className="text-gray-500 w-5 h-5" />
                 </span>
@@ -132,6 +149,7 @@ export default function Login() {
 
                                 <div className="flex flex-row items-center justify-between mb-1">
                                     <label className="text-sm font-bold text-gray-700">Password</label>
+                                    {/* ⚠️ /forgot-password n'existe pas encore (voir note en tête de fichier) */}
                                     <Link href="/forgot-password" className="text-xs text-blue-700 font-bold hover:underline">Forgot password?</Link>
                                 </div>
                                 <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2.5 px-3 mb-4 bg-white focus-within:border-blue-500 transition-colors">

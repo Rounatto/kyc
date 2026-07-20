@@ -1,17 +1,35 @@
 "use client";
 
+// ============================================================================
+// 🏠 LANDING PAGE PUBLIQUE — CONTENU 100% MARKETING, AUCUN APPEL API
+// ============================================================================
+// ⚠️ Plusieurs éléments visuels n'ont pas (encore) de vraie destination :
+//   - Les liens de nav "Solutions"/"Pricing"/"Resources" pointent vers des
+//     ancres (#solutions, #pricing, #resources) qui N'EXISTENT PAS sur cette
+//     page — un clic ne fait rien.
+//   - Le bouton "Start Free Trial" n'a ni `href` ni `onClick` : bouton mort.
+//   - Les liens du footer ("Identity Verification", "API Reference"...)
+//     pointent vers "#" (placeholder).
+//   - "Privacy Policy" et "Terms" pointent vers /privacy-policy et
+//     /terms-of-service, qui N'EXISTENT PAS dans ce projet (404 garanti) —
+//     bloquant pour un vrai lancement (obligation légale RGPD).
+//   - Les chiffres/allégations ("Trusted by 500+ Global Enterprises", "SOC2
+//     Type II", "99.9% verification accuracy", logos "BankCorp"/"FinFlow"...)
+//     sont des placeholders marketing fictifs, pas des faits vérifiés — à
+//     retirer ou remplacer avant un lancement public pour éviter une
+//     allégation trompeuse.
 import Link from "next/link";
-import { 
-    ShieldCheck, 
-    Globe, 
-    Cpu, 
-    Code, 
-    ArrowRight, 
-    Menu, 
-    Landmark, 
-    Wallet, 
-    Coins, 
-    Shield, 
+import {
+    ShieldCheck,
+    Globe,
+    Cpu,
+    Code,
+    ArrowRight,
+    Menu,
+    Landmark,
+    Wallet,
+    Coins,
+    Shield,
     Key,
     CheckCircle
 } from "lucide-react";
@@ -39,6 +57,7 @@ export default function Home() {
                     <Link href="/register" className="px-4 py-2 bg-blue-700 text-white text-sm font-semibold rounded-md hover:bg-blue-800 transition-colors shadow-sm">
                         Get Started
                     </Link>
+                    {/* Bouton hamburger sans onClick : n'ouvre aucun menu mobile pour l'instant */}
                     <button className="md:hidden flex items-center text-gray-600">
                         <Menu className="w-6 h-6" />
                     </button>
@@ -63,6 +82,7 @@ export default function Home() {
                             <Link href="/register" className="px-6 py-3 bg-blue-700 text-white font-semibold rounded-md hover:bg-blue-800 transition-colors shadow-md flex items-center justify-center gap-2">
                                 Book a Demo <ArrowRight className="w-5 h-5" />
                             </Link>
+                            {/* Bouton statique : ni href ni onClick, ne mène nulle part */}
                             <button className="px-6 py-3 border border-gray-300 text-gray-700 font-semibold rounded-md hover:bg-gray-100 transition-colors flex items-center justify-center">
                                 Start Free Trial
                             </button>

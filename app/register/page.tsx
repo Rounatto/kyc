@@ -1,5 +1,22 @@
 "use client";
 
+// ============================================================================
+// 📝 PAGE D'INSCRIPTION — MACHINE À 2 ÉTATS (form → otp → success)
+// ============================================================================
+// Reflète le flux serveur en 2 routes (voir Lot 2) : `step === "form"` appelle
+// POST /api/register (envoie l'OTP par email, ne crée rien), `step === "otp"`
+// appelle POST /api/auth/verify-register (crée réellement l'entreprise+admin).
+// Toutes les infos du formulaire (email, password, fullName, companyName)
+// sont RENVOYÉES intégralement à l'étape 2 (gardées en state React) — le
+// serveur ne les mémorise pas entre les deux appels, donc le client doit les
+// reposter avec le code OTP.
+// `handleResendOtp` republie simplement sur /api/register (qui fait un upsert
+// sur l'email en base) avec un cooldown de 30s côté client pour limiter le spam.
+//
+// Bouton "Continue with Passkey" volontairement désactivé (`cursor-not-allowed`
+// + tooltip) : à la différence des boutons morts d'autres pages, celui-ci est
+// un choix UX assumé — on ne peut pas enregistrer une passkey avant d'avoir un
+// compte, donc l'action n'a de sens qu'après l'inscription (dans Settings).
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, Scale, Fingerprint, ArrowLeft, Loader2, CheckCircle2 } from "lucide-react";

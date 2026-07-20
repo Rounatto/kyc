@@ -1,16 +1,26 @@
 "use client";
 
+// ============================================================================
+// ⚙️ PAGE SETTINGS — ROUTEUR D'ONGLETS (pas de vraie navigation d'URL)
+// ============================================================================
+// Ce composant NE FAIT QUE choisir quel sous-composant afficher selon l'onglet
+// cliqué (`activeSetting`, un simple useState — pas de query param ni de
+// sous-route Next.js). Toute la vraie logique (fetch, formulaires) vit dans
+// les composants importés (ProfSetting, SecurSetting, etc. — voir Lot 8).
+// Les onglets Team/Billing/Audit sont réservés aux COMPANY_ADMIN : masqués du
+// menu ET protégés une 2e fois dans `renderContent` (double vérification —
+// même si le state `activeSetting` était forcé, `renderContent` renvoie `null`).
 import Header from "@/components/header";
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { User, Lock, Bell, Code, ShieldAlert, Users, CreditCard } from "lucide-react"; 
+import { User, Lock, Bell, Code, ShieldAlert, Users, CreditCard } from "lucide-react";
 import ProfSetting from "@/components/ProfSetting";
 import SecurSetting from "@/components/SecurSetting";
 import ApIwebhooksSetting from "@/components/API&webhooksSetting";
 import NotifSetting from "@/components/NotifSetting";
 import AuditSetting from "@/components/AuditSetting";
 import TeamSetting from "@/components/TeamSetting";
-import BillingSetting from "@/components/BillingTabSetting"; // 💡 IMPORT DU COMPOSANT BILLING (Renomme ton fichier BillingTab.tsx en BillingSetting.tsx si besoin)
+import BillingSetting from "@/components/BillingTabSetting";
 
 export default function Settings() {
     const { data: session } = useSession();
@@ -18,7 +28,6 @@ export default function Settings() {
 
     const isAdmin = (session?.user as any)?.role === "COMPANY_ADMIN";
 
-    // 💡 TABLEAU DYNAMIQUE MIS À JOUR AVEC LE BILLING
     const menuItems = [
         { name: "Profile Info", icon: User },
         { name: "Security", icon: Lock },

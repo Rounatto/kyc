@@ -1,8 +1,26 @@
 "use client"
+// ============================================================================
+// 📈 PAGE RAPPORTS & ANALYTICS — KPIs détaillés + export PDF (global + unitaire)
+// ============================================================================
+// Réutilise le même /api/dashboard/stats que le dashboard principal (Lot 6),
+// avec un panneau de KPIs plus détaillé (temps de traitement, taux de succès,
+// donut de répartition des statuts calculé en pur CSS via `clipPath`, pas de
+// librairie de graphique circulaire).
+//
+// Deux mécanismes d'export PDF bien distincts :
+//   - `handleGlobalExport` : capture une CAPTURE D'ÉCRAN de la section
+//     #dashboard-report-content (html-to-image → PNG) puis l'encapsule dans
+//     un PDF (jsPDF) — donc un export "visuel", pas des données structurées.
+//     Manipule temporairement les classes CSS (overflow, centrage) pour que
+//     la capture inclue tout le contenu même ce qui déborde à l'écran, puis
+//     restaure le DOM après capture (voir le bloc "FIX D'EXPORT" commenté).
+//   - `handleSingleExport` : génère un VRAI PDF texte structuré (via l'API
+//     de dessin jsPDF, ligne par ligne) pour UN dossier précis — c'est un
+//     certificat d'audit, pas une image.
 import Link from "next/link";
-import { 
+import {
     Calendar, Download, ChevronDown, Shield,
-    Clock, ShieldCheck, TriangleAlert, 
+    Clock, ShieldCheck, TriangleAlert,
     TrendingUp, TrendingDown, Minus, RefreshCw,
     Loader2, FileText
 } from "lucide-react";
@@ -305,6 +323,11 @@ export default function Report() {
                                 <Clock className="w-5 h-5 md:w-6 md:h-6" />
                             </div>
                         </div>
+                        {/* Seuil de 5 (secondes, l'unité brute renvoyée par l'API) pour
+                            distinguer "Fully Automated" vs "Manual Review Noted" — un
+                            dossier réellement revu par un humain prend presque toujours
+                            plus de 5s, donc ce seuil sert de proxy pour détecter les
+                            dossiers jamais ouverts par un agent (auto-résolus trop vite). */}
                         <div className="flex flex-row items-center gap-2 mt-2 md:mt-1">
                             {stats.avgProcessingTime < 5 ? <TrendingDown className="w-3.5 h-3.5 md:w-4 md:h-4 text-green-600 shrink-0" /> : <Minus className="w-3.5 h-3.5 md:w-4 md:h-4 text-yellow-600 shrink-0" />}
                             <p className={`text-[10px] md:text-xs font-medium truncate ${stats.avgProcessingTime < 5 ? 'text-green-600' : 'text-yellow-600'}`}>
@@ -389,6 +412,10 @@ export default function Report() {
                     <div className="flex flex-col w-full lg:w-[35%] border border-gray-200 rounded-xl p-6 bg-white shadow-sm hover:shadow-md transition-all duration-300">
                         <h2 className="font-bold text-lg mb-4 text-gray-800">Status Distribution</h2>
                         
+                        {/* Donut de répartition fait en CSS pur (empilement de 3 anneaux
+                            colorés découpés via clipPath en bandes horizontales
+                            cumulatives) plutôt qu'avec une lib de graphique circulaire —
+                            léger mais approximatif visuellement (pas un vrai camembert). */}
                         <div className="flex-1 flex flex-col items-center justify-center w-full relative my-4">
                             <div className="w-48 h-48 rounded-full border-[16px] border-gray-100 relative flex items-center justify-center">
                                 <div className="absolute inset-[-16px] rounded-full border-[16px] border-green-500" style={{ clipPath: `polygon(0 0, 100% 0, 100% ${approvedPct}%, 0 ${approvedPct}%)` }}></div>

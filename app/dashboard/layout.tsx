@@ -1,25 +1,46 @@
 "use client"
 
+// ============================================================================
+// 🧭 LAYOUT DU DASHBOARD — NAVIGATION + VERROU MFA OBLIGATOIRE
+// ============================================================================
+// Enveloppe TOUTES les pages sous /dashboard/*. Deux responsabilités :
+//   1. La sidebar responsive (colonne à gauche en desktop, barre en bas en mobile).
+//   2. Le VERROUILLAGE MFA : si l'utilisateur connecté n'a pas activé sa 2FA
+//      (`totpEnabled` dans le token JWT), tous les liens de navigation SAUF
+//      "Security" sont masqués et l'utilisateur est automatiquement redirigé
+//      vers /dashboard/settings tant qu'il n'a pas activé le TOTP.
+//
+// ⚠️ Ce verrou est PUREMENT CÔTÉ CLIENT (masquage de liens + redirection React).
+// Il ne remplace pas une vérification serveur : un utilisateur qui connaît les
+// URLs des routes API pourrait toujours les appeler directement sans jamais
+// activer sa 2FA — ce composant ne fait que guider l'UX, pas appliquer la
+// règle de sécurité au niveau des données.
 import { ChartColumn, MessageCircle, LayoutDashboard, LogOut, MessageCircleQuestionMark, Settings, Shield, User, ShieldAlert } from 'lucide-react';
 import Link from 'next/link'
 import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useSession, signOut } from 'next-auth/react';
-import { NotificationProvider } from '@/context/NotificationContext'; // 💡 IMPORT DU PROVIDER
+import { NotificationProvider } from '@/context/NotificationContext';
 
 export default function RootLayout({ children }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Onglet actif dans la sidebar, dérivé de l'URL courante (voir le useEffect
+  // ci-dessous qui le recalcule à chaque changement de route).
   const [activeTab, setActiveTab] = useState('');
   const pathname = usePathname();
   const router = useRouter();
-  
+
   const { data: session, status } = useSession();
   const isLoadingSession = status === "loading";
-  
+
+  // Le cœur du verrou MFA : dérivé directement de la session, pas d'un state
+  // séparé — se recalcule automatiquement à chaque refresh de session.
   const isMfaMissing = session?.user && !(session.user as any).totpEnabled;
 
   useEffect(() => {
+    // Redirection forcée : tant que la 2FA n'est pas activée, impossible de
+    // rester sur une autre page du dashboard que les Settings.
     if (isMfaMissing && !pathname.includes('/dashboard/settings')) {
       router.replace('/dashboard/settings');
     }
@@ -62,9 +83,14 @@ export default function RootLayout({ children }: Readonly<{
                 <div className="flex flex-col">
                 <span className="font-bold text-[#0f172a] leading-tight">Compliance</span>
                 <span className="font-bold text-[#0f172a] leading-tight">Hub</span>
+                {/* ⚠️ "Enterprise Tier" est un libellé STATIQUE, pas dérivé du
+                    vrai plan de l'entreprise (`session.user.companyPlan`,
+                    pourtant déjà présent dans le token JWT — voir
+                    [...nextauth]/route.ts). Une entreprise en plan "trial" ou
+                    "starter" voit donc aussi "Enterprise Tier" affiché ici. */}
                 <span className={`text-[10px] font-bold uppercase tracking-wider mt-0.5 ${isMfaMissing ? "text-red-500" : "text-gray-500"}`}>
                     {isMfaMissing ? "SECURITY LOCKOUT" : "Enterprise Tier"}
-                </span> 
+                </span>
                 </div>
             </div>
             </div>
@@ -148,6 +174,10 @@ export default function RootLayout({ children }: Readonly<{
         </aside>
         
         <div className="flex-1 h-full overflow-y-auto pb-14 md:pb-0 relative">
+            {/* ⚠️ Le texte "SOC2 COMPLIANCE REQUIREMENT" est une formulation
+                marketing/légale forte — vérifier qu'elle est justifiée avant
+                un lancement public si l'entreprise n'a pas réellement une
+                certification SOC2 en cours, pour éviter une allégation trompeuse. */}
             {isMfaMissing && (
                 <div className="w-full bg-red-600 text-white p-3 flex justify-center items-center gap-3 shadow-md z-50">
                     <ShieldAlert className="w-5 h-5 animate-bounce" />

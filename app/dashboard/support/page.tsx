@@ -1,5 +1,12 @@
 "use client";
 
+// ============================================================================
+// 🆘 PAGE SUPPORT — CONTENU 100% STATIQUE
+// ============================================================================
+// Pas d'appel API, pas de state : uniquement des liens/boutons de présentation.
+// "Read the API Docs" et "Explore Guides" n'ont pas de `href`/`onClick` — ce
+// sont des boutons visuels sans destination réelle pour l'instant (à câbler
+// quand une vraie documentation existera).
 import { Book, Mail, MessageCircle, FileCode2, ExternalLink, ArrowRight, LifeBuoy, FileText } from "lucide-react";
 import Link from "next/link";
 
