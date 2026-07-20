@@ -49,6 +49,8 @@ Crédit honnête, c'est du vrai travail de qualité :
 ### 🔴🔴 CRITIQUE — à régler en priorité absolue
 
 #### C1. `/api/chat` est GRAND OUVERT, sans aucune authentification *(NOUVELLE DÉCOUVERTE)*
+> ✅ **STATUT : CORRIGÉ** (2026-07-20) — `enforceRole` ajouté, modèle renommé `gemini-2.5-flash`, validation Zod du body, `error.message` ne fuite plus au client, `systemInstruction` de cadrage ajoutée. Code modifié localement, **commit en attente**. Rate limiting toujours absent (voir H4) : un utilisateur connecté légitime peut encore spammer la route.
+
 `app/api/chat/route.ts` n'a **aucun** `getServerSession`, **aucun** `enforceRole`. N'importe qui sur Internet peut envoyer des requêtes à cet endpoint et :
 - **utiliser ton API Gemini gratuitement sur ta facture** (drainage de coût — un attaquant peut faire tourner des milliers de requêtes),
 - se servir de ton endpoint comme **proxy Gemini gratuit** pour ses propres besoins,
@@ -63,6 +65,8 @@ En plus, le modèle est nommé `"gemini-3.5-flash"` — **ce modèle n'existe pa
 
 #### C3. Aucune détection de vivacité (liveness) *(TON INTUITION — 100% CORRECTE)*
 Le selfie est un **upload de fichier** (`selfieInputRef`, `handleFileChange`), pas une capture caméra live. Donc on peut uploader une **photo LinkedIn/Facebook** de la cible et passer la vérification. Aucune preuve que la personne était physiquement présente et vivante. C'est LE standard n°1 chez Sumsub/Onfido/Veriff/Persona. (Détails et plan complet en section dédiée plus bas.)
+
+*(Confirmation supplémentaire — passe de documentation, commits `91d2345`→`0b6eaaf`) :* aucune trace de `getUserMedia`/`<video>` nulle part dans le code — la capture caméra live n'existe à aucun stade. Pire, l'écran de décision agent affiche cette photo uploadée sous le libellé **« Live Selfie »**, un libellé trompeur qui fait croire (à l'agent, et dans un audit externe) qu'une preuve de vie a été apportée alors qu'il ne s'agit que d'un fichier importé. **Fix rapide indépendant du gros chantier liveness :** renommer ce libellé (ex. « Uploaded Selfie ») en attendant l'implémentation réelle — 5 minutes de travail qui évitent de mentir involontairement sur la fiabilité du contrôle.
 
 ---
 
@@ -85,6 +89,9 @@ Confirmé : zéro rate limiting sur login, register, envoi OTP, vérification OT
 
 #### H6. Clés API stockées en clair + inutilisables *(TOUJOURS OUVERT)*
 `apikeys/route.ts` : `key: rawApiKey` — la clé complète `tv_live_...` est stockée telle quelle. Une fuite de base = toutes les clés clients exposées. De plus, **aucun endpoint n'accepte ces clés en entrée** : elles ne servent à rien (pas de vraie API B2B). **Fix :** stocker un hash SHA-256 + préfixe affichable, et créer l'endpoint public authentifié par clé.
+
+#### H7. IDOR sur `DELETE /api/settings/security/sessions` *(NOUVELLE DÉCOUVERTE — passe de documentation)*
+La route ne vérifie pas que la session ciblée par l'ID reçu appartient à l'appelant (ni même à son entreprise). **N'importe quel utilisateur connecté — potentiellement d'une entreprise différente — peut donc déconnecter de force la session de n'importe qui d'autre** en devinant/énumérant un ID de session. C'est le même type de rupture de cloisonnement multi-tenant que l'IDOR déjà corrigé sur `customers/[id]` (voir "CE QUI EST CORRIGÉ ET SOLIDE" plus haut), mais ici sur les sessions : un vecteur de déni de service ciblé (éjecter un admin en pleine action, empêcher un agent de se reconnecter). Classé Haute plutôt que Critique car l'impact reste une déconnexion forcée, pas une fuite de données KYC. **Fix :** filtrer le `where` Prisma par `userId: guard.userId` dérivé de la session serveur — jamais par le seul ID reçu du client.
 
 ---
 
@@ -115,6 +122,11 @@ Le champ existe dans le schéma mais rien ne le remplit. Un utilisateur qui perd
 - **B5.** Incohérence taille fichier : client 5 Mo vs uploadthing serveur 4 Mo.
 - **B6.** `console.log` de données personnelles (CIN, emails) → logging structuré `pino` avec redaction.
 - **B7.** Boucle N+1 dans `dashboard/stats` (14 requêtes séquentielles → 1 agrégat).
+- **B8.** *(passe de documentation)* Liens/boutons morts sur la landing page : "Start Free Trial", le menu hamburger mobile, les ancres `#solutions`/`#pricing`/`#resources` — aucun n'est câblé.
+- **B9.** *(passe de documentation)* Pages référencées mais inexistantes : `/forgot-password`, `/privacy-policy`, `/terms-of-service` — 404 garantie si un lien y mène un jour.
+- **B10.** *(passe de documentation)* Barre de recherche du header principal (`header.tsx`) purement décorative — pas de `value`/`onChange` (celle de l'annuaire clients, elle, fonctionne réellement).
+- **B11.** *(passe de documentation)* Icône "Eye" sur les clés API et bouton "Contact Sales" — sans handler, décoratifs.
+- **B12.** *(passe de documentation)* Incohérences frontend ⟷ backend : le filtre "1y" du sélecteur dashboard n'est reconnu par aucune branche de l'API (retombe silencieusement sur 30 jours) ; `trends.pendingDelta` est lu côté client mais jamais renvoyé par l'API ; le badge "Security Standard: SHA-256 / Bcrypt" affiche un algorithme (SHA-256) qui n'est en réalité pas utilisé (seul bcrypt l'est) ; `SecurSetting.tsx` affiche un faux fallback de session codé en dur ("Windows 11 Workstation") au lieu de gérer proprement l'absence de données réelles.
 
 ---
 
@@ -163,10 +175,11 @@ Tu as raison sur le liveness, et il y a d'autres upgrades majeurs. Voici tout, p
 Objectif : déployer le plus vite possible une **preview publique** pour la montrer à ton encadrant sans captures d'écran, puis continuer à corriger en étant déployé.
 
 **🟢 AVANT DE DÉPLOYER (obligatoire, ~1-2h) — PHASE 0 :**
-1. **Sécuriser `/api/chat`** (ajouter auth + corriger le nom du modèle Gemini). Protège ton budget Gemini ET fait marcher le chat dans la démo.
-2. **Mettre un plafond de dépenses** sur ton compte Google AI / Gemini (filet de sécurité de 5 min, au cas où).
-3. **Confirmer que `npm run build` passe** en local (Vercel refuse un build cassé).
-4. **Configurer TOUTES les variables d'env sur Vercel**, en particulier :
+1. ~~**Sécuriser `/api/chat`**~~ ✅ **FAIT** (auth RBAC + modèle corrigé + validation Zod + system prompt — code modifié, commit en attente). Protège ton budget Gemini ET fait marcher le chat dans la démo.
+2. **Corriger l'IDOR sur `DELETE /api/settings/security/sessions`** *(nouveau, trouvé pendant la passe de documentation)* — filtrer par `userId`/`companyId` de la session serveur, pas par l'ID brut envoyé par le client.
+3. **Mettre un plafond de dépenses** sur ton compte Google AI / Gemini (filet de sécurité de 5 min, au cas où).
+4. **Confirmer que `npm run build` passe** en local (Vercel refuse un build cassé).
+5. **Configurer TOUTES les variables d'env sur Vercel**, en particulier :
    - `WEBAUTHN_RPID` = ton domaine Vercel (ex: `ton-app.vercel.app`) — sinon les passkeys cassent
    - `WEBAUTHN_ORIGIN` = `https://ton-app.vercel.app`
    - `NEXTAUTH_URL` = `https://ton-app.vercel.app`
@@ -175,15 +188,15 @@ Objectif : déployer le plus vite possible une **preview publique** pour la mont
    - `CRON_SECRET`, clés Stripe, Supabase, `EMAIL_*`, `GEMINI_API_KEY`, `OPENSANCTIONS_API_KEY`
 
 **🚀 DÉPLOIEMENT (le jour même) :**
-5. **Déployer sur Vercel** (push sur `master` → déploiement auto, ou bouton Deploy).
-6. **Smoke test de l'URL déployée** : inscription (OTP), login, création d'un dossier de vérification (avec des **données de test, pas de vraies personnes**), navigation dashboard. Corriger les bugs d'environnement réel qui apparaissent.
-7. **→ Montrer à ton encadrant.** ✅
+6. **Déployer sur Vercel** (push sur `master` → déploiement auto, ou bouton Deploy).
+7. **Smoke test de l'URL déployée** : inscription (OTP), login, création d'un dossier de vérification (avec des **données de test, pas de vraies personnes**), navigation dashboard. Corriger les bugs d'environnement réel qui apparaissent.
+8. **→ Montrer à ton encadrant.** ✅
 
 **🟠 APRÈS LE DÉPLOIEMENT (itérations, dans cet ordre) :**
-8. A4 — Échapper le HTML des emails.
-9. Phase B complète (rate limiting, chiffrement TOTP, backup codes, headers de sécurité, anti-énumération, OTP crypto).
-10. Phase C — Liveness & biométrie serveur (le gros morceau produit).
-11. Phases D → H (API B2B, tests/CI, observabilité, i18n, différenciateurs).
+9. A4 — Échapper le HTML des emails.
+10. Phase B complète (rate limiting, chiffrement TOTP, backup codes, headers de sécurité, anti-énumération, OTP crypto).
+11. Phase C — Liveness & biométrie serveur (le gros morceau produit).
+12. Phases D → H (API B2B, tests/CI, observabilité, i18n, différenciateurs).
 
 > ⚠️ **Règle d'or pour la démo :** ne mets **jamais de vraies données personnelles** (vrais CIN, vrais selfies de vraies personnes) dans la version déployée tant que la Phase B + la base légale RGPD ne sont pas faites. Utilise des données de test. Ça garde la démo hors de tout risque juridique.
 
@@ -194,8 +207,9 @@ Objectif : déployer le plus vite possible une **preview publique** pour la mont
 - [x] Protéger le cron avec `CRON_SECRET`
 - [x] Corriger le bug Zod (`.issues`)
 - [x] Créer `.env.example`
+- [x] **A6 — Sécuriser `/api/chat`** (auth RBAC + fix modèle + validation Zod + system prompt) — code modifié 2026-07-20, **commit en attente**. Rate limiting exclu du scope, reste sous H4.
 - [ ] **A4 — Échapper le HTML des emails** (`lib/mail.ts`) ← *reste à faire*
-- [ ] **A6 — Sécuriser `/api/chat`** (auth + rate limit + fix modèle + validation) ← *NOUVEAU, critique*
+- [ ] **A7 — Corriger l'IDOR sur `DELETE /api/settings/security/sessions`** (H7, nouveau — passe de documentation) ← *filtrer par `userId` de la session serveur*
 - [ ] A5 — Tester le flux 2FA de bout en bout avec un vrai authenticator (manuel, ton téléphone)
 
 ### 🟠 PHASE B — Durcissement sécurité
@@ -261,9 +275,10 @@ Objectif : déployer le plus vite possible une **preview publique** pour la mont
 
 ## 🚀 PRÊT À ÊTRE DÉPLOYÉ ?
 
-**En preview/staging pour itérer : presque.** Il te reste 2 choses rapides avant :
-1. **Sécuriser `/api/chat`** (C1/A6) — sinon un crawler peut drainer ton budget Gemini dès le déploiement.
+**En preview/staging pour itérer : presque.** Il te reste ces points rapides avant :
+1. ~~**Sécuriser `/api/chat`**~~ ✅ **FAIT** (C1/A6) — code corrigé, reste à committer.
 2. **Échapper le HTML des emails** (A4).
+3. **Corriger l'IDOR sur `DELETE /api/settings/security/sessions`** (H7, nouveau) — sinon n'importe quel compte connecté peut déconnecter n'importe quel autre utilisateur, même d'une autre entreprise.
 
 Après ça, tu peux déployer en preview sans risque majeur et itérer.
 
@@ -272,3 +287,7 @@ Après ça, tu peux déployer en preview sans risque majeur et itérer.
 ---
 
 *Audit V3 — relecture intégrale de `Rounatto/kyc` au commit `5009a71` (105 commits, 28 routes API, chaque fichier lu ligne par ligne). Chaque point est ancré dans un fichier précis. Nouvelles découvertes de cette passe : `/api/chat` non authentifié (C1), OTP via `Math.random` (H2), absence confirmée de headers de sécurité (M1).*
+
+---
+
+**📌 Addendum (2026-07-20)** — passe de documentation (62 fichiers commentés, ~9 300 lignes, commits `91d2345`→`0b6eaaf`, `npm run build` vert avant chaque commit) : nouvelle découverte critique côté isolation multi-tenant (IDOR sur les sessions, H7), confirmation terrain du gap liveness (mislabeling "Live Selfie", ajouté à C3), et une série d'incohérences UI/frontend-backend mineures (B8-B12). `/api/chat` (C1) corrigé dans la foulée par une autre session — RBAC, modèle valide, validation Zod, plus de fuite d'erreur ; rate limiting toujours hors scope.
