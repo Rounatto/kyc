@@ -51,7 +51,7 @@ export default function ChatPage() {
 
   return (
     <div style={{ maxWidth: "800px", margin: "0 auto", padding: "20px", fontFamily: "sans-serif" }}>
-      <h1>Mon Chat Gemini</h1>
+      <h1>KYC Chat</h1>
       
       <div style={{ border: "1px solid #ccc", height: "400px", overflowY: "scroll", padding: "10px", marginBottom: "10px", borderRadius: "8px", background: "#f9f9f9", color: "#333" }}>
         {messages.length === 0 && <p style={{ color: "#888" }}>Commencez la conversation...</p>}
@@ -65,12 +65,12 @@ export default function ChatPage() {
               color: msg.role === "user" ? "white" : "black",
               maxWidth: "80% "
             }}>
-              <strong>{msg.role === "user" ? "Vous" : "Gemini"}:</strong>
+              <strong>{msg.role === "user" ? "Vous" : "CHATBOT"}</strong>
               <p style={{ margin: "5px 0 0" }}>{msg.content}</p>
             </div>
           </div>
         ))}
-        {isLoading && <p style={{ color: "#666" }}>Gemini est en train d'écrire...</p>}
+        {isLoading && <p style={{ color: "#666" }}>CHATBOT est en train d'écrire...</p>}
       </div>
 
       <form onSubmit={sendMessage} style={{ display: "flex", gap: "10px" }}>
