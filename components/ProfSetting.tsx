@@ -1,5 +1,14 @@
 "use client";
 
+// ============================================================================
+// 👤 ONGLET SETTINGS — PROFIL PERSONNEL + ORGANISATION
+// ============================================================================
+// Miroir frontend de app/api/settings/profile (Lot 5) : le champ "Organization"
+// est désactivé (`disabled={!isAdmin}`) pour un COMPANY_AGENT — cohérent avec
+// la double vérification faite côté serveur (qui ignorerait de toute façon un
+// changement de companyName venant d'un non-admin). Après un save réussi,
+// `update()` (NextAuth) rafraîchit le JWT en mémoire pour que le nouveau nom/
+// avatar apparaisse immédiatement dans le header sans recharger la page.
 import { Pencil, User, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { useState, useEffect, useRef } from "react";
@@ -33,10 +42,12 @@ export default function ProfSetting() {
         fileInputRef.current?.click();
     };
 
+    // Ne valide que la taille, pas le type MIME — le serveur non plus (voir
+    // note XSS/SVG dans api/settings/profile/route.ts, Lot 5).
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            if (file.size > 5 * 1024 * 1024) { 
+            if (file.size > 5 * 1024 * 1024) {
                 setStatusMessage({ type: "error", text: "Image is too large (Max 5MB)." });
                 return;
             }

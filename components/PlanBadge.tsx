@@ -19,6 +19,12 @@ const PLAN_STYLES: Record<string, string> = {
 
 // Petit badge affichant le plan de la company, dérivé de la session (session.user.companyPlan).
 // Nécessite l'ajout de companyPlan dans les callbacks jwt/session de app/api/auth/[...nextauth]/route.ts.
+// Double source volontaire : on refetch /api/billing/quota (toujours à jour,
+// lit directement la DB) plutôt que de faire confiance uniquement au plan
+// embarqué dans le JWT (qui peut être périmé jusqu'au prochain refresh de
+// session) — mais `session.user.companyPlan` reste utilisé comme repli
+// instantané le temps que ce fetch réponde, pour éviter un badge "Trial" qui
+// clignote avant d'afficher la vraie valeur.
 export default function PlanBadge() {
     const { data: session, status } = useSession();
     const [currentPlan, setCurrentPlan] = useState<string | null>(null);

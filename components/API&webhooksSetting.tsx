@@ -1,5 +1,23 @@
 "use client";
 
+// ============================================================================
+// 🔌 ONGLET SETTINGS — CLÉS API (COMPANY_ADMIN uniquement)
+// ============================================================================
+// Miroir frontend de api/settings/apikeys (Lot 5). Respecte le pattern
+// "show-once" : `newlyGeneratedKey` n'existe qu'en mémoire juste après la
+// création (jamais re-fetché depuis le serveur, qui ne renvoie jamais la
+// clé en clair après coup) — fermer l'alerte ou recharger la page la perd
+// définitivement de l'écran, ce qui est le comportement voulu.
+//
+// ⚠️ La colonne "KEY HINT" affiche le texte statique `tv_live_••••••••••••••••`
+// IDENTIQUE pour CHAQUE clé de la liste — ce n'est pas un vrai indice dérivé
+// de la clé réelle (le serveur ne renvoie ni la clé ni un préfixe utilisable,
+// voir le `select` dans apikeys/route.ts). Une vraie implémentation stockerait
+// un préfixe affichable (ex: les 8 premiers caractères) au moment de la
+// création pour permettre de distinguer les clés visuellement.
+// ⚠️ L'icône "Eye" à côté de chaque clé n'a aucun onClick — bouton mort qui
+// laisse croire qu'on peut "voir" la clé alors que ce n'est jamais possible
+// après sa création initiale (par design, la clé n'est pas récupérable).
 import { useState, useEffect } from "react";
 import { Plus, Eye, Trash2, Info, Loader2, ShieldAlert, CheckCircle2, Copy, X } from "lucide-react";
 import Link from "next/link";

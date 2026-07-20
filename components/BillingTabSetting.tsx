@@ -1,11 +1,21 @@
 "use client";
 
+// ============================================================================
+// 💳 ONGLET SETTINGS — FACTURATION & USAGE (COMPANY_ADMIN uniquement)
+// ============================================================================
+// Combine 3 routes billing (Lot 5) : GET /api/billing/quota pour l'état
+// courant (plan, usage, date de reset), POST /api/billing/checkout pour
+// lancer un upgrade (redirige vers Stripe Checkout via `window.location.href`,
+// pas de state React à gérer après ce point), et POST /api/billing/subscription
+// pour l'annulation. `searchParams.get("payment")` détecte le retour de Stripe
+// après paiement (?payment=success|cancelled, voir success_url/cancel_url
+// dans billing/checkout/route.ts) pour afficher un toast puis nettoyer l'URL.
 import { useState, useEffect } from "react";
 import { Zap, CheckCircle2, AlertTriangle, XCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { useSearchParams, useRouter } from "next/navigation"; // 💡 IMPORT POUR LIRE L'URL DE STRIPE
+import { useSearchParams, useRouter } from "next/navigation";
 
-export default function BillingSetting() { // J'ai renommé en BillingSetting pour coller à ton fichier Settings.tsx
+export default function BillingSetting() {
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null); // 💡 Permet de savoir QUEL bouton tourne
     const [billingData, setBillingData] = useState<any>(null);
@@ -183,6 +193,7 @@ export default function BillingSetting() { // J'ai renommé en BillingSetting po
                     <ul className="flex flex-col gap-3 mb-6 flex-1">
                         <li className="flex items-center gap-2 text-xs font-medium text-gray-300"><CheckCircle2 className="w-3.5 h-3.5 text-blue-400" /> Unlimited Volume</li>
                     </ul>
+                    {/* Bouton statique : ni onClick ni href/mailto */}
                     <button className="w-full py-2.5 rounded-lg font-bold text-sm transition-colors border bg-gray-800 hover:bg-gray-700 text-white border-gray-700">
                         Contact Sales
                     </button>

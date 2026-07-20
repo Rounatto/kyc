@@ -1,5 +1,14 @@
 "use client";
 
+// ============================================================================
+// 🧑‍🤝‍🧑 ONGLET SETTINGS — GESTION D'ÉQUIPE (COMPANY_ADMIN uniquement)
+// ============================================================================
+// Miroir frontend de api/settings/team (Lot 5). Le formulaire d'invitation ne
+// demande QUE nom + email ("Zéro-Knowledge : plus de mot de passe" — l'admin
+// ne choisit jamais le mot de passe d'un agent, c'est ce dernier qui le fait
+// via le lien d'activation reçu par email). La colonne "Security (2FA)"
+// affiche "Vulnerable" en rouge pour tout agent sans 2FA active — un signal
+// visuel utile pour l'admin, dérivé de `totpEnabled` renvoyé par l'API.
 import { useState, useEffect } from "react";
 import { Users, UserPlus, Trash2, ShieldCheck, ShieldAlert, Loader2, Mail, User as UserIcon } from "lucide-react";
 

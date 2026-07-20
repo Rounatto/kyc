@@ -1,5 +1,14 @@
 "use client";
 
+// ============================================================================
+// 📜 ONGLET SETTINGS — REGISTRE D'AUDIT (COMPANY_ADMIN uniquement)
+// ============================================================================
+// Lit /api/settings/audit (Lot 5). Le verrou par rôle est fait ICI EN DOUBLE :
+// `isAdmin` conditionne à la fois le fetch (un agent non-admin ne déclenche
+// même pas la requête) et l'affichage (écran "Clearance Level Insufficient"
+// si non-admin) — mais ce n'est qu'une protection UX, la vraie barrière est
+// le `enforceRole(session, ["COMPANY_ADMIN"])` côté serveur (un agent qui
+// appellerait l'API directement serait de toute façon rejeté en 403).
 import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import { ShieldAlert, Loader2, Clock, User, Activity, FileText, AlertTriangle } from "lucide-react";

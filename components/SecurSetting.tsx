@@ -1,9 +1,23 @@
 "use client";
 
+// ============================================================================
+// 🔒 ONGLET SETTINGS — SÉCURITÉ (mot de passe, passkeys, 2FA, sessions)
+// ============================================================================
+// 4 blocs indépendants, chacun avec son propre état de chargement/statut :
+//   1. Changement de mot de passe → POST /api/settings/security/password.
+//   2. Enregistrement de passkey → cérémonie WebAuthn en 2 appels
+//      (generate → startRegistration navigateur → verify), voir Lot 3.
+//   3. Activation 2FA → modale QR code, flux generate → verify (Lot 3),
+//      avec `update()` NextAuth pour rafraîchir `totpEnabled` en session sans
+//      forcer une reconnexion.
+//   4. Liste des sessions actives → GET/DELETE /api/settings/security/sessions.
+//      ⚠️ Le bouton "Revoke" ici déclenche l'appel DELETE affecté par la
+//      faille IDOR documentée au Lot 3 (aucune vérification serveur que la
+//      session révoquée appartient à l'utilisateur courant).
 import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import { useState, useEffect } from "react";
-import { startRegistration } from "@simplewebauthn/browser"; 
+import { startRegistration } from "@simplewebauthn/browser";
 
 export default function SecurSetting() {
     const { data: session, update } = useSession();
@@ -292,6 +306,9 @@ export default function SecurSetting() {
                     </div>
                     
                     <div className="flex flex-row flex-wrap justify-between items-center mt-2 pt-4 border-t border-gray-100 gap-4">
+                        {/* ⚠️ Inexact : le backend hash uniquement avec bcrypt
+                            (voir api/settings/security/password/route.ts, Lot 3) —
+                            SHA-256 n'intervient nulle part dans ce flux. */}
                         <p className="text-xs text-gray-500">Security Standard: <span className="font-bold text-gray-700">SHA-256 / Bcrypt</span></p>
                         <button 
                             type="submit"
@@ -398,6 +415,14 @@ export default function SecurSetting() {
                                 </div>
                             ))
                         ) : (
+                            // ⚠️ Ce bloc n'affiche PAS des données réelles : c'est un
+                            // "Windows 11 Workstation (Chrome)" codé en dur, montré
+                            // uniquement si `sessions` est vide après le chargement.
+                            // En pratique le GET de l'API insère toujours une ligne
+                            // pour l'appareil courant (voir Lot 3), donc ce cas ne
+                            // devrait presque jamais se produire — mais si jamais
+                            // l'API échoue silencieusement, l'utilisateur verrait
+                            // cette fausse session plutôt qu'un état vide honnête.
                             <div className="flex flex-row items-center justify-between py-3.5">
                                 <div className="flex flex-row items-center gap-4">
                                     <Laptop className="w-6 h-6 text-gray-400 shrink-0" />

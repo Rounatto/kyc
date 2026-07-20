@@ -1,5 +1,13 @@
 "use client";
 
+// ============================================================================
+// 🔔 ONGLET SETTINGS — PRÉFÉRENCES EMAIL (3 toggles persistés en DB)
+// ============================================================================
+// Chaque toggle applique une mise à jour optimiste (le switch bascule
+// instantanément dans l'UI) AVANT même que la réponse serveur revienne — si
+// le PATCH échoue, `handleToggle` fait un rollback manuel de l'état local.
+// Ça évite la latence perçue d'un aller-retour réseau à chaque clic, au prix
+// d'un bref état "faux" si la requête échoue vraiment (rare en pratique).
 import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 
