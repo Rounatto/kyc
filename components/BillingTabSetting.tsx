@@ -21,6 +21,7 @@ export default function BillingSetting() {
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null); // 💡 Permet de savoir QUEL bouton tourne
     const [billingData, setBillingData] = useState<any>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -32,9 +33,18 @@ export default function BillingSetting() {
             if (res.ok) {
                 const data = await res.json();
                 setBillingData(data);
+                setLoadError(null);
+            } else {
+                // Une réponse d'erreur laissait `billingData` à null tout en
+                // levant le voile de chargement : le rendu tombait alors sur
+                // `billingData.current` et cassait toute la page Settings.
+                // On mémorise l'échec pour afficher un écran de reprise.
+                const body = await res.json().catch(() => ({}));
+                setLoadError(body.error || `Server responded ${res.status}.`);
             }
         } catch (error) {
             console.error("Failed to load billing data", error);
+            setLoadError("Network error. Check your connection and try again.");
         } finally {
             setLoading(false);
         }
@@ -124,7 +134,40 @@ export default function BillingSetting() {
 
     if (loading) return <div className="py-20 flex items-center justify-center flex-col gap-4"><Loader2 className="animate-spin w-8 h-8 text-blue-600" /><p className="text-gray-500 font-medium">Loading Billing Information...</p></div>;
 
-    const usagePercent = Math.min(100, Math.round((billingData.current / billingData.limit) * 100));
+    // Garde-fou : tant qu'on n'a pas de données valides, on n'entre PAS dans le
+    // rendu principal, qui déréférence `billingData` partout. `!billingData`
+    // couvre aussi le cas où la requête a réussi mais renvoyé un corps vide.
+    if (loadError || !billingData) {
+        return (
+            <div className="w-full max-w-5xl mx-auto">
+                <div className="mb-6">
+                    <h2 className="text-xl font-bold text-gray-900">Billing & Usage</h2>
+                </div>
+                <div className="p-6 bg-red-50 border border-red-200 rounded-xl flex flex-col md:flex-row md:items-center gap-4">
+                    <div className="flex items-start gap-3 flex-1">
+                        <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                        <div>
+                            <h4 className="text-sm font-bold text-red-900">Could not load billing information</h4>
+                            <p className="text-sm text-red-700 mt-1">{loadError || "No billing data was returned."}</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => { setLoading(true); fetchQuota(); }}
+                        className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold text-sm rounded-lg transition-colors shrink-0 flex items-center justify-center gap-2"
+                    >
+                        <RotateCcw className="w-4 h-4" />
+                        Retry
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // `limit` ne devrait jamais valoir 0, mais une division par zéro produirait
+    // un NaN qui casserait silencieusement la largeur de la barre de progression.
+    const usagePercent = billingData.limit > 0
+        ? Math.min(100, Math.round((billingData.current / billingData.limit) * 100))
+        : 0;
     const isPremium = billingData.plan !== "trial";
     const isCanceling = Boolean(billingData.cancelAtPeriodEnd);
 
