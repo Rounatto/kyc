@@ -1,13 +1,24 @@
-# 🛡️ TRUSTVERIFY — AUDIT COMPLET V3 & ROADMAP VERS 10/10
-### Re-vérification intégrale, commit `5009a71` — 105 commits relus, 28 routes API, chaque fichier lu
+# 🛡️ TRUSTVERIFY — AUDIT & ROADMAP VERS 10/10
+### Mise à jour du 22 juillet 2026 — **Phase A terminée ✅ · Déployé en production ✅**
+### 🌐 En ligne : `https://kyc-project-seven.vercel.app`
 
 ---
 
-## 📊 NOTE GLOBALE HONNÊTE : **7.0 / 10**
+## 🎯 DEMAIN, ON COMMENCE ICI
 
-Progression depuis la V2 (6.8) : **+0.2**. Je suis transparent sur pourquoi c'est seulement +0.2 malgré ton travail : les corrections faites depuis (suppression de `fix-scores`, protection du cron, fix Zod, `.env.example`) étaient les tâches **rapides** de la Phase A. Pendant ce temps, en relisant TOUT en profondeur, j'ai découvert une **faille critique qui était là depuis le début** mais que je n'avais jamais inspectée : `/api/chat` est **grand ouvert sans authentification**. Cette découverte compense une partie des gains. Et surtout, les gros morceaux (liveness, rate limiting, biométrie côté serveur, chiffrement TOTP) ne sont pas encore commencés.
+**→ PHASE B — Durcissement sécurité.** Premier fichier à traiter : `app/api/settings/security/totp/verify/route.ts` (chiffrement du secret TOTP), puis les backup codes, puis le rate limiting.
 
-**Traduction simple :** ton socle est excellent, mais tu n'as pas encore attaqué ce qui sépare un "très bon projet étudiant" d'un "produit international". C'est normal, c'est la suite du plan. Tu es sur la bonne trajectoire.
+Méthode de travail : tu envoies le fichier → je le rends complet, commenté (`// 🆕`) et expliqué.
+
+---
+
+## 📊 NOTE GLOBALE HONNÊTE : **7.2 / 10**
+
+Progression depuis la V3 (7.0) : **+0.2**. Honnêtement : la Phase A était composée des tâches **rapides**, et le déploiement — bien qu'important comme étape — n'ajoute pas de sécurité en soi. En revanche, la mise en production a révélé **2 nouvelles failles** (documents KYC sur URLs publiques, et le pipeline OCR qui ne tient pas dans une fonction serverless) qui compensent une partie des gains.
+
+**Ce qui bloque encore la note :** les gros morceaux (liveness, biométrie serveur, rate limiting, chiffrement TOTP, tests/CI) ne sont pas commencés. Ils valent chacun plusieurs dixièmes.
+
+**Traduction simple :** ton socle est excellent et maintenant *en ligne*. La prochaine phase est celle qui fait vraiment bouger l'aiguille sur la sécurité.
 
 ### Détail par axe
 
@@ -26,6 +37,17 @@ Progression depuis la V2 (6.8) : **+0.2**. Je suis transparent sur pourquoi c'es
 
 Crédit honnête, c'est du vrai travail de qualité :
 
+**🎉 Phase A — TERMINÉE le 22/07/2026 :**
+- ✅ **A4 — Échappement HTML des emails** (commit `301c192`) — fonction `escapeHtml()` appliquée à `name`, `customerName`, `rejectionReason`, `actionBy`. Faille H5 fermée.
+- ✅ **A6 — `/api/chat` sécurisé** (commit `874780d`) — `enforceRole` + validation Zod + system prompt de cadrage + plus de fuite d'`error.message`. Faille C1 fermée.
+- ✅ **A5 — Flux 2FA validé** de bout en bout avec un vrai authenticator.
+
+**🚀 Déploiement en production — RÉUSSI le 22/07/2026 :**
+- ✅ Vercel + Supabase + Stripe (webhook prod signé) + Google OAuth configurés.
+- ✅ 3 correctifs de build : `lightningcss` déplacé en `optionalDependencies`, `prisma generate` ajouté au script de build, `maxDuration` + timeouts OCR/AML pour le serverless.
+- ✅ Variables d'env production : `WEBAUTHN_RPID`/`WEBAUTHN_ORIGIN` sur le vrai domaine, `NEXTAUTH_SECRET`, `UPLOADTHING_TOKEN`, `DIRECT_URL`.
+
+**Corrections antérieures :**
 - ✅ **`/api/fix-scores` supprimé** (commit `9f9eb32`) — la faille béante est fermée.
 - ✅ **Cron protégé** par `CRON_SECRET` (commit `880e197`) — vérifié, le check est bien avant toute requête DB.
 - ✅ **Bug Zod corrigé** (`.issues`) partout (commit `a1f7c5e`) — aucune occurrence obsolète restante.
@@ -48,25 +70,21 @@ Crédit honnête, c'est du vrai travail de qualité :
 
 ### 🔴🔴 CRITIQUE — à régler en priorité absolue
 
-#### C1. `/api/chat` est GRAND OUVERT, sans aucune authentification *(NOUVELLE DÉCOUVERTE)*
-> ✅ **STATUT : CORRIGÉ** (2026-07-20) — `enforceRole` ajouté, modèle renommé `gemini-2.5-flash`, validation Zod du body, `error.message` ne fuite plus au client, `systemInstruction` de cadrage ajoutée. Code modifié localement, **commit en attente**. Rate limiting toujours absent (voir H4) : un utilisateur connecté légitime peut encore spammer la route.
+#### ~~C1. `/api/chat` grand ouvert~~ — ✅ **RÉSOLU** (commit `874780d`)
+Auth `enforceRole` ajoutée, validation Zod du body, system prompt de cadrage TrustVerify, plus de fuite d'`error.message`. *(Note : le modèle `gemini-3.5-flash` existe bel et bien — lancé le 19 mai 2026 — mon alerte initiale sur ce point était erronée, vérification faite.)* Reste à ajouter le rate limiting → Phase B.
 
-`app/api/chat/route.ts` n'a **aucun** `getServerSession`, **aucun** `enforceRole`. N'importe qui sur Internet peut envoyer des requêtes à cet endpoint et :
-- **utiliser ton API Gemini gratuitement sur ta facture** (drainage de coût — un attaquant peut faire tourner des milliers de requêtes),
-- se servir de ton endpoint comme **proxy Gemini gratuit** pour ses propres besoins,
-- **faire dire n'importe quoi à "ton" assistant** (le message utilisateur brut part directement à Gemini, sans system prompt ni garde-fou → risque réputationnel).
+#### C4. Les documents KYC sont sur des URLs publiques *(🆕 DÉCOUVERT AU DÉPLOIEMENT)*
+Les fichiers uploadés via uploadthing (pièces d'identité, selfies) sont servis par un CDN **sans aucune vérification d'authentification**. Toute personne disposant de l'URL d'un fichier peut voir la carte d'identité et le selfie d'un client, **sans compte, sans session**. Pour une plateforme KYC, c'est un problème de confidentialité majeur : ces documents sont la donnée la plus sensible du produit.
 
-En plus, le modèle est nommé `"gemini-3.5-flash"` — **ce modèle n'existe pas** (les modèles Gemini sont `gemini-2.5-flash`, `gemini-2.0-flash`, etc.), donc ton chat est probablement **cassé** (erreur 500) en ce moment même. Et l'endpoint renvoie `error.message` au client (fuite d'info) et plante si `messages` est vide (pas de validation d'entrée).
+**À vérifier puis corriger :** configurer un contrôle d'accès sur les uploads (uploadthing propose des ACL/URLs signées), ou migrer le stockage des documents vers Supabase Storage avec des *signed URLs* à expiration courte, servies uniquement après vérification de session + `companyId`.
 
-**Correctif :** ajouter `enforceRole` + rate limiting + corriger le nom de modèle + valider l'entrée + system prompt de cadrage + ne pas fuiter `error.message`.
+**Action immédiate :** purger les dossiers de test contenant de vraies données personnelles.
 
 #### C2. Le score biométrique est contrôlé par le client *(TOUJOURS OUVERT)*
 `app/api/customers/route.ts` : `biometricScore: z.number()` est pris **du body** de la requête et utilisé directement pour la décision (`< 60` = échec). Le serveur ne recalcule **jamais** rien. Un attaquant intercepte la requête, met `biometricScore: 99.9`, et tout dossier passe "Vérifié" sans la moindre photo. **Ça invalide la valeur probante de TOUS les badges "Vérifié" de la plateforme.**
 
 #### C3. Aucune détection de vivacité (liveness) *(TON INTUITION — 100% CORRECTE)*
 Le selfie est un **upload de fichier** (`selfieInputRef`, `handleFileChange`), pas une capture caméra live. Donc on peut uploader une **photo LinkedIn/Facebook** de la cible et passer la vérification. Aucune preuve que la personne était physiquement présente et vivante. C'est LE standard n°1 chez Sumsub/Onfido/Veriff/Persona. (Détails et plan complet en section dédiée plus bas.)
-
-*(Confirmation supplémentaire — passe de documentation, commits `91d2345`→`0b6eaaf`) :* aucune trace de `getUserMedia`/`<video>` nulle part dans le code — la capture caméra live n'existe à aucun stade. Pire, l'écran de décision agent affiche cette photo uploadée sous le libellé **« Live Selfie »**, un libellé trompeur qui fait croire (à l'agent, et dans un audit externe) qu'une preuve de vie a été apportée alors qu'il ne s'agit que d'un fichier importé. **Fix rapide indépendant du gros chantier liveness :** renommer ce libellé (ex. « Uploaded Selfie ») en attendant l'implémentation réelle — 5 minutes de travail qui évitent de mentir involontairement sur la fiabilité du contrôle.
 
 ---
 
@@ -84,14 +102,18 @@ Le selfie est un **upload de fichier** (`selfieInputRef`, `handleFileChange`), p
 #### H4. Aucun rate limiting nulle part *(TOUJOURS OUVERT)*
 Confirmé : zéro rate limiting sur login, register, envoi OTP, vérification OTP, chat, passkey-login. Conséquences : brute-force (H1), spam d'emails OTP (email bombing + coût), abus du chat (C1), énumération de comptes. **Fix global :** `@upstash/ratelimit` + Upstash Redis (gratuit, compatible Vercel).
 
-#### H5. Injection HTML dans les emails *(A4 PAS ENCORE FAIT)*
-`lib/mail.ts` : `${name}`, `${customerName}`, `${actionBy}` interpolés bruts dans le HTML sur 5+ templates, sans échappement. Un `customerName` contenant du HTML/JS malveillant part dans un email signé depuis ton domaine → phishing utilisant ta réputation. **Fix :** fonction `escapeHtml()` appliquée à toute donnée utilisateur.
+#### ~~H5. Injection HTML dans les emails~~ — ✅ **RÉSOLU** (commit `301c192`)
+Fonction `escapeHtml()` ajoutée dans `lib/mail.ts`, appliquée à toutes les valeurs d'origine utilisateur. Décision documentée : le *sujet* de l'email n'est volontairement pas échappé (un sujet est du texte brut, jamais interprété comme du HTML).
+
+#### H7. Le pipeline KYC ne tient pas dans une fonction serverless *(🆕 DÉCOUVERT AU DÉPLOIEMENT)*
+En production, la création d'un dossier restait bloquée à l'infini sur « Analyzing AI Risk… ». Cause : `POST /api/customers` exécute **synchroniquement** l'OCR Tesseract 3 langues (téléchargement des modèles à froid + analyse sur 2 cœurs) puis l'appel OpenSanctions — bien au-delà de la limite de 10 s du plan Hobby, donc la fonction était tuée sans jamais répondre.
+
+**Correctif appliqué (temporaire) :** `export const maxDuration = 60`, `AbortSignal.timeout(8000)` sur OpenSanctions, et `Promise.race` de 35 s sur l'OCR (échec propre → revue manuelle plutôt que blocage).
+
+**⚠️ C'est un pansement, pas une solution.** Le plafond de 60 s reste atteignable sur un cold start, et l'utilisateur attend jusqu'à une minute devant un écran figé. La vraie correction est le **pipeline asynchrone de la Phase C** : réponse immédiate en statut `processing` → traitement en tâche de fond → mise à jour temps réel. Cette découverte rend cet item **nettement plus prioritaire** qu'estimé initialement.
 
 #### H6. Clés API stockées en clair + inutilisables *(TOUJOURS OUVERT)*
 `apikeys/route.ts` : `key: rawApiKey` — la clé complète `tv_live_...` est stockée telle quelle. Une fuite de base = toutes les clés clients exposées. De plus, **aucun endpoint n'accepte ces clés en entrée** : elles ne servent à rien (pas de vraie API B2B). **Fix :** stocker un hash SHA-256 + préfixe affichable, et créer l'endpoint public authentifié par clé.
-
-#### H7. IDOR sur `DELETE /api/settings/security/sessions` *(NOUVELLE DÉCOUVERTE — passe de documentation)*
-La route ne vérifie pas que la session ciblée par l'ID reçu appartient à l'appelant (ni même à son entreprise). **N'importe quel utilisateur connecté — potentiellement d'une entreprise différente — peut donc déconnecter de force la session de n'importe qui d'autre** en devinant/énumérant un ID de session. C'est le même type de rupture de cloisonnement multi-tenant que l'IDOR déjà corrigé sur `customers/[id]` (voir "CE QUI EST CORRIGÉ ET SOLIDE" plus haut), mais ici sur les sessions : un vecteur de déni de service ciblé (éjecter un admin en pleine action, empêcher un agent de se reconnecter). Classé Haute plutôt que Critique car l'impact reste une déconnexion forcée, pas une fuite de données KYC. **Fix :** filtrer le `where` Prisma par `userId: guard.userId` dérivé de la session serveur — jamais par le seul ID reçu du client.
 
 ---
 
@@ -122,11 +144,6 @@ Le champ existe dans le schéma mais rien ne le remplit. Un utilisateur qui perd
 - **B5.** Incohérence taille fichier : client 5 Mo vs uploadthing serveur 4 Mo.
 - **B6.** `console.log` de données personnelles (CIN, emails) → logging structuré `pino` avec redaction.
 - **B7.** Boucle N+1 dans `dashboard/stats` (14 requêtes séquentielles → 1 agrégat).
-- **B8.** *(passe de documentation)* Liens/boutons morts sur la landing page : "Start Free Trial", le menu hamburger mobile, les ancres `#solutions`/`#pricing`/`#resources` — aucun n'est câblé.
-- **B9.** *(passe de documentation)* Pages référencées mais inexistantes : `/forgot-password`, `/privacy-policy`, `/terms-of-service` — 404 garantie si un lien y mène un jour.
-- **B10.** *(passe de documentation)* Barre de recherche du header principal (`header.tsx`) purement décorative — pas de `value`/`onChange` (celle de l'annuaire clients, elle, fonctionne réellement).
-- **B11.** *(passe de documentation)* Icône "Eye" sur les clés API et bouton "Contact Sales" — sans handler, décoratifs.
-- **B12.** *(passe de documentation)* Incohérences frontend ⟷ backend : le filtre "1y" du sélecteur dashboard n'est reconnu par aucune branche de l'API (retombe silencieusement sur 30 jours) ; `trends.pendingDelta` est lu côté client mais jamais renvoyé par l'API ; le badge "Security Standard: SHA-256 / Bcrypt" affiche un algorithme (SHA-256) qui n'est en réalité pas utilisé (seul bcrypt l'est) ; `SecurSetting.tsx` affiche un faux fallback de session codé en dur ("Windows 11 Workstation") au lieu de gérer proprement l'absence de données réelles.
 
 ---
 
@@ -170,62 +187,58 @@ Tu as raison sur le liveness, et il y a d'autres upgrades majeurs. Voici tout, p
 
 ## 🗺️ ROADMAP COMPLÈTE ACTUALISÉE
 
-### ⚡ ORDRE CHRONOLOGIQUE EXACT (avec le point de déploiement démo)
+### ⚡ OÙ ON EN EST — ET LA SUITE
 
-Objectif : déployer le plus vite possible une **preview publique** pour la montrer à ton encadrant sans captures d'écran, puis continuer à corriger en étant déployé.
+**✅ FAIT (22/07/2026) :** Phase A complète + déploiement production réussi + smoke test validé. L'URL est prête à être montrée à l'encadrant.
 
-**🟢 AVANT DE DÉPLOYER (obligatoire, ~1-2h) — PHASE 0 :**
-1. ~~**Sécuriser `/api/chat`**~~ ✅ **FAIT** (auth RBAC + modèle corrigé + validation Zod + system prompt — code modifié, commit en attente). Protège ton budget Gemini ET fait marcher le chat dans la démo.
-2. **Corriger l'IDOR sur `DELETE /api/settings/security/sessions`** *(nouveau, trouvé pendant la passe de documentation)* — filtrer par `userId`/`companyId` de la session serveur, pas par l'ID brut envoyé par le client.
-3. **Mettre un plafond de dépenses** sur ton compte Google AI / Gemini (filet de sécurité de 5 min, au cas où).
-4. **Confirmer que `npm run build` passe** en local (Vercel refuse un build cassé).
-5. **Configurer TOUTES les variables d'env sur Vercel**, en particulier :
-   - `WEBAUTHN_RPID` = ton domaine Vercel (ex: `ton-app.vercel.app`) — sinon les passkeys cassent
-   - `WEBAUTHN_ORIGIN` = `https://ton-app.vercel.app`
-   - `NEXTAUTH_URL` = `https://ton-app.vercel.app`
-   - `NEXTAUTH_SECRET` (généré, obligatoire en prod)
-   - `DATABASE_URL` en mode pooler (Supabase port 6543)
-   - `CRON_SECRET`, clés Stripe, Supabase, `EMAIL_*`, `GEMINI_API_KEY`, `OPENSANCTIONS_API_KEY`
+**🔜 ORDRE DE REPRISE :**
+1. **Nettoyage immédiat (5 min)** — purger les dossiers de test contenant de vraies données personnelles (cf. faille C4).
+2. **Phase B — Durcissement sécurité** ← *on commence ici demain*
+3. **Phase C — Liveness & biométrie serveur** (inclut le pipeline asynchrone, devenu prioritaire suite à H7)
+4. **Phase D → H** (API B2B, tests/CI, observabilité, i18n, différenciateurs)
 
-**🚀 DÉPLOIEMENT (le jour même) :**
-6. **Déployer sur Vercel** (push sur `master` → déploiement auto, ou bouton Deploy).
-7. **Smoke test de l'URL déployée** : inscription (OTP), login, création d'un dossier de vérification (avec des **données de test, pas de vraies personnes**), navigation dashboard. Corriger les bugs d'environnement réel qui apparaissent.
-8. **→ Montrer à ton encadrant.** ✅
+> ⚠️ **Règle d'or maintenue :** pas de vraies données personnelles (vrais CIN, vrais selfies) dans la version déployée tant que la Phase B + le contrôle d'accès aux fichiers (C4) + la base légale RGPD ne sont pas faits. Les documents sont actuellement sur des URLs publiques.
 
-**🟠 APRÈS LE DÉPLOIEMENT (itérations, dans cet ordre) :**
-9. A4 — Échapper le HTML des emails.
-10. Phase B complète (rate limiting, chiffrement TOTP, backup codes, headers de sécurité, anti-énumération, OTP crypto).
-11. Phase C — Liveness & biométrie serveur (le gros morceau produit).
-12. Phases D → H (API B2B, tests/CI, observabilité, i18n, différenciateurs).
-
-> ⚠️ **Règle d'or pour la démo :** ne mets **jamais de vraies données personnelles** (vrais CIN, vrais selfies de vraies personnes) dans la version déployée tant que la Phase B + la base légale RGPD ne sont pas faites. Utilise des données de test. Ça garde la démo hors de tout risque juridique.
+### 📌 CONFIGURATION DE PRODUCTION — À NE PAS RECASSER
+Notes acquises pendant le déploiement, pour ne pas refaire les mêmes erreurs :
+- `lightningcss-win32-x64-msvc` doit rester dans `optionalDependencies` (jamais `devDependencies` → casse le build Linux).
+- Le script de build **doit** être `prisma generate && next build` (sinon les types Prisma sont absents sur Vercel).
+- `WEBAUTHN_RPID` = domaine **nu** (`kyc-project-seven.vercel.app`), sans `https://`.
+- Tester toujours sur le domaine stable, jamais sur l'URL de déploiement à identifiant aléatoire (les passkeys y échouent).
+- Le `STRIPE_WEBHOOK_SECRET` de production est **différent** de celui du CLI local.
+- Chaque `git push` sur `master` redéploie automatiquement.
 
 ---
 
-### ✅ PHASE A — Colmatage avant déploiement (presque finie)
+### ✅ PHASE A — TERMINÉE ✅
 - [x] Supprimer `/api/fix-scores`
 - [x] Protéger le cron avec `CRON_SECRET`
 - [x] Corriger le bug Zod (`.issues`)
 - [x] Créer `.env.example`
-- [x] **A6 — Sécuriser `/api/chat`** (auth RBAC + fix modèle + validation Zod + system prompt) — code modifié 2026-07-20, **commit en attente**. Rate limiting exclu du scope, reste sous H4.
-- [ ] **A4 — Échapper le HTML des emails** (`lib/mail.ts`) ← *reste à faire*
-- [ ] **A7 — Corriger l'IDOR sur `DELETE /api/settings/security/sessions`** (H7, nouveau — passe de documentation) ← *filtrer par `userId` de la session serveur*
-- [ ] A5 — Tester le flux 2FA de bout en bout avec un vrai authenticator (manuel, ton téléphone)
+- [x] **A4 — Échapper le HTML des emails** (`lib/mail.ts`)
+- [x] **A6 — Sécuriser `/api/chat`** (auth + validation + system prompt)
+- [x] **A5 — Tester le flux 2FA** de bout en bout avec un vrai authenticator
+- [x] **Déploiement production** + smoke test validé
 
-### 🟠 PHASE B — Durcissement sécurité
-- [ ] Chiffrer `totpSecret` au repos (AES-256-GCM)
-- [ ] Générer + hasher les `backupCodes` à l'activation 2FA
-- [ ] Rate limiting global (`@upstash/ratelimit`) : login, register, OTP, chat, passkey-login
-- [ ] OTP via `crypto.randomInt` (pas `Math.random`)
-- [ ] Compteur de tentatives OTP (blocage après 5 échecs)
-- [ ] Anti-énumération (register, passkey-login) : réponses uniformes
-- [ ] Headers de sécurité dans `next.config.ts` (CSP, HSTS, etc.)
-- [ ] Validation MIME + taille avatar (rejeter SVG)
-- [ ] TTL sur le challenge WebAuthn
-- [ ] Cas compte Google-only sur le changement de mot de passe
-- [ ] Timeout + fail-closed sur OpenSanctions
+### 🟠 PHASE B — Durcissement sécurité ← **ON COMMENCE ICI**
+
+**Ordre suggéré (du plus critique au moins urgent) :**
+- [ ] **1. Chiffrer `totpSecret` au repos** (AES-256-GCM, clé en variable d'env) — fichier : `app/api/settings/security/totp/verify/route.ts`
+- [ ] **2. Générer + hasher les `backupCodes`** à l'activation 2FA — *priorité rehaussée : lock-out vécu en conditions réelles pendant le smoke test*
+- [ ] **3. Rate limiting global** (`@upstash/ratelimit` + Upstash Redis) : login, register, OTP, chat, passkey-login
+- [ ] **4. Compteur de tentatives OTP** (blocage après 5 échecs) — sans ça, un code à 6 chiffres est brute-forçable
+- [ ] **5. OTP via `crypto.randomInt`** (pas `Math.random`, prédictible)
+- [ ] 6. Headers de sécurité dans `next.config.ts` (CSP, HSTS, X-Frame-Options, etc.)
+- [ ] 7. Anti-énumération (register, passkey-login) : réponses uniformes
+- [ ] 8. **Contrôle d'accès aux documents KYC** (faille C4) — ACL uploadthing ou migration vers signed URLs
+- [ ] 9. Validation MIME + taille avatar (rejeter `image/svg+xml`)
+- [ ] 10. TTL sur le challenge WebAuthn
+- [ ] 11. Cas compte Google-only sur le changement de mot de passe
+- [x] ~~Timeout sur OpenSanctions~~ — fait pendant le déploiement (`AbortSignal.timeout(8000)`)
+- [ ] 12. Fail-closed sur OpenSanctions (revue manuelle au lieu de la liste de mots en dur)
 
 ### 🎥 PHASE C — Liveness & biométrie (LE gros morceau — priorité produit)
+- [ ] **Pipeline KYC asynchrone** (statut `processing` → job de fond → notification temps réel) — *priorité rehaussée suite à la faille H7 : le `maxDuration=60` actuel n'est qu'un pansement*
 - [ ] Capture caméra live (`getUserMedia`)
 - [ ] Liveness actif challenge-response (landmarks + expressions `face-api.js`)
 - [ ] Recalcul du score biométrique côté serveur
@@ -275,10 +288,9 @@ Objectif : déployer le plus vite possible une **preview publique** pour la mont
 
 ## 🚀 PRÊT À ÊTRE DÉPLOYÉ ?
 
-**En preview/staging pour itérer : presque.** Il te reste ces points rapides avant :
-1. ~~**Sécuriser `/api/chat`**~~ ✅ **FAIT** (C1/A6) — code corrigé, reste à committer.
+**En preview/staging pour itérer : presque.** Il te reste 2 choses rapides avant :
+1. **Sécuriser `/api/chat`** (C1/A6) — sinon un crawler peut drainer ton budget Gemini dès le déploiement.
 2. **Échapper le HTML des emails** (A4).
-3. **Corriger l'IDOR sur `DELETE /api/settings/security/sessions`** (H7, nouveau) — sinon n'importe quel compte connecté peut déconnecter n'importe quel autre utilisateur, même d'une autre entreprise.
 
 Après ça, tu peux déployer en preview sans risque majeur et itérer.
 
@@ -286,8 +298,4 @@ Après ça, tu peux déployer en preview sans risque majeur et itérer.
 
 ---
 
-*Audit V3 — relecture intégrale de `Rounatto/kyc` au commit `5009a71` (105 commits, 28 routes API, chaque fichier lu ligne par ligne). Chaque point est ancré dans un fichier précis. Nouvelles découvertes de cette passe : `/api/chat` non authentifié (C1), OTP via `Math.random` (H2), absence confirmée de headers de sécurité (M1).*
-
----
-
-**📌 Addendum (2026-07-20)** — passe de documentation (62 fichiers commentés, ~9 300 lignes, commits `91d2345`→`0b6eaaf`, `npm run build` vert avant chaque commit) : nouvelle découverte critique côté isolation multi-tenant (IDOR sur les sessions, H7), confirmation terrain du gap liveness (mislabeling "Live Selfie", ajouté à C3), et une série d'incohérences UI/frontend-backend mineures (B8-B12). `/api/chat` (C1) corrigé dans la foulée par une autre session — RBAC, modèle valide, validation Zod, plus de fuite d'erreur ; rate limiting toujours hors scope.
+*Roadmap mise à jour le 22 juillet 2026 après la clôture de la Phase A et le premier déploiement en production. Basée sur la relecture intégrale de `Rounatto/kyc` (105+ commits, 28 routes API, chaque fichier lu). Nouvelles failles identifiées lors de la mise en production : C4 (documents KYC sur URLs publiques) et H7 (pipeline OCR incompatible avec les limites serverless). Prochaine étape : Phase B — durcissement sécurité.*
