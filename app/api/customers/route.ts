@@ -29,6 +29,16 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
 
+// 🆕 [FIX PROD] Durée max d'exécution de cette fonction sur Vercel.
+// Sans cette ligne, le plan Hobby coupe la fonction à 10 secondes — or l'OCR
+// Tesseract (3 langues, téléchargement des modèles + analyse) dépasse
+// largement ce délai, ce qui laissait le formulaire bloqué indéfiniment sur
+// "Analyzing AI Risk..." en production alors que tout marchait en local.
+// 60s est le maximum autorisé sur le plan Hobby.
+// ⚠️ Solution temporaire : la vraie correction est de sortir l'OCR et le
+// screening du cycle requête/réponse (roadmap Phase C — pipeline asynchrone).
+export const maxDuration = 60;
+
 // Le body accepté à la création d'un dossier KYC. idCardUrl/selfieUrl pointent
 // vers des fichiers déjà uploadés sur Uploadthing (voir api/uploadthing/core.ts) —
 // cette route ne reçoit que les URLs, pas les fichiers eux-mêmes.
@@ -74,11 +84,13 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
     try {
         const apiKey = process.env.OPENSANCTIONS_API_KEY;
 
-        // ⚠️ Pas de timeout configuré sur ce fetch : si OpenSanctions répond
-        // lentement, toute la création du dossier KYC (POST ci-dessous) reste
-        // bloquée en attente. Un AbortController avec un délai serait plus sûr.
         const response = await fetch("https://api.opensanctions.org/match/default", {
             method: "POST",
+            // 🆕 [FIX PROD] Abandon au bout de 8 secondes. Sans ce garde-fou, une
+            // API OpenSanctions lente bloquait toute la création du dossier
+            // jusqu'à la mort de la fonction serverless. Le `catch` en dessous
+            // bascule automatiquement sur la liste locale de repli.
+            signal: AbortSignal.timeout(8000),
             headers: {
                 "Content-Type": "application/json",
                 ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
@@ -325,7 +337,23 @@ export async function POST(req: Request) {
 
         try {
             if (idCardUrl && idCardUrl.trim() !== "") {
-                const { data } = await Tesseract.recognize(idCardUrl, 'eng+fra+ara');
+                // 🆕 [FIX PROD] Course entre l'OCR et un chronomètre de 35 secondes.
+                // Sur Vercel, Tesseract doit télécharger ses modèles de langue à
+                // froid (l'arabe est volumineux) puis analyser sur 2 cœurs — ça
+                // pouvait dépasser la limite de la fonction et laisser l'utilisateur
+                // bloqué à l'infini. Si le délai est dépassé, la promesse est
+                // rejetée, le `catch` juste en dessous passe `ocrFailed = true`,
+                // et le dossier est créé normalement mais marqué pour revue
+                // manuelle. Mieux vaut un dossier créé et signalé qu'un formulaire
+                // figé. Le budget de 35s laisse ~25s pour le reste du pipeline
+                // (AML, moteur de règles, écritures Prisma) sous le plafond de 60s.
+                const OCR_TIMEOUT_MS = 35000;
+                const { data } = await Promise.race([
+                    Tesseract.recognize(idCardUrl, 'eng+fra+ara'),
+                    new Promise<never>((_, reject) =>
+                        setTimeout(() => reject(new Error("OCR timeout")), OCR_TIMEOUT_MS)
+                    ),
+                ]);
                 ocrText = data.text.toLowerCase();
 
                 const nameParts = String(customerName).toLowerCase().split(" ");
