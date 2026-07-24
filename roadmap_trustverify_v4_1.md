@@ -4,9 +4,9 @@
 
 ---
 
-## 🎯 DEMAIN, ON COMMENCE ICI
+## 🎯 ON EN EST ICI
 
-**→ PHASE B — Durcissement sécurité.** Premier fichier à traiter : `app/api/settings/security/totp/verify/route.ts` (chiffrement du secret TOTP), puis les backup codes, puis le rate limiting.
+**→ PHASE B — Durcissement sécurité.** Étape 1 (chiffrement du secret TOTP) faite. **Prochaine : étape 2 — rendre « Remember me » fonctionnel** (`app/api/auth/[...nextauth]/route.ts` + `app/login/page.tsx`), puis le rate limiting.
 
 Méthode de travail : tu envoies le fichier → je le rends complet, commenté (`// 🆕`) et expliqué.
 
@@ -220,22 +220,24 @@ Notes acquises pendant le déploiement, pour ne pas refaire les mêmes erreurs :
 - [x] **A5 — Tester le flux 2FA** de bout en bout avec un vrai authenticator
 - [x] **Déploiement production** + smoke test validé
 
-### 🟠 PHASE B — Durcissement sécurité ← **ON COMMENCE ICI**
+### 🟠 PHASE B — Durcissement sécurité ← **EN COURS**
 
-**Ordre suggéré (du plus critique au moins urgent) :**
-- [ ] **1. Chiffrer `totpSecret` au repos** (AES-256-GCM, clé en variable d'env) — fichier : `app/api/settings/security/totp/verify/route.ts`
-- [ ] **2. Générer + hasher les `backupCodes`** à l'activation 2FA — *priorité rehaussée : lock-out vécu en conditions réelles pendant le smoke test*
+**Ordre corrigé le 23/07/2026.** Correction assumée : les backup codes étaient initialement en position 2, priorisés après le lock-out 2FA vécu en conditions réelles. C'était une erreur de jugement — le rate limiting le précède, car c'est la seule faille de cette liste **exploitable à distance dès maintenant** sur l'URL publique. Les backup codes relèvent de l'utilisabilité (charge support), pas d'un vecteur d'attaque.
+
+- [x] **1. Chiffrer `totpSecret` au repos** (AES-256-GCM, `lib/crypto.ts` + migration opportuniste au login)
+- [ ] **2. Rendre « Remember me » fonctionnel** — 🆕 *absent de la roadmap initiale, découvert le 22/07.* La case est décorative : `rememberMe` est bien transmis du client jusqu'à `authorize`, mais **jamais lu par le callback `jwt`**, et `session.maxAge` est figé à 15 jours pour tout le monde. Fix rapide (~10 min), même fichier que l'étape 1.
 - [ ] **3. Rate limiting global** (`@upstash/ratelimit` + Upstash Redis) : login, register, OTP, chat, passkey-login
-- [ ] **4. Compteur de tentatives OTP** (blocage après 5 échecs) — sans ça, un code à 6 chiffres est brute-forçable
-- [ ] **5. OTP via `crypto.randomInt`** (pas `Math.random`, prédictible)
-- [ ] 6. Headers de sécurité dans `next.config.ts` (CSP, HSTS, X-Frame-Options, etc.)
-- [ ] 7. Anti-énumération (register, passkey-login) : réponses uniformes
-- [ ] 8. **Contrôle d'accès aux documents KYC** (faille C4) — ACL uploadthing ou migration vers signed URLs
-- [ ] 9. Validation MIME + taille avatar (rejeter `image/svg+xml`)
-- [ ] 10. TTL sur le challenge WebAuthn
-- [ ] 11. Cas compte Google-only sur le changement de mot de passe
+- [ ] **4. Compteur de tentatives OTP** (blocage après 5 échecs) — sans ça, un code à 6 chiffres reste brute-forçable pendant ses 10 min de validité
+- [ ] **5. Générer + hasher les `backupCodes`** à l'activation 2FA — champ présent au schéma mais **jamais utilisé** dans le code ; lock-out vécu en conditions réelles le 22/07
+- [ ] 6. OTP via `crypto.randomInt` (pas `Math.random`, prédictible)
+- [ ] 7. Headers de sécurité dans `next.config.ts` (CSP, HSTS, X-Frame-Options, etc.)
+- [ ] 8. Anti-énumération (register, passkey-login) : réponses uniformes
+- [ ] 9. **Contrôle d'accès aux documents KYC** (faille C4) — ACL uploadthing ou migration vers signed URLs
+- [ ] 10. Validation MIME + taille avatar (rejeter `image/svg+xml`)
+- [ ] 11. TTL sur le challenge WebAuthn
+- [ ] 12. Cas compte Google-only sur le changement de mot de passe
 - [x] ~~Timeout sur OpenSanctions~~ — fait pendant le déploiement (`AbortSignal.timeout(8000)`)
-- [ ] 12. Fail-closed sur OpenSanctions (revue manuelle au lieu de la liste de mots en dur)
+- [ ] 13. Fail-closed sur OpenSanctions (revue manuelle au lieu de la liste de mots en dur)
 
 ### 🎥 PHASE C — Liveness & biométrie (LE gros morceau — priorité produit)
 - [ ] **Pipeline KYC asynchrone** (statut `processing` → job de fond → notification temps réel) — *priorité rehaussée suite à la faille H7 : le `maxDuration=60` actuel n'est qu'un pansement*

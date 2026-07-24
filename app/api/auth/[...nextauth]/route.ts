@@ -22,6 +22,32 @@ import { logSecurityEvent } from "@/lib/logger"; // Piste d'audit : chaque login
 // 🆕 [PHASE B] Déchiffrement du secret TOTP stocké en base (AES-256-GCM).
 import { decrypt, encrypt, isEncrypted } from "@/lib/crypto";
 
+// ============================================================================
+// 🆕 [PHASE B] DURÉES DE SESSION — LE "REMEMBER ME" RENDU FONCTIONNEL
+// ============================================================================
+// Avant ce correctif, la case "Remember for 15 days" du formulaire de login
+// était purement décorative : la valeur `rememberMe` était bien transmise du
+// navigateur jusqu'à `authorize()`, mais AUCUN callback ne la lisait ensuite,
+// et `session.maxAge` imposait 15 jours à tout le monde — que la case soit
+// cochée ou non. La promesse faite à l'utilisateur était donc fausse.
+//
+// ⚠️ CONTRAINTE TECHNIQUE À CONNAÎTRE : NextAuth v4 ne sait pas faire varier
+// la durée de session par utilisateur.
+//   - `session.maxAge` est une constante de configuration, lue une seule fois
+//     au démarrage : impossible de la personnaliser à la volée.
+//   - Surcharger `token.exp` dans le callback `jwt` ne sert à rien non plus :
+//     au moment d'encoder le token, NextAuth écrase ce champ avec sa propre
+//     valeur dérivée de `maxAge`.
+//
+// La parade : on gère NOTRE PROPRE date d'expiration dans un champ maison
+// (`sessionExpiry`) que NextAuth ignore, et on la vérifie nous-mêmes à chaque
+// passage dans le callback `jwt`. `session.maxAge` reste réglé sur la durée
+// LA PLUS LONGUE possible (15 jours) : c'est lui qui détermine la durée de vie
+// du cookie, et il doit donc couvrir le pire cas. C'est notre vérification
+// interne qui coupe plus tôt quand la case n'est pas cochée.
+const SESSION_MAX_AGE_SECONDS = 15 * 24 * 60 * 60;      // 15 jours — case cochée
+const SESSION_DEFAULT_AGE_SECONDS = 24 * 60 * 60;       // 24 heures — case non cochée
+
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
@@ -99,7 +125,16 @@ export const authOptions: NextAuthOptions = {
                     });
                 }
 
-                return { id: user.id, email: user.email, name: user.fullName, image: user.avatarUrl, companyId: authUser.companyId, role: authUser.role };
+                // 🆕 [PHASE B] `rememberMe` ajouté ici aussi : le formulaire de
+                // login envoie la case cochée quel que soit le mode choisi, il
+                // n'y a donc aucune raison qu'une connexion par passkey ignore
+                // le choix de l'utilisateur alors qu'une connexion par mot de
+                // passe le respecte.
+                return { 
+                    id: user.id, email: user.email, name: user.fullName, image: user.avatarUrl, 
+                    companyId: authUser.companyId, role: authUser.role,
+                    rememberMe: credentials.rememberMe === "true"
+                };
             }
             return null;
         }
@@ -211,7 +246,11 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
     })
   ],
-  session: { strategy: "jwt" as const, maxAge: 15 * 24 * 60 * 60 },
+  // 🆕 [PHASE B] `maxAge` reste sur la durée LA PLUS LONGUE (15 jours) : cette
+  // valeur pilote la durée de vie du cookie de session, elle doit donc couvrir
+  // le cas "Remember me coché". La coupure anticipée pour les sessions courtes
+  // est assurée par le champ `sessionExpiry` géré dans le callback `jwt`.
+  session: { strategy: "jwt" as const, maxAge: SESSION_MAX_AGE_SECONDS },
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
@@ -264,6 +303,41 @@ export const authOptions: NextAuthOptions = {
     // changement d'avatar dans les Settings, sans obliger l'utilisateur à se
     // reconnecter).
     async jwt({ token, user, trigger, session, account }) {
+    // 🆕 [PHASE B] Horodatage courant en SECONDES (et non en millisecondes) :
+    // c'est l'unité des timestamps standard d'un JWT, on s'y aligne.
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+
+    // 🆕 [PHASE B] ÉTAPE 1 — À LA CONNEXION : on fige la date de fin de session
+    // Ce bloc ne s'exécute qu'au moment du login (`user` n'est défini que là).
+    // On lit le choix de l'utilisateur et on calcule une date d'expiration
+    // ABSOLUE, stockée dans le token. Elle ne bougera plus ensuite : la session
+    // ne se prolonge donc pas indéfiniment tant que l'utilisateur reste actif.
+    if (user) {
+        const isCredentialsLogin = account?.provider === "credentials";
+
+        // Pour une connexion Google, il n'existe pas de case à cocher dans le
+        // flux OAuth : on ne peut donc pas connaître le souhait de l'utilisateur.
+        // On applique la durée longue, ce qui correspond au comportement en
+        // place avant ce correctif (aucune régression pour les comptes Google).
+        const wantsLongSession = isCredentialsLogin
+            ? (user as any).rememberMe === true
+            : true;
+
+        (token as any).sessionExpiry =
+            nowInSeconds + (wantsLongSession ? SESSION_MAX_AGE_SECONDS : SESSION_DEFAULT_AGE_SECONDS);
+    }
+
+    // 🆕 [PHASE B] ÉTAPE 2 — À CHAQUE REQUÊTE : on fait respecter cette date
+    // NextAuth ne connaît pas notre champ `sessionExpiry`, c'est donc à nous de
+    // le vérifier. Passé le délai, on renvoie un token VIDE : le callback
+    // `session` juste en dessous ne trouvera plus d'`id` à recopier, la session
+    // sera donc inexploitable et `enforceRole` rejettera toutes les requêtes
+    // protégées avec un 401.
+    const sessionExpiry = (token as any).sessionExpiry as number | undefined;
+    if (sessionExpiry && nowInSeconds > sessionExpiry) {
+        return {};
+    }
+
     if (account || user) {
         const dbUser = await prisma.user.findUnique({
         where: { email: token.email as string },
@@ -285,6 +359,13 @@ export const authOptions: NextAuthOptions = {
     return token;
     },
     async session({ session, token }) {
+    // 🆕 [PHASE B] Garde-fou : si le token a été vidé par l'expiration ci-dessus,
+    // il n'a plus d'`id`. On sort sans rien recopier, pour ne pas produire une
+    // session à moitié remplie qui pourrait tromper un appelant peu regardant.
+    if (!token?.id) {
+        return session;
+    }
+
     if (token && session.user) {
         session.user.id = token.id as string; session.user.name = token.name; session.user.image = token.image as string;
         (session.user as any).companyId = token.companyId as string; (session.user as any).role = token.role as string;
