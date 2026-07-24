@@ -19,6 +19,8 @@ import bcrypt from "bcryptjs";
 import { verifyAuthenticationResponse } from "@simplewebauthn/server";
 import { verifySync } from "otplib"; // Vérifie un code TOTP de façon synchrone (pas d'appel réseau)
 import { logSecurityEvent } from "@/lib/logger"; // Piste d'audit : chaque login réussi/échoué est tracé
+// 🆕 [PHASE B] Déchiffrement du secret TOTP stocké en base (AES-256-GCM).
+import { decrypt, encrypt, isEncrypted } from "@/lib/crypto";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -114,9 +116,32 @@ export const authOptions: NextAuthOptions = {
                 if (!credentials.totpCode) throw new Error("2FA_REQUIRED");
                 if (!authUser.totpSecret) throw new Error("Erreur de configuration 2FA");
 
+                // 🆕 [PHASE B] DÉCHIFFREMENT DU SECRET AVANT VÉRIFICATION
+                // Le secret est désormais stocké chiffré (AES-256-GCM). otplib a
+                // besoin de la valeur en clair pour recalculer le code attendu,
+                // on le déchiffre donc ici, en mémoire, juste le temps du calcul.
+                //
+                // 🔁 RÉTROCOMPATIBILITÉ : decrypt() renvoie la valeur telle quelle
+                // si elle n'est pas au format chiffré — les comptes dont la 2FA a
+                // été activée AVANT ce correctif continuent donc de fonctionner
+                // sans aucune intervention.
+                //
+                // 🔒 FAIL-CLOSED : si le déchiffrement échoue (clé changée, donnée
+                // corrompue, tag d'authentification invalide), on REFUSE la
+                // connexion. On ne laisse jamais passer un login en "sautant" la
+                // 2FA sous prétexte qu'on n'a pas pu lire le secret — ce serait
+                // exactement le contraire du but recherché.
+                let decryptedSecret: string;
+                try {
+                    decryptedSecret = decrypt(authUser.totpSecret);
+                } catch (cryptoError) {
+                    console.error("[2FA] Impossible de déchiffrer le secret TOTP :", cryptoError);
+                    throw new Error("Erreur de configuration 2FA");
+                }
+
                 const { valid: isValidTotp } = verifySync({
                   token: credentials.totpCode,
-                  secret: authUser.totpSecret,
+                  secret: decryptedSecret,
                 });
 
                 if (!isValidTotp) {
@@ -130,6 +155,33 @@ export const authOptions: NextAuthOptions = {
                         });
                     }
                     throw new Error("INVALID_2FA_CODE"); 
+                }
+
+                // 🆕 [PHASE B] MIGRATION OPPORTUNISTE DES ANCIENS SECRETS
+                // Le code 2FA vient d'être validé, donc le secret déchiffré est
+                // forcément correct. Si ce secret était encore stocké en clair
+                // (compte créé avant ce correctif), on profite de ce moment pour
+                // le rechiffrer silencieusement en base.
+                //
+                // Pourquoi ici et pas dans un script de migration : ça migre les
+                // comptes au fil de l'eau, sans downtime, sans manipuler la base
+                // à la main, et sans risque de bloquer un utilisateur (on ne
+                // rechiffre QUE des secrets dont on vient de prouver la validité).
+                // Une fois tous les comptes passés, la tolérance au clair dans
+                // decrypt() pourra être retirée.
+                if (!isEncrypted(authUser.totpSecret)) {
+                    try {
+                        await prisma.user.update({
+                            where: { id: user.id },
+                            data: { totpSecret: encrypt(decryptedSecret) }
+                        });
+                        console.log(`🔐 [2FA] Secret TOTP migré vers le chiffrement pour : ${user.email}`);
+                    } catch (migrationError) {
+                        // Échec non bloquant : la connexion est déjà validée, on ne
+                        // pénalise pas l'utilisateur pour une migration ratée. Le
+                        // prochain login retentera.
+                        console.error("[2FA] Échec de la migration du secret :", migrationError);
+                    }
                 }
             }
 

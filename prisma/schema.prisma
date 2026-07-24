@@ -82,8 +82,7 @@ model User {
   passkeys             Passkey[]
   
   // 📱 2FA TOTP
-  // ⚠️ totpSecret est stocké EN CLAIR (pas chiffré) — voir roadmap Phase B pour
-  // le chiffrement AES-256-GCM à ajouter avant tout déploiement avec vraies données.
+  // ⚠️ totpSecret n'est plus stocké EN CLAIR (chiffré)
   // backupCodes existe dans le schéma mais rien ne le génère actuellement côté API.
   totpEnabled          Boolean               @default(false)
   totpSecret           String?
