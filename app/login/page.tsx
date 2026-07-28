@@ -164,10 +164,22 @@ export default function Login() {
         <div className="flex min-h-screen w-full flex-col justify-between items-center py-3 bg-gray-100">
             <div className="flex flex-row w-full justify-between items-center px-8">
                 <h1 className="text-xl font-bold text-blue-700">TrustVerify</h1>
-                {/* Icône d'aide statique : curseur "pointer" mais aucun onClick/href */}
-                <span className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg">
+                {/* 🆕 L'icône d'aide était visuellement cliquable (cursor-pointer)
+                    mais n'avait aucune action — un faux bouton. Elle ouvre
+                    maintenant une fenêtre de rédaction d'email.
+                    💡 aria-label est indispensable : une icône seule, sans texte,
+                    est totalement invisible pour un lecteur d'écran.
+                    💡 rel="noopener noreferrer" est obligatoire avec target="_blank" :
+                    sans lui, la page ouverte peut manipuler la nôtre. */}
+                
+                <a  href="https://mail.google.com/mail/?view=cm&fs=1&to=rayan1mhalla@gmail.com&su=TrustVerify%20-%20Login%20assistance"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg"
+                    aria-label="Contact support"
+                >
                     <CircleQuestionMark className="text-gray-500 w-5 h-5" />
-                </span>
+                </a>
             </div>
 
             <div className="flex flex-col items-center justify-center flex-1 w-full gap-4">

@@ -106,6 +106,9 @@ model User {
 
   // Notifications ciblées pour cet utilisateur
   notifications        Notification[]
+
+  // 🆕 [PHASE B] Jetons de réinitialisation de mot de passe (voir modèle en bas)
+  passwordResetTokens  PasswordResetToken[]
 }
 
 // =====================================================================
@@ -209,6 +212,70 @@ model OtpCode {
   code      String   // Le code à 6 chiffres
   expiresAt DateTime // Date d'expiration (ex: dans 10 minutes)
   createdAt DateTime @default(now())
+}
+
+// =====================================================================
+// 🆕 [PHASE B] 🔓 RÉINITIALISATION DE MOT DE PASSE ("Forgot password")
+// =====================================================================
+// Pourquoi ce modèle existe : sans lui, un utilisateur qui oublie son mot de
+// passe est DÉFINITIVEMENT verrouillé dehors — la seule issue serait une
+// intervention manuelle en base. Le lien "Forgot password?" de la page de
+// login menait d'ailleurs à une 404, faute de page ET de modèle de données.
+//
+// ⚠️ POURQUOI ON STOCKE UN HASH ET PAS LE JETON LUI-MÊME (`tokenHash`) :
+// le jeton envoyé par email est équivalent à un mot de passe temporaire —
+// quiconque le possède peut changer le mot de passe du compte. Si on le
+// stockait en clair, une fuite de la base permettrait de réinitialiser
+// n'importe quel compte ayant une demande en cours. On applique donc le même
+// principe que pour `User.password` : on ne garde qu'une empreinte, et on
+// compare les empreintes.
+//
+// 💡 POURQUOI SHA-256 ET PAS BCRYPT (contrairement aux mots de passe) :
+// deux raisons, et la seconde est décisive.
+//   1. bcrypt est VOLONTAIREMENT lent pour rendre coûteux le cassage de mots
+//      de passe humains, souvent faibles et devinables. Un jeton généré par
+//      crypto.randomBytes(32) contient 256 bits d'aléa : il est de toute façon
+//      impossible à deviner, la lenteur n'apporte donc rien.
+//   2. bcrypt utilise un "sel" aléatoire différent à chaque hachage : le même
+//      jeton produit donc un hash différent à chaque fois. Impossible de faire
+//      un `findUnique({ where: { tokenHash } })` — il faudrait charger TOUS les
+//      jetons de la base et les comparer un par un. SHA-256 est déterministe :
+//      un jeton donné produit toujours la même empreinte, la recherche directe
+//      par index devient donc possible.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+
+  // Empreinte SHA-256 du jeton envoyé par email. @unique sert à deux choses :
+  // garantir qu'aucune collision n'est possible, et créer automatiquement
+  // l'index qui rend la recherche instantanée.
+  tokenHash String   @unique
+
+  // À qui appartient cette demande. Cascade : si le compte est supprimé, les
+  // jetons en attente n'ont plus aucun sens et doivent disparaître avec lui.
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Fenêtre de validité volontairement courte (on visera 30 minutes côté code).
+  // Plus la fenêtre est longue, plus longtemps un email intercepté reste
+  // exploitable par un attaquant.
+  expiresAt DateTime
+
+  // 🔒 USAGE UNIQUE. On marque la date d'utilisation au lieu de supprimer la
+  // ligne : ça permet de DÉTECTER une tentative de réutilisation (quelqu'un
+  // qui rejoue un lien déjà consommé est un signal suspect, potentiellement un
+  // email compromis), là où une suppression pure renverrait le même message
+  // qu'un jeton simplement inexistant.
+  // ⚠️ Contrepartie : les lignes s'accumulent. Une purge périodique des jetons
+  // expirés/utilisés devra être ajoutée au cron hebdomadaire existant.
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  // Index explicite sur userId : nécessaire pour l'opération "invalider toutes
+  // les demandes en cours de cet utilisateur", qu'on déclenchera à chaque
+  // nouvelle demande (une seule réinitialisation active à la fois) et après un
+  // changement de mot de passe réussi.
+  @@index([userId])
 }
 
 // =====================================================================
