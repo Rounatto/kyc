@@ -12,9 +12,34 @@
 import { NextResponse } from "next/server";
 import { generateAuthenticationOptions, type AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
+// 🆕 [PHASE B] Limitation du nombre de requêtes (Upstash Redis).
+import { enforceRateLimit, getClientIp, passkeyLoginLimiter } from "@/lib/ratelimit";
 
 export async function POST(req: Request) {
     try {
+        // ====================================================================
+        // 🆕 [PHASE B] LIMITE PAR ADRESSE IP
+        // ====================================================================
+        // Cette route est le principal vecteur d'ÉNUMÉRATION DE COMPTES du
+        // projet : elle répond 404 quand l'email est inconnu, et 200 avec un
+        // challenge quand il existe. Un script peut donc tester des milliers
+        // d'adresses pour dresser la liste de tes clients — une information à
+        // valeur commerciale, et un préalable classique au phishing ciblé.
+        //
+        // ⚠️ Cette limite RALENTIT fortement l'énumération (10 essais/minute au
+        // lieu de milliers), mais ne la SUPPRIME pas : la différence de réponse
+        // entre email connu et inconnu reste observable. La correction complète
+        // (réponses uniformes, avec un faux challenge plausible pour les emails
+        // inconnus) est l'item 8 de la Phase B, à traiter séparément.
+        //
+        // 💡 Pas de limite par email ici, contrairement aux routes OTP : ce
+        // serait contre-productif. Un attaquant teste justement des emails
+        // DIFFÉRENTS à chaque requête, un compteur par email ne verrait donc
+        // jamais rien passer. C'est bien l'IP qui est le bon axe de blocage.
+        const clientIp = getClientIp(req);
+        const ipLimited = await enforceRateLimit(passkeyLoginLimiter, clientIp);
+        if (ipLimited) return ipLimited;
+
         const { email } = await req.json();
         if (!email) return NextResponse.json({ error: "Email required" }, { status: 400 });
 
