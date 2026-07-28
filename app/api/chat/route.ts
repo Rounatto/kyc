@@ -11,15 +11,17 @@
 // app/dashboard/layout.tsx), les deux rôles existants ont accès ici — même
 // garde RBAC que le reste de l'API (voir lib/rbac.ts).
 //
-// ⚠️ Pas de rate limiting sur cette route (roadmap Phase B, item H4) : un
-// utilisateur authentifié peut encore spammer des requêtes vers Gemini. La
-// protection ici est "connexion requise", pas "usage limité par utilisateur".
+// ✅ [PHASE B — RÉSOLU] Rate limiting ajouté. Avant, un utilisateur authentifié
+// pouvait envoyer des milliers de messages d'affilée : chaque appel a un coût
+// réel facturé par Google, et rien ne l'empêchait de vider le budget Gemini.
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
+// 🆕 [PHASE B] Limitation du nombre de requêtes (Upstash Redis).
+import { enforceRateLimit, chatLimiter } from "@/lib/ratelimit";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
@@ -45,6 +47,24 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   const guard = enforceRole(session, ["COMPANY_ADMIN", "COMPANY_AGENT"]);
   if (!guard.isValid) return guard.response!;
+
+  // ==========================================================================
+  // 🆕 [PHASE B] LIMITE PAR UTILISATEUR (et non par adresse IP)
+  // ==========================================================================
+  // Placé juste après le contrôle d'accès, car c'est ce contrôle qui nous
+  // donne l'identité de l'appelant (`guard.userId`).
+  //
+  // 💡 POURQUOI PAR UTILISATEUR ET PAS PAR IP, contrairement aux autres routes :
+  // cette route est déjà protégée par une session, on sait donc EXACTEMENT qui
+  // appelle. Or dans une entreprise, tous les employés partagent souvent la
+  // même adresse IP publique. Une limite par IP ferait qu'un seul utilisateur
+  // bavard bloquerait tous ses collègues — injuste et incompréhensible pour
+  // eux. En comptant par utilisateur, chacun a son propre quota.
+  //
+  // Sur les routes publiques (register, verify-register), c'est l'inverse : il
+  // n'y a pas encore de session, l'IP est la seule identité disponible.
+  const rateLimited = await enforceRateLimit(chatLimiter, guard.userId!);
+  if (rateLimited) return rateLimited;
 
   // Échec rapide et explicite plutôt que de laisser l'appel Gemini plus bas
   // échouer avec une erreur moins claire côté client.

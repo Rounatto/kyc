@@ -101,7 +101,7 @@ export const otpRequestLimiter = new Ratelimit({
 // Tentatives de connexion : contre le brute-force de mot de passe.
 export const loginLimiter = new Ratelimit({
     redis: getRedis(),
-    limiter: Ratelimit.slidingWindow(5, "15 m"),
+    limiter: Ratelimit.slidingWindow(10, "15 m"),
     prefix: "rl:login",
     analytics: false,
 });

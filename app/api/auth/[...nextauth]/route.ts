@@ -21,6 +21,8 @@ import { verifySync } from "otplib"; // Vérifie un code TOTP de façon synchron
 import { logSecurityEvent } from "@/lib/logger"; // Piste d'audit : chaque login réussi/échoué est tracé
 // 🆕 [PHASE B] Déchiffrement du secret TOTP stocké en base (AES-256-GCM).
 import { decrypt, encrypt, isEncrypted } from "@/lib/crypto";
+// 🆕 [PHASE B] Limiteur de tentatives de connexion (Upstash Redis).
+import { loginLimiter } from "@/lib/ratelimit";
 
 // ============================================================================
 // 🆕 [PHASE B] DURÉES DE SESSION — LE "REMEMBER ME" RENDU FONCTIONNEL
@@ -48,6 +50,31 @@ import { decrypt, encrypt, isEncrypted } from "@/lib/crypto";
 const SESSION_MAX_AGE_SECONDS = 15 * 24 * 60 * 60;      // 15 jours — case cochée
 const SESSION_DEFAULT_AGE_SECONDS = 24 * 60 * 60;       // 24 heures — case non cochée
 
+// ============================================================================
+// 🆕 [PHASE B] EXTRACTION DE L'IP DANS LE CONTEXTE PARTICULIER DE NEXTAUTH
+// ============================================================================
+// Pourquoi ne pas réutiliser `getClientIp` de lib/ratelimit.ts : cette
+// fonction attend un objet `Request` standard, sur lequel on lit les en-têtes
+// avec `.headers.get("...")`. Or l'objet que NextAuth transmet à `authorize()`
+// n'est PAS un `Request` : c'est un objet interne simplifié dont `headers` est
+// un simple dictionnaire clé/valeur. On y accède donc avec des crochets.
+//
+// Comme pour l'autre helper : sur Vercel, l'IP réelle du visiteur arrive dans
+// l'en-tête `x-forwarded-for`, sous forme de liste séparée par des virgules
+// ("IP-visiteur, IP-proxy-1, ..."). La première est celle qui nous intéresse.
+function getIpFromAuthRequest(req: any): string {
+    const forwardedFor = req?.headers?.["x-forwarded-for"];
+    if (typeof forwardedFor === "string" && forwardedFor.length > 0) {
+        return forwardedFor.split(",")[0].trim();
+    }
+    const realIp = req?.headers?.["x-real-ip"];
+    if (typeof realIp === "string" && realIp.length > 0) {
+        return realIp;
+    }
+    // Repli : en développement local, ces en-têtes sont souvent absents.
+    return "unknown";
+}
+
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
@@ -59,8 +86,55 @@ export const authOptions: NextAuthOptions = {
         passkeyResponse: { label: "Passkey Response", type: "text" },
         totpCode: { label: "2FA Code", type: "text" } 
       },
-      async authorize(credentials): Promise<any> { 
+      // 🆕 [PHASE B] Le second paramètre `req` était jusqu'ici ignoré. On le
+      // récupère maintenant : c'est la SEULE façon d'obtenir l'adresse IP de
+      // l'appelant à l'intérieur de `authorize()`.
+      async authorize(credentials, req): Promise<any> { 
         if (!credentials?.email) return null;
+
+        // ====================================================================
+        // 🆕 [PHASE B] LIMITE DE TENTATIVES DE CONNEXION (par adresse IP)
+        // ====================================================================
+        // Sans cette barrière, un script pouvait tester des mots de passe en
+        // continu, aussi vite que le serveur pouvait répondre.
+        //
+        // ⚠️ POURQUOI ON N'UTILISE PAS `enforceRateLimit()` ICI : ce helper
+        // renvoie un objet `NextResponse` (une réponse HTTP toute prête). Or
+        // `authorize()` n'a pas le droit de renvoyer une réponse HTTP — NextAuth
+        // attend soit un utilisateur, soit `null`, soit une exception. On appelle
+        // donc le limiteur directement et on lève une erreur, exactement comme
+        // le fait déjà le code plus bas avec "2FA_REQUIRED".
+        //
+        // ⚠️ POURQUOI PAR IP UNIQUEMENT, ET PAS AUSSI PAR EMAIL (contrairement
+        // à verify-register) : bloquer par email permettrait à n'importe qui de
+        // VERROUILLER VOLONTAIREMENT le compte d'un tiers, simplement en
+        // envoyant des mots de passe faux sur son adresse. C'est un déni de
+        // service trivial. Sur l'inscription, ce risque est acceptable (au pire
+        // on retarde une création de compte) ; sur la connexion, on empêcherait
+        // un vrai client d'accéder à son propre espace. La défense contre une
+        // attaque distribuée repose ici sur les autres couches : mot de passe
+        // de 12 caractères minimum, haché en bcrypt (volontairement lent), et
+        // 2FA disponible.
+        //
+        // 🔒 FAIL-OPEN : si Redis est injoignable, on laisse passer plutôt que
+        // de bloquer toutes les connexions du site. Même compromis assumé que
+        // dans lib/ratelimit.ts, et journalisé pour être détecté.
+        try {
+            const clientIp = getIpFromAuthRequest(req);
+            const { success } = await loginLimiter.limit(`login:${clientIp}`);
+            if (!success) {
+                // Ce message remonte jusqu'au formulaire de login, de la même
+                // façon que "2FA_REQUIRED" ou "INVALID_2FA_CODE".
+                throw new Error("TOO_MANY_ATTEMPTS");
+            }
+        } catch (rateLimitError: any) {
+            // On distingue les deux cas : notre propre blocage doit remonter,
+            // une panne Redis ne doit pas empêcher les gens de se connecter.
+            if (rateLimitError?.message === "TOO_MANY_ATTEMPTS") {
+                throw rateLimitError;
+            }
+            console.error("[RATE-LIMIT] Redis injoignable sur le login (fail-open) :", rateLimitError);
+        }
 
         const user = await prisma.user.findUnique({ 
             where: { email: credentials.email },
