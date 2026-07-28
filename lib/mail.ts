@@ -354,3 +354,66 @@ export const sendWeeklyReportEmail = async (
     html: htmlContent,
   });
 };
+
+// ============================================================================
+// 🆕 [PHASE B] 🔓 EMAIL DE RÉINITIALISATION DE MOT DE PASSE
+// ============================================================================
+// Envoyé quand un utilisateur clique "Forgot password?" sur la page de login.
+// `resetLink` contient un jeton à usage unique valable 30 minutes (généré par
+// app/api/auth/forgot-password, dont seule l'empreinte SHA-256 est stockée en
+// base — voir le modèle PasswordResetToken dans schema.prisma).
+//
+// ⚠️ Ce lien vaut un mot de passe temporaire : quiconque le possède peut
+// changer le mot de passe du compte. D'où la durée de vie très courte et
+// l'usage unique.
+// ============================================================================
+export const sendPasswordResetEmail = async (
+  to: string,
+  name: string,
+  resetLink: string
+) => {
+  // 🆕 [A4] Même règle que partout ailleurs dans ce fichier : toute valeur
+  // d'origine utilisateur est échappée avant d'entrer dans le HTML.
+  // `resetLink` est généré par notre serveur, mais on l'échappe aussi par
+  // défense en profondeur — il est injecté dans un attribut href.
+  const safeName = escapeHtml(name);
+  const safeResetLink = escapeHtml(resetLink);
+
+  const subject = "Reset Your TrustVerify Password";
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
+      <div style="margin-bottom: 24px;">
+        <span style="background-color: #fef3c7; color: #92400e; font-weight: bold; font-size: 12px; padding: 6px 12px; border-radius: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Password Reset</span>
+      </div>
+      <h2 style="color: #111827; font-size: 24px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Reset Your Password</h2>
+      <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">Hello <strong>${safeName}</strong>,</p>
+      <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">We received a request to reset the password for your TrustVerify account. Click the button below to choose a new one.</p>
+
+      <div style="margin: 32px 0; text-align: center;">
+        <a href="${safeResetLink}" style="background-color: #1d4ed8; color: #ffffff; padding: 14px 28px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-block;">Reset My Password</a>
+      </div>
+
+      <p style="font-size: 13px; line-height: 1.6; color: #6b7280; text-align: center;">
+        This secure link expires in 30 minutes and can only be used once.
+      </p>
+
+      <div style="background-color: #f8fafc; border-left: 4px solid #94a3b8; padding: 16px; margin: 24px 0; border-radius: 0 8px 8px 0;">
+        <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #475569;">
+          <strong>You didn't request this?</strong> You can safely ignore this email — your password will remain unchanged. No action is required on your part.
+        </p>
+      </div>
+
+      <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
+        Securely yours,<br/>
+        <strong style="color: #4b5563;">The Security Operations Team</strong>
+      </div>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: `"Security Operations" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html: htmlContent,
+  });
+};

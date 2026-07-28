@@ -124,6 +124,32 @@ export const passkeyLoginLimiter = new Ratelimit({
     analytics: false,
 });
 
+// 🆕 [PHASE B] Demande de réinitialisation de mot de passe.
+// Même logique que otpRequestLimiter : chaque appel DÉCLENCHE UN ENVOI D'EMAIL
+// réel. Sans limite, on pourrait inonder la boîte mail d'une victime en
+// réclamant des réinitialisations en boucle — du harcèlement, aux frais de ton
+// quota Gmail et de la réputation de ton domaine expéditeur.
+export const passwordResetLimiter = new Ratelimit({
+    redis: getRedis(),
+    limiter: Ratelimit.slidingWindow(3, "1 h"),
+    prefix: "rl:password-reset",
+    analytics: false,
+});
+
+// 🆕 [PHASE B] Soumission du nouveau mot de passe (étape 2 du reset).
+// Limiteur DISTINCT de passwordResetLimiter, volontairement plus permissif.
+// Pourquoi ne pas réutiliser le même : celui-ci est réglé à 3/heure parce qu'il
+// déclenche des envois d'emails. Or ici, aucun email n'est envoyé — et un
+// utilisateur qui se trompe deux fois en confirmant son mot de passe se
+// retrouverait bloqué une heure. Le jeton fait 256 bits, il est de toute façon
+// impossible à deviner : cette limite ne sert qu'à borner les abus, pas à
+// protéger le secret lui-même.
+export const passwordResetSubmitLimiter = new Ratelimit({
+    redis: getRedis(),
+    limiter: Ratelimit.slidingWindow(10, "15 m"),
+    prefix: "rl:password-reset-submit",
+    analytics: false,
+});
 // ----------------------------------------------------------------------------
 // EXTRACTION DE L'ADRESSE IP DU VISITEUR
 // ----------------------------------------------------------------------------
