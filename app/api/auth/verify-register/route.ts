@@ -7,13 +7,22 @@
 // administrateur (User, role=COMPANY_ADMIN) sont réellement créés. Cette
 // séparation empêche de créer des comptes avec des emails qu'on ne possède pas.
 //
-// ⚠️ Pas de compteur de tentatives sur `otpRecord.code !== otpCode` : un code à
-// 6 chiffres (1M de combinaisons) est brute-forçable tant qu'il n'a pas expiré
-// (10 min) — voir roadmap Phase B pour le rate limiting à ajouter.
+// ✅ [PHASE B — RÉSOLU] Le brute-force de l'OTP est désormais bloqué par deux
+// limites complémentaires (voir lib/ratelimit.ts) : une par adresse IP et une
+// par email. Avant ce correctif, rien ne comptait les tentatives : un script
+// pouvait parcourir les 1 000 000 de combinaisons pendant les 10 minutes de
+// validité du code.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+// 🆕 [PHASE B] Limitation du nombre de requêtes (Upstash Redis).
+import {
+    enforceRateLimit,
+    getClientIp,
+    otpVerifyByIpLimiter,
+    otpVerifyByEmailLimiter,
+} from "@/lib/ratelimit";
 
 // Schéma Zod qui inclut maintenant l'OTP
 const verifyRegisterSchema = z.object({
@@ -26,6 +35,19 @@ const verifyRegisterSchema = z.object({
 
 export async function POST(req: Request) {
     try {
+        // ====================================================================
+        // 🆕 [PHASE B] BARRAGE 1/2 — LIMITE PAR ADRESSE IP
+        // ====================================================================
+        // Placé en TOUT PREMIER, avant même de lire le corps de la requête :
+        // une requête bloquée ne doit consommer aucune ressource inutile (ni
+        // parsing JSON, ni la moindre requête base de données).
+        //
+        // Cette limite arrête le cas le plus courant : un script qui martèle la
+        // route depuis une seule machine.
+        const clientIp = getClientIp(req);
+        const ipLimited = await enforceRateLimit(otpVerifyByIpLimiter, clientIp);
+        if (ipLimited) return ipLimited;
+
         const body = await req.json();
 
         // 1. Validation du payload
@@ -36,6 +58,25 @@ export async function POST(req: Request) {
         }
 
         const { email, password, fullName, companyName, otpCode } = validationResult.data;
+
+        // ====================================================================
+        // 🆕 [PHASE B] BARRAGE 2/2 — LIMITE PAR EMAIL
+        // ====================================================================
+        // Ne peut se faire qu'ICI : il fallait d'abord lire et valider le corps
+        // de la requête pour connaître l'email visé.
+        //
+        // Pourquoi cette seconde limite alors qu'on filtre déjà par IP : un
+        // attaquant disposant de nombreuses adresses IP (proxies, botnet) peut
+        // rester sous le seuil sur CHAQUE IP tout en accumulant des milliers de
+        // tentatives sur UN MÊME compte. La limite par IP ne verrait rien
+        // passer ; celle-ci bloque l'attaque quelle que soit son origine.
+        //
+        // 💡 On utilise `email` (déjà normalisé en minuscules et détrimé par
+        // Zod juste au-dessus) et non la valeur brute : sans ça, "A@Mail.com"
+        // et "a@mail.com" compteraient dans deux compteurs distincts, ce qui
+        // doublerait le quota réel d'un attaquant.
+        const emailLimited = await enforceRateLimit(otpVerifyByEmailLimiter, email);
+        if (emailLimited) return emailLimited;
 
         // ====================================================================
         // 🛡️ ÉTAPE CRITIQUE : VÉRIFICATION DE L'OTP
