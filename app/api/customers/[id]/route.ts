@@ -122,18 +122,6 @@ export async function GET(
             console.error("[DOCUMENTS] Échec de signature des URLs :", storageError);
         }
 
-        // 🔁 REPLI VERS L'ANCIEN STOCKAGE.
-        // Les dossiers créés avant cette migration n'ont pas de chemin : leurs
-        // documents vivent encore sur uploadthing, derrière des URLs publiques.
-        // Sans ce repli, ils deviendraient instantanément inconsultables.
-        //
-        // ⚠️ Ces anciens documents restent donc exposés publiquement. Ce n'est
-        // pas une négligence mais une transition : la migration des fichiers
-        // existants vers le bucket privé fait partie du correctif, et une fois
-        // faite, ces trois lignes ET les colonnes idCardUrl/selfieUrl pourront
-        // disparaître.
-        if (!idCardDisplayUrl) idCardDisplayUrl = customer.idCardUrl;
-        if (!selfieDisplayUrl) selfieDisplayUrl = customer.selfieUrl;
         
         // On renvoie le dossier complet, augmenté des deux liens d'affichage.
         // 💡 Les champs `idCardPath`/`selfiePath` restent présents dans la
