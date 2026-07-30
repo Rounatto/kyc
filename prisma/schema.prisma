@@ -127,8 +127,42 @@ model VerificationRequest {
   dateOfBirth  String?
   phoneNumber  String?
 
+  // ⚠️ ANCIEN STOCKAGE (uploadthing) — CONSERVÉ POUR LES DOSSIERS EXISTANTS
+  // Ces colonnes contiennent des URLs PUBLIQUES ET PERMANENTES : quiconque
+  // connaît le lien voit le document, sans compte ni session, et pour toujours.
+  // C'est précisément la faille qu'on corrige avec les deux champs ci-dessous.
+  //
+  // 💡 On ne les supprime PAS : les dossiers déjà créés n'ont que ces URLs, et
+  // les effacer les rendrait instantanément inconsultables. Elles disparaîtront
+  // une fois les anciens documents migrés vers le bucket privé.
+  //
+  // ⚠️ Tant que ces colonnes sont renseignées, les documents concernés restent
+  // exposés publiquement. La migration n'est donc pas optionnelle — elle fait
+  // partie du correctif, pas d'un nettoyage cosmétique ultérieur.
   idCardUrl    String?
   selfieUrl    String?
+
+  // 🆕 [PHASE B] NOUVEAU STOCKAGE (Supabase Storage, bucket privé)
+  //
+  // Format : "{companyId}/{identifiant aléatoire}-{idcard|selfie}.{ext}"
+  // Exemple : "cmp_a1b2c3/9f8e7d6c5b4a3921-idcard.jpg"
+  //
+  // 💡 LA DIFFÉRENCE FONDAMENTALE AVEC LES COLONNES CI-DESSUS :
+  // une URL est directement adressable — la coller dans un navigateur affiche
+  // le fichier. Un CHEMIN ne l'est pas : c'est une simple coordonnée interne au
+  // bucket privé, sans nom de domaine, sans protocole, inutilisable telle
+  // quelle. Voir le document exige de demander au serveur une URL signée
+  // temporaire (lib/storage.ts), ce qu'il n'accorde qu'après avoir vérifié la
+  // session ET le companyId du demandeur.
+  //
+  // En clair : avant, la donnée en base ÉTAIT la clé d'accès. Maintenant, elle
+  // ne désigne plus que l'emplacement — la clé, c'est le serveur qui la fabrique
+  // à la demande, et elle expire au bout de quelques minutes.
+  //
+  // Nullables pour deux raisons : les anciens dossiers n'en ont pas, et un
+  // dossier peut légitimement être créé sans selfie.
+  idCardPath   String?
+  selfiePath   String?
 
   score        String?  
   riskLevel    String?  
