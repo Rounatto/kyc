@@ -7,12 +7,27 @@
 // c'est le point de contrôle humain du pipeline (human-in-the-loop), et
 // chaque décision déclenche en cascade : ligne d'audit, notification interne
 // dashboard, email aux agents abonnés, email au client final.
+//
+// 🆕 [PHASE B] GET est devenu le SEUL point d'accès aux documents KYC. Les
+// fichiers vivent dans un bucket Supabase privé et ne sont plus atteignables
+// par une URL publique : cette route fabrique, à chaque appel, des liens
+// signés à durée de vie très courte — et seulement après avoir vérifié que le
+// demandeur appartient bien à l'entreprise propriétaire du dossier.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendKYCEmail, sendAgentNotificationEmail } from "@/lib/mail";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
+// 🆕 [PHASE B] Signature groupée des URLs de consultation.
+import { createSignedDocumentUrls } from "@/lib/storage";
+
+// 🆕 [PHASE B] Durée de vie des liens de consultation.
+// 5 minutes : assez pour qu'un agent ouvre la fiche et examine les documents
+// (y compris en zoom plein écran), assez court pour qu'un lien copié par
+// mégarde — dans un historique de navigateur, un log de proxy, une capture
+// d'écran — soit déjà périmé quand quelqu'un tombe dessus.
+const DOCUMENT_URL_TTL_SECONDS = 5 * 60;
 
 export async function GET(
     req: Request, 
@@ -28,6 +43,17 @@ export async function GET(
         const resolvedParams = await params;
         const customerId = resolvedParams.id;
 
+        // 🔒 LE CONTRÔLE D'ACCÈS AUX DOCUMENTS SE JOUE ICI, ET NULLE PART AILLEURS.
+        // Le filtre `companyId` de cette requête est ce qui garantit qu'un agent
+        // de l'entreprise A ne peut pas obtenir le dossier — donc les documents —
+        // de l'entreprise B : la requête renvoie simplement `null`, et on répond
+        // 404 juste en dessous. Aucune URL signée n'est fabriquée si on n'arrive
+        // pas jusqu'ici.
+        //
+        // 💡 C'est aussi la raison pour laquelle il n'existe pas de route
+        // séparée dédiée aux documents : elle devrait refaire exactement cette
+        // vérification, et deux copies d'un même contrôle de sécurité finissent
+        // toujours par diverger.
         const customer = await prisma.verificationRequest.findUnique({
             where: { 
                 id: customerId,
@@ -44,8 +70,81 @@ export async function GET(
         if (!customer) {
             return NextResponse.json({ message: "Customer not found or unauthorized access." }, { status: 404 });
         }
+
+        // ====================================================================
+        // 🆕 [PHASE B] FABRICATION DES LIENS D'AFFICHAGE
+        // ====================================================================
+        // `idCardPath` n'est PAS affichable : c'est une coordonnée interne au
+        // bucket privé ("cmp_a1b2/9f8e-idcard.jpg"), sans domaine ni protocole.
+        // La coller dans un navigateur ne donne rien. Il faut demander à Supabase
+        // de la transformer en adresse signée temporaire.
+        //
+        // 💡 On expose le résultat sous de NOUVEAUX noms (`idCardDisplayUrl`)
+        // plutôt que d'écraser `idCardUrl`. Le frontend aurait certes moins
+        // changé, mais le nom aurait menti : quelqu'un lisant `idCardUrl`
+        // croirait tenir une adresse durable et pourrait la mettre en cache ou
+        // la stocker. "Display" annonce la couleur — c'est un lien pour afficher
+        // maintenant, et il périme.
+        let idCardDisplayUrl: string | null = null;
+        let selfieDisplayUrl: string | null = null;
+
+        try {
+            // On rassemble les chemins réellement présents avant de signer.
+            // Un dossier peut n'avoir qu'un seul document, et les dossiers
+            // antérieurs à cette migration n'en ont aucun.
+            const pathsToSign: string[] = [];
+            if (customer.idCardPath) pathsToSign.push(customer.idCardPath);
+            if (customer.selfiePath) pathsToSign.push(customer.selfiePath);
+
+            if (pathsToSign.length > 0) {
+                // 💡 Signature GROUPÉE : un seul aller-retour vers Supabase pour
+                // les deux documents, au lieu de deux appels successifs.
+                const signedUrls = await createSignedDocumentUrls(
+                    pathsToSign,
+                    DOCUMENT_URL_TTL_SECONDS
+                );
+
+                if (customer.idCardPath) {
+                    idCardDisplayUrl = signedUrls[customer.idCardPath] ?? null;
+                }
+                if (customer.selfiePath) {
+                    selfieDisplayUrl = signedUrls[customer.selfiePath] ?? null;
+                }
+            }
+        } catch (storageError) {
+            // 🔒 ÉCHEC NON BLOQUANT, ET C'EST DÉLIBÉRÉ.
+            // Si Supabase est injoignable ou si un fichier a disparu du bucket,
+            // on ne fait PAS échouer toute la requête : l'agent doit pouvoir
+            // continuer à consulter le dossier, son score, son historique
+            // d'audit et rendre sa décision. Les documents s'afficheront comme
+            // indisponibles, ce qui est un dégradé acceptable — bien préférable
+            // à un écran d'erreur qui bloquerait tout le travail de conformité.
+            console.error("[DOCUMENTS] Échec de signature des URLs :", storageError);
+        }
+
+        // 🔁 REPLI VERS L'ANCIEN STOCKAGE.
+        // Les dossiers créés avant cette migration n'ont pas de chemin : leurs
+        // documents vivent encore sur uploadthing, derrière des URLs publiques.
+        // Sans ce repli, ils deviendraient instantanément inconsultables.
+        //
+        // ⚠️ Ces anciens documents restent donc exposés publiquement. Ce n'est
+        // pas une négligence mais une transition : la migration des fichiers
+        // existants vers le bucket privé fait partie du correctif, et une fois
+        // faite, ces trois lignes ET les colonnes idCardUrl/selfieUrl pourront
+        // disparaître.
+        if (!idCardDisplayUrl) idCardDisplayUrl = customer.idCardUrl;
+        if (!selfieDisplayUrl) selfieDisplayUrl = customer.selfieUrl;
         
-        return NextResponse.json(customer);
+        // On renvoie le dossier complet, augmenté des deux liens d'affichage.
+        // 💡 Les champs `idCardPath`/`selfiePath` restent présents dans la
+        // réponse : ce n'est pas une fuite (un chemin n'ouvre aucun accès), et
+        // ça évite au frontend de devoir deviner si un dossier utilise l'ancien
+        // ou le nouveau stockage.
+        return NextResponse.json({
+            ...customer,
+            idCardDisplayUrl,
+            selfieDisplayUrl,
+        });
     } catch (error: any) {
         console.error("GET Error:", error);
         return NextResponse.json({ message: "Internal server error." }, { status: 500 });
@@ -190,24 +289,27 @@ export async function PATCH(
         }
 
         // 💡 EMAIL EXTERNE (Pour le Client final)
-        // `customerName`/`rejectionReason` finissent interpolés tels quels dans
-        // le HTML du template (voir lib/mail.ts) — pas d'échappement HTML ici.
-        // ⚠️ Piège JS : `sendKYCEmail(...)` n'est PAS "await"é, donc le
-        // try/catch autour ne sert à rien pour une erreur d'envoi réelle (le
-        // bloc try est déjà sorti avant que la promesse ne se résolve/rejette) —
-        // une éventuelle erreur SMTP deviendrait une "unhandled promise
-        // rejection" silencieuse plutôt que d'être loguée ici.
+        // ✅ `customerName`/`rejectionReason` sont désormais échappés dans le
+        // template (voir escapeHtml dans lib/mail.ts) — plus de risque
+        // d'injection HTML dans l'email envoyé depuis notre domaine.
+        //
+        // 🆕 CORRECTION D'UN PIÈGE JS : `sendKYCEmail(...)` n'était pas "await"é,
+        // donc le try/catch qui l'entourait ne captait RIEN — le bloc était déjà
+        // sorti quand la promesse se résolvait. Une erreur SMTP devenait une
+        // "unhandled promise rejection" silencieuse, invisible dans les logs.
+        // On garde volontairement l'envoi NON bloquant (l'agent ne doit pas
+        // attendre le serveur mail pour voir sa décision prise), mais avec un
+        // `.catch()` attaché — le même motif que pour les emails d'agents
+        // ci-dessus, qui lui était déjà correct.
         if (status === "verified" || status === "rejected") {
-            try {
-                sendKYCEmail(
-                    updatedCustomer.email, 
-                    status, 
-                    updatedCustomer.customerName, 
-                    rejectionReason
-                );
-            } catch (emailError) {
+            sendKYCEmail(
+                updatedCustomer.email, 
+                status, 
+                updatedCustomer.customerName, 
+                rejectionReason
+            ).catch((emailError) => {
                 console.error("Async Email Dispatch Failure:", emailError);
-            }
+            });
         }
 
         return NextResponse.json(updatedCustomer);

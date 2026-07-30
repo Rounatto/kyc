@@ -10,17 +10,18 @@
 // un objet direct) car ce projet utilise le nouveau modèle asynchrone des
 // route params de Next.js — d'où le hook `use(params)` pour la déballer.
 //
+// 🆕 [PHASE B] Les documents ne sont plus servis par des URLs publiques
+// permanentes. Le serveur renvoie désormais `idCardDisplayUrl`/`selfieDisplayUrl` :
+// des liens SIGNÉS vers un bucket privé, valables 5 minutes seulement, et
+// délivrés uniquement après vérification que l'agent appartient bien à
+// l'entreprise propriétaire du dossier. Voir la note sur l'expiration plus bas.
+//
 // ⚠️ Le "Verification Studio" (modale plein écran de comparaison zoomable)
 // étiquette la photo du selfie "Live Selfie" — mais comme documenté dans
 // new-verification/page.tsx (Lot 7), ce n'est PAS une capture live, c'est un
 // fichier uploadé comme un autre. Ce libellé renforce une fausse impression
 // de preuve de vie pour l'agent qui prend la décision d'approuver/rejeter.
-//
-// Note mineure : `handleDecision` envoie `agentId: session?.user?.id` dans le
-// body PATCH, mais le serveur (customers/[id]/route.ts) ignore ce champ et
-// utilise `serverAgentId` dérivé de la session — bon réflexe côté serveur
-// (jamais confiance au body pour l'identité), donc cette valeur envoyée ici
-// est simplement inutile, pas un risque de sécurité.
+// (Correction prévue en Phase C, avec l'ajout du liveness.)
 import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -41,6 +42,13 @@ const PREDEFINED_REASONS = [
     "The name on the document does not match the registered profile name."
 ];
 
+// 🆕 [PHASE B] Nombre maximal de renouvellements automatiques des liens.
+// Garde-fou anti-boucle infinie : si les liens fraîchement obtenus échouent
+// eux aussi, le problème n'est pas l'expiration (fichier supprimé du bucket,
+// Supabase indisponible, réseau coupé). Réessayer indéfiniment ne ferait que
+// marteler le serveur sans jamais afficher l'image.
+const MAX_URL_REFRESH_ATTEMPTS = 2;
+
 export default function CustomerReviewPage({ params }: { params: Promise<{ id: string }> }) {
     const resolvedParams = use(params);
     const customerId = resolvedParams.id;
@@ -56,6 +64,10 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
     const [isViewerOpen, setIsViewerOpen] = useState(false);
     const [idZoom, setIdZoom] = useState(1);
     const [selfieZoom, setSelfieZoom] = useState(1);
+
+    // 🆕 [PHASE B] Suivi du renouvellement des liens signés
+    const [isRefreshingUrls, setIsRefreshingUrls] = useState(false);
+    const [urlRefreshAttempts, setUrlRefreshAttempts] = useState(0);
 
     // États pour la Modal de Rejet
     const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
@@ -78,6 +90,61 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
         loadCustomer();
     }, [customerId, router]);
 
+    // ========================================================================
+    // 🆕 [PHASE B] RENOUVELLEMENT AUTOMATIQUE DES LIENS EXPIRÉS
+    // ========================================================================
+    // LE PROBLÈME QUE ÇA RÉSOUT, ET IL EST BIEN RÉEL :
+    // les liens signés expirent au bout de 5 minutes. Or un agent de conformité
+    // ne consulte pas un dossier en 30 secondes — il lit le score, parcourt
+    // l'audit trail, réfléchit, va chercher un collègue, puis ouvre le
+    // Verification Studio pour comparer les visages. Quinze minutes plus tard,
+    // les liens obtenus au chargement de la page sont morts depuis longtemps :
+    // les images ne s'afficheraient plus, sans la moindre explication.
+    //
+    // LA PARADE : quand une image échoue à charger, on redemande simplement au
+    // serveur des liens frais. Le serveur revérifie la session et le companyId
+    // au passage — ce n'est donc pas un contournement du contrôle d'accès, c'est
+    // exactement le même chemin que le chargement initial.
+    //
+    // 💡 On ne met à jour QUE les deux liens, pas tout l'objet `customer` : le
+    // statut ou l'audit trail pourraient avoir changé entre-temps (une décision
+    // prise dans un autre onglet), et les écraser silencieusement ferait
+    // disparaître de l'écran quelque chose que l'agent vient peut-être de faire.
+    //
+    // ⚠️ CHOIX ASSUMÉ : cette approche est RÉACTIVE (on attend l'échec) plutôt
+    // que PROACTIVE (renouveler avant expiration via un minuteur). Conséquence :
+    // l'agent peut voir brièvement une image cassée avant qu'elle ne réapparaisse.
+    // C'est le compromis retenu — un minuteur exigerait de suivre l'heure de
+    // chargement, de gérer son nettoyage, et de rafraîchir même quand personne
+    // ne regarde. Pour un gain d'une fraction de seconde, ça ne vaut pas la
+    // complexité ajoutée.
+    const refreshDocumentUrls = async () => {
+        if (isRefreshingUrls || urlRefreshAttempts >= MAX_URL_REFRESH_ATTEMPTS) return;
+
+        setIsRefreshingUrls(true);
+        setUrlRefreshAttempts((n) => n + 1);
+
+        try {
+            const res = await fetch(`/api/customers/${customerId}`);
+            if (res.ok) {
+                const fresh = await res.json();
+                setCustomer((prev: any) =>
+                    prev
+                        ? {
+                              ...prev,
+                              idCardDisplayUrl: fresh.idCardDisplayUrl,
+                              selfieDisplayUrl: fresh.selfieDisplayUrl,
+                          }
+                        : fresh
+                );
+            }
+        } catch (err) {
+            console.error("[DOCUMENTS] Échec du renouvellement des liens signés :", err);
+        } finally {
+            setIsRefreshingUrls(false);
+        }
+    };
+
     const handleDecision = async (newStatus: "verified" | "rejected", reasonText?: string) => {
         setActionLoading(newStatus);
         
@@ -92,14 +159,27 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ 
                         status: newStatus,
-                        agentId: session?.user?.id || null, 
+                        // 🆕 [PHASE B] `agentId` retiré du corps de la requête.
+                        // Le serveur l'ignorait déjà et dérivait l'identité de la
+                        // session (`serverAgentId`) — bon réflexe, jamais confiance
+                        // au body pour dire QUI agit. L'envoyer quand même laissait
+                        // croire l'inverse à quiconque lit ce code : que le client
+                        // peut désigner l'auteur d'une décision de conformité.
                         rejectionReason: reasonText
                     }),
                 });
                 
                 if (res.ok) {
                     const updatedCustomer = await res.json();
-                    setCustomer(updatedCustomer);
+                    // ⚠️ La réponse du PATCH ne contient PAS les liens signés
+                    // (seul le GET en fabrique). On préserve donc ceux déjà en
+                    // mémoire, sans quoi les documents disparaîtraient de l'écran
+                    // juste après une approbation ou un rejet.
+                    setCustomer((prev: any) => ({
+                        ...updatedCustomer,
+                        idCardDisplayUrl: prev?.idCardDisplayUrl ?? null,
+                        selfieDisplayUrl: prev?.selfieDisplayUrl ?? null,
+                    }));
                     resolve(updatedCustomer);
                 } else {
                     const errData = await res.json();
@@ -177,7 +257,8 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                                 <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800">
                                     <FileText className="w-4 h-4 text-blue-600" /> Provided Documents
                                 </h3>
-                                {(customer.idCardUrl || customer.selfieUrl) && (
+                                {/* 🆕 [PHASE B] Condition basée sur les liens d'affichage, plus sur les anciennes URLs */}
+                                {(customer.idCardDisplayUrl || customer.selfieDisplayUrl) && (
                                     <button onClick={() => setIsViewerOpen(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 px-4 py-2 rounded-lg transition-colors cursor-pointer w-full sm:w-auto justify-center">
                                         <Maximize2 className="w-3.5 h-3.5" /> Compare & Verify
                                     </button>
@@ -189,9 +270,11 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                                 <div className="flex flex-col gap-2">
                                     <p className="text-xs font-bold uppercase text-gray-500 pl-1">Front ID Document</p>
                                     <div className="border border-gray-200 rounded-xl bg-gray-50 h-56 relative overflow-hidden group">
-                                        {customer.idCardUrl ? (
+                                        {customer.idCardDisplayUrl ? (
                                             <>
-                                                <Image src={customer.idCardUrl} alt="ID Card" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
+                                                {/* 🆕 onError : si le lien signé a expiré pendant que l'agent
+                                                    consultait la page, on en redemande un frais au serveur. */}
+                                                <Image src={customer.idCardDisplayUrl} alt="ID Card" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized onError={refreshDocumentUrls} />
                                                 <button onClick={() => setIsViewerOpen(true)} className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
                                                     <div className="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform shadow-lg">
                                                         <Maximize2 className="w-4 h-4" /> Open Studio
@@ -211,9 +294,9 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                                 <div className="flex flex-col gap-2">
                                     <p className="text-xs font-bold uppercase text-gray-500 pl-1">Biometric Selfie</p>
                                     <div className="border border-gray-200 rounded-xl bg-gray-50 h-56 relative overflow-hidden group">
-                                        {customer.selfieUrl ? (
+                                        {customer.selfieDisplayUrl ? (
                                             <>
-                                                <Image src={customer.selfieUrl} alt="Selfie" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized />
+                                                <Image src={customer.selfieDisplayUrl} alt="Selfie" fill className="object-cover transition-transform duration-500 group-hover:scale-105" unoptimized onError={refreshDocumentUrls} />
                                                 <button onClick={() => setIsViewerOpen(true)} className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
                                                     <div className="bg-white text-gray-900 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform shadow-lg">
                                                         <Maximize2 className="w-4 h-4" /> Open Studio
@@ -442,8 +525,8 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                                 <button onClick={() => setIdZoom(1)} className="text-gray-400 hover:text-white cursor-pointer"><RotateCcw className="w-4 h-4"/></button>
                             </div>
                             <div className="flex-1 overflow-auto flex items-center justify-center p-4">
-                                {customer.idCardUrl ? (
-                                    <img src={customer.idCardUrl} alt="ID Document" className="max-w-full max-h-full object-contain transition-transform duration-200" style={{ transform: `scale(${idZoom})`, transformOrigin: 'center' }} />
+                                {customer.idCardDisplayUrl ? (
+                                    <img src={customer.idCardDisplayUrl} alt="ID Document" onError={refreshDocumentUrls} className="max-w-full max-h-full object-contain transition-transform duration-200" style={{ transform: `scale(${idZoom})`, transformOrigin: 'center' }} />
                                 ) : (
                                     <p className="text-gray-600 font-medium">No document provided</p>
                                 )}
@@ -462,8 +545,8 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                                 <button onClick={() => setSelfieZoom(1)} className="text-gray-400 hover:text-white cursor-pointer"><RotateCcw className="w-4 h-4"/></button>
                             </div>
                             <div className="flex-1 overflow-auto flex items-center justify-center p-4">
-                                {customer.selfieUrl ? (
-                                    <img src={customer.selfieUrl} alt="Selfie" className="max-w-full max-h-full object-contain transition-transform duration-200" style={{ transform: `scale(${selfieZoom})`, transformOrigin: 'center' }} />
+                                {customer.selfieDisplayUrl ? (
+                                    <img src={customer.selfieDisplayUrl} alt="Selfie" onError={refreshDocumentUrls} className="max-w-full max-h-full object-contain transition-transform duration-200" style={{ transform: `scale(${selfieZoom})`, transformOrigin: 'center' }} />
                                 ) : (
                                     <p className="text-gray-600 font-medium">No selfie provided</p>
                                 )}

@@ -14,11 +14,17 @@
 //      transforme tous ces "facts" en un score de risque 0-100 + un rationale humain
 //   8. Écriture du dossier + de sa première ligne d'audit + notification si High Risk
 //
-// ⚠️ FAILLE CONNUE (roadmap, non corrigée ici) : `biometricScore` est calculé
-// CÔTÉ CLIENT par face-api.js dans new-verification/page.tsx, puis envoyé tel
-// quel dans le body. Le schéma Zod ci-dessous le valide juste comme un nombre
-// — rien n'empêche un client malveillant d'envoyer `biometricScore: 99.9` sans
-// aucune photo réelle. Le calcul devrait être refait ici, côté serveur.
+// ✅ [PHASE B — RÉSOLU] Les documents ne sont plus stockés derrière des URLs
+// publiques permanentes. Cette route reçoit désormais des CHEMINS vers un
+// bucket Supabase privé, et génère elle-même une URL signée temporaire quand
+// elle a besoin de lire un fichier (voir le module OCR plus bas).
+//
+// ⚠️ FAILLE CONNUE (roadmap Phase C, non corrigée ici) : `biometricScore` est
+// calculé CÔTÉ CLIENT par face-api.js dans new-verification/page.tsx, puis
+// envoyé tel quel dans le body. Le schéma Zod ci-dessous le valide juste comme
+// un nombre — rien n'empêche un client malveillant d'envoyer
+// `biometricScore: 99.9` sans aucune photo réelle. Le calcul devrait être refait
+// ici, côté serveur, en même temps que l'ajout du liveness.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
@@ -28,6 +34,8 @@ import { z } from "zod";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
+// 🆕 [PHASE B] Génération d'URLs signées vers le bucket privé.
+import { createSignedDocumentUrl } from "@/lib/storage";
 
 // 🆕 [FIX PROD] Durée max d'exécution de cette fonction sur Vercel.
 // Sans cette ligne, le plan Hobby coupe la fonction à 10 secondes — or l'OCR
@@ -39,9 +47,17 @@ import { enforceRole } from "@/lib/rbac";
 // screening du cycle requête/réponse (roadmap Phase C — pipeline asynchrone).
 export const maxDuration = 60;
 
-// Le body accepté à la création d'un dossier KYC. idCardUrl/selfieUrl pointent
-// vers des fichiers déjà uploadés sur Uploadthing (voir api/uploadthing/core.ts) —
-// cette route ne reçoit que les URLs, pas les fichiers eux-mêmes.
+// Le body accepté à la création d'un dossier KYC.
+//
+// 🆕 [PHASE B] `idCardPath`/`selfiePath` remplacent `idCardUrl`/`selfieUrl`.
+// Ce sont des CHEMINS internes au bucket privé Supabase (ex:
+// "cmp_a1b2/9f8e7d-idcard.jpg"), obtenus par le formulaire auprès de
+// /api/kyc-documents/upload-url. Cette route ne reçoit toujours pas les
+// fichiers eux-mêmes — ils sont partis directement du navigateur vers Supabase.
+//
+// 💡 Noter le changement de validateur : `.url()` est devenu `.min(1)`. Un
+// chemin n'est PAS une URL — il n'a ni protocole ni domaine. Garder `.url()`
+// rejetterait systématiquement les chemins valides.
 const customerRegistrationSchema = z.object({
     customerName: z.string().min(2, "Le nom doit contenir au moins 2 caractères"),
     email: z.string().email("Format d'email invalide"),
@@ -51,8 +67,8 @@ const customerRegistrationSchema = z.object({
     nationality: z.string().min(1, "La nationalité est requise"),
     dateOfBirth: z.string().optional().or(z.literal('')),
     phoneNumber: z.string().optional().or(z.literal('')),
-    idCardUrl: z.string().url("L'URL de la carte d'identité est invalide ou corrompue"),
-    selfieUrl: z.string().url("L'URL du selfie est invalide ou corrompue"),
+    idCardPath: z.string().min(1, "Le document d'identité est manquant"),
+    selfiePath: z.string().min(1, "Le selfie est manquant"),
     biometricScore: z.number().nullable().optional() 
 });
 
@@ -147,6 +163,11 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
 // les compteurs affichés en haut du dashboard (`stats`). Tout est scopé par
 // `companyId` dérivé de la session (jamais du query string) : impossible pour
 // un agent de l'entreprise A de lister/compter les dossiers de l'entreprise B.
+//
+// 💡 Cette liste ne renvoie PAS d'URLs signées : elle n'affiche que des
+// métadonnées textuelles (nom, statut, score). Signer deux URLs par dossier
+// pour une page de 5 résultats coûterait 10 appels inutiles à Supabase. Les
+// documents ne sont signés qu'à l'ouverture d'une fiche précise.
 export async function GET(req: Request) {
     try {
         const session = await getServerSession(authOptions);
@@ -255,7 +276,7 @@ export async function GET(req: Request) {
 // Crée un nouveau dossier KYC et exécute tout le pipeline de scoring en une
 // seule requête (voir le résumé en tête de fichier). Appelé par le formulaire
 // dashboard/customers/new-verification/page.tsx une fois les fichiers déjà
-// uploadés sur Uploadthing.
+// envoyés dans le bucket privé Supabase.
 export async function POST(req: Request) {
     try {
         const session = await getServerSession(authOptions);
@@ -280,7 +301,40 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: `Security Validation Failed: ${errorMessages}` }, { status: 400 });
         }
 
-        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardUrl, selfieUrl, biometricScore } = validationResult.data;
+        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardPath, selfiePath, biometricScore } = validationResult.data;
+
+        // ====================================================================
+        // 🆕 [PHASE B] 🔒 VÉRIFICATION D'APPARTENANCE DES CHEMINS
+        // ====================================================================
+        // Les chemins arrivent du CLIENT (le formulaire les a reçus de
+        // /api/kyc-documents/upload-url et les renvoie ici). On ne peut donc
+        // pas leur faire aveuglément confiance.
+        //
+        // Le scénario à bloquer : un agent malveillant de l'entreprise A qui
+        // connaîtrait le chemin d'un document de l'entreprise B pourrait
+        // l'attacher à SON dossier — et le verrait ensuite s'afficher
+        // légitimement, puisque le contrôle d'accès à l'affichage se base sur
+        // le propriétaire du DOSSIER, pas sur celui du fichier.
+        //
+        // La parade est directe : tous nos chemins commencent par le companyId
+        // (voir buildDocumentPath dans lib/storage.ts). Un chemin qui ne
+        // commence pas par CELUI DE LA SESSION est forcément illégitime.
+        //
+        // 💡 En pratique cette attaque est déjà très difficile (les chemins
+        // contiennent 32 caractères aléatoires, impossibles à deviner), mais
+        // c'est exactement le principe de défense en profondeur : on ne fait
+        // pas reposer la sécurité sur le seul fait qu'une valeur soit dure à
+        // deviner.
+        const pathPrefix = `${companyId}/`;
+        if (!idCardPath.startsWith(pathPrefix) || !selfiePath.startsWith(pathPrefix)) {
+            console.error(
+                `🔴 Sécurité : tentative de rattachement d'un document hors périmètre (company ${companyId})`
+            );
+            return NextResponse.json(
+                { error: "Document reference does not belong to your workspace." },
+                { status: 403 }
+            );
+        }
 
         const agent = await prisma.user.findUnique({ where: { id: serverAgentId } });
         if (!agent) {
@@ -330,39 +384,52 @@ export async function POST(req: Request) {
         // — ça détecte un formulaire rempli avec un nom qui ne correspond pas
         // au document uploadé. Si l'OCR échoue (image illisible, etc.), on ne
         // bloque pas le dossier : on le marque pour revue manuelle (`ocrFailed`).
+        //
+        // 🆕 [PHASE B] Tesseract a besoin d'une URL téléchargeable — or on ne
+        // dispose plus que d'un chemin vers un bucket PRIVÉ. On fabrique donc
+        // ici, côté serveur, une URL signée de courte durée juste pour cette
+        // lecture. Elle ne quitte jamais le serveur et expire d'elle-même.
         let ocrText = "";
         let ocrFailed = false;
         let isNameOnDoc = false;
         let isCinOnDoc = false;
 
         try {
-            if (idCardUrl && idCardUrl.trim() !== "") {
-                // 🆕 [FIX PROD] Course entre l'OCR et un chronomètre de 35 secondes.
-                // Sur Vercel, Tesseract doit télécharger ses modèles de langue à
-                // froid (l'arabe est volumineux) puis analyser sur 2 cœurs — ça
-                // pouvait dépasser la limite de la fonction et laisser l'utilisateur
-                // bloqué à l'infini. Si le délai est dépassé, la promesse est
-                // rejetée, le `catch` juste en dessous passe `ocrFailed = true`,
-                // et le dossier est créé normalement mais marqué pour revue
-                // manuelle. Mieux vaut un dossier créé et signalé qu'un formulaire
-                // figé. Le budget de 35s laisse ~25s pour le reste du pipeline
-                // (AML, moteur de règles, écritures Prisma) sous le plafond de 60s.
-                const OCR_TIMEOUT_MS = 35000;
-                const { data } = await Promise.race([
-                    Tesseract.recognize(idCardUrl, 'eng+fra+ara'),
-                    new Promise<never>((_, reject) =>
-                        setTimeout(() => reject(new Error("OCR timeout")), OCR_TIMEOUT_MS)
-                    ),
-                ]);
-                ocrText = data.text.toLowerCase();
+            // 🆕 60 secondes de validité : largement au-delà du budget OCR de
+            // 35s ci-dessous, pour qu'une lenteur réseau ne fasse jamais
+            // expirer le lien EN COURS de téléchargement — ce qui produirait un
+            // échec impossible à diagnostiquer.
+            const signedIdCardUrl = await createSignedDocumentUrl(idCardPath, 60);
 
-                const nameParts = String(customerName).toLowerCase().split(" ");
-                isNameOnDoc = nameParts.every((part: string) => ocrText.includes(part));
-                isCinOnDoc = ocrText.includes(String(cin).toLowerCase());
-            } else {
-                ocrFailed = true;
-            }
+            // 🆕 [FIX PROD] Course entre l'OCR et un chronomètre de 35 secondes.
+            // Sur Vercel, Tesseract doit télécharger ses modèles de langue à
+            // froid (l'arabe est volumineux) puis analyser sur 2 cœurs — ça
+            // pouvait dépasser la limite de la fonction et laisser l'utilisateur
+            // bloqué à l'infini. Si le délai est dépassé, la promesse est
+            // rejetée, le `catch` juste en dessous passe `ocrFailed = true`,
+            // et le dossier est créé normalement mais marqué pour revue
+            // manuelle. Mieux vaut un dossier créé et signalé qu'un formulaire
+            // figé. Le budget de 35s laisse ~25s pour le reste du pipeline
+            // (AML, moteur de règles, écritures Prisma) sous le plafond de 60s.
+            const OCR_TIMEOUT_MS = 35000;
+            const { data } = await Promise.race([
+                Tesseract.recognize(signedIdCardUrl, 'eng+fra+ara'),
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error("OCR timeout")), OCR_TIMEOUT_MS)
+                ),
+            ]);
+            ocrText = data.text.toLowerCase();
+
+            const nameParts = String(customerName).toLowerCase().split(" ");
+            isNameOnDoc = nameParts.every((part: string) => ocrText.includes(part));
+            isCinOnDoc = ocrText.includes(String(cin).toLowerCase());
         } catch (error) {
+            // 💡 Ce `catch` couvre désormais DEUX familles d'échec : l'OCR
+            // lui-même (image illisible, dépassement du délai) et la signature
+            // de l'URL (variables d'environnement Supabase manquantes, fichier
+            // absent du bucket). Dans les deux cas, la conséquence métier est
+            // identique — on ne peut pas lire le document — donc le traitement
+            // est le même : revue manuelle, sans bloquer la création du dossier.
             console.error("Critical OCR Extraction failed. Falling back to manual review:", error);
             ocrFailed = true;
         }
@@ -476,8 +543,14 @@ export async function POST(req: Request) {
                 phoneNumber,
                 userId: serverAgentId!, 
                 companyId: companyId!,  
-                idCardUrl,
-                selfieUrl,
+                // 🆕 [PHASE B] On enregistre les CHEMINS. Les colonnes
+                // idCardUrl/selfieUrl restent volontairement nulles pour tout
+                // nouveau dossier : elles n'existent plus que pour les dossiers
+                // antérieurs à cette migration, qui n'ont pas de chemin.
+                // C'est ce qui permet à l'affichage de trancher simplement :
+                // chemin présent → URL signée, sinon → ancien lien public.
+                idCardPath,
+                selfiePath,
                 status: "pending", 
                 score: formattedScore,
                 riskLevel: riskLevel,

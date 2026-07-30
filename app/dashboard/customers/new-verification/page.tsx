@@ -4,22 +4,27 @@
 // 🆕 FORMULAIRE DE NOUVELLE VÉRIFICATION KYC — LE CŒUR DU PRODUIT
 // ============================================================================
 // Flux complet : formulaire d'identité → upload pièce d'identité + selfie
-// (Uploadthing) → comparaison biométrique locale (face-api.js, dans le
-// navigateur) → POST /api/customers qui relance TOUT le pipeline serveur
-// (OCR, AML, moteur de règles — voir Lot 4) avec le score biométrique déjà
-// calculé ici comme simple donnée d'entrée.
+// (Supabase Storage, bucket PRIVÉ) → comparaison biométrique locale
+// (face-api.js, dans le navigateur) → POST /api/customers qui relance TOUT le
+// pipeline serveur (OCR, AML, moteur de règles — voir Lot 4) avec le score
+// biométrique déjà calculé ici comme simple donnée d'entrée.
 //
-// 🚨 CONFIRMATION DE LA FAILLE LIVENESS (déjà documentée côté serveur au Lot 4) :
+// ✅ [PHASE B — RÉSOLU] Les documents ne partent plus sur uploadthing derrière
+// des URLs publiques et permanentes. Ils vont dans un bucket Supabase privé, et
+// ce formulaire ne manipule plus que des CHEMINS (`idCardPath`/`selfiePath`) —
+// des coordonnées internes non adressables, inutilisables sans une URL signée
+// délivrée par le serveur après contrôle du companyId.
+//
+// 🚨 FAILLE LIVENESS TOUJOURS PRÉSENTE (Phase C, non traitée ici) :
 // aucune trace de `getUserMedia`, de `<video>` ou de capture caméra en direct
-// dans tout ce fichier (vérifié par recherche). Le "selfie" est un `<input
-// type="file">` classique (`selfieInputRef`/`handleFileChange`) — EXACTEMENT
-// le même mécanisme que l'upload de la pièce d'identité. Concrètement :
-// n'importe qui peut uploader une photo trouvée en ligne de la personne à la
-// place d'un vrai selfie, et `compareFaces` (juste en dessous) comparera
-// gentiment deux fichiers statiques sans jamais savoir si un humain était
-// devant un appareil photo. Il n'y a ni challenge-response (tourner la tête,
-// cligner des yeux), ni détection d'écran/photo-d'une-photo (anti-spoofing).
-// C'est le plus gros écart avec un vrai acteur KYC (Sumsub, Onfido, Veriff).
+// dans ce fichier. Le "selfie" reste un `<input type="file">` classique —
+// EXACTEMENT le même mécanisme que l'upload de la pièce d'identité.
+// Concrètement : n'importe qui peut uploader une photo trouvée en ligne de la
+// personne à la place d'un vrai selfie, et `compareFaces` comparera gentiment
+// deux fichiers statiques sans jamais savoir si un humain était devant un
+// appareil photo. Il n'y a ni challenge-response (tourner la tête, cligner des
+// yeux), ni détection d'écran/photo-d'une-photo (anti-spoofing). C'est le plus
+// gros écart restant avec un vrai acteur KYC (Sumsub, Onfido, Veriff).
 //
 // Autre détail : le sélecteur "Procedure Type" propose "Individual KYC
 // (Enhanced - Biometrics)" comme option distincte de "Standard", mais AUCUNE
@@ -36,9 +41,30 @@ import Header from "@/components/header";
 import { toast } from "sonner";
 import { getCountries, getCountryCallingCode } from 'react-phone-number-input/input';
 import en from 'react-phone-number-input/locale/en';
-import { useUploadThing } from "@/utils/uploadthing";
 
 import * as faceapi from 'face-api.js';
+
+// ============================================================================
+// 🆕 [PHASE B] CONTRAINTES DE FICHIER — ALIGNÉES SUR LE BUCKET SUPABASE
+// ============================================================================
+// ⚠️ Ces deux constantes doivent rester COHÉRENTES avec la configuration du
+// bucket `kyc-documents` dans le dashboard Supabase (taille max + types MIME
+// autorisés). L'ancienne version validait 5 Mo côté client alors qu'uploadthing
+// plafonnait à 4 Mo : un fichier entre les deux passait la vérification visuelle
+// puis échouait au transfert, avec un message d'erreur incompréhensible.
+//
+// 💡 Ces vérifications ne PROTÈGENT rien — un appel direct à l'API les
+// contournerait. Elles servent uniquement au confort : donner un retour
+// immédiat plutôt que de laisser l'utilisateur attendre le rejet du serveur.
+// La vraie barrière est configurée au niveau du bucket, côté Supabase.
+const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024; // 4 Mo
+
+// ⚠️ image/svg+xml est délibérément ABSENT. Un SVG est un document XML qui peut
+// embarquer du JavaScript : servi un jour depuis notre domaine, il deviendrait
+// un vecteur d'attaque XSS. L'ancienne vérification `file.type.startsWith('image/')`
+// l'acceptait sans broncher. Seuls des formats raster sont autorisés — ils sont
+// incapables de porter du code exécutable.
+const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 export default function NewVerificationPage() {
     const { data: session } = useSession();
@@ -72,7 +98,6 @@ export default function NewVerificationPage() {
     const [usageStats, setUsageStats] = useState({ current: 0, limit: 5 });
 
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
-    const { startUpload } = useUploadThing("kycDocumentUploader");
 
     // Au montage : vérifie d'abord le quota (paywall) — si l'entreprise a
     // atteint sa limite, on affiche le mur de paiement SANS charger les
@@ -114,19 +139,99 @@ export default function NewVerificationPage() {
         initializePage();
     }, []);
 
+    // ========================================================================
+    // 🆕 [PHASE B] ENVOI D'UN DOCUMENT VERS LE BUCKET PRIVÉ — EN 2 TEMPS
+    // ========================================================================
+    // Remplace `startUpload` d'uploadthing. Le mécanisme est différent et vaut
+    // la peine d'être compris :
+    //
+    //   TEMPS 1 — On demande une AUTORISATION à notre serveur. Il vérifie la
+    //   session, calcule lui-même le chemin de destination à partir du
+    //   companyId, et renvoie une URL d'écriture signée valable 15 minutes.
+    //   Le navigateur ne choisit JAMAIS où le fichier atterrit : il est donc
+    //   structurellement incapable d'écrire dans le dossier d'une autre
+    //   entreprise, même en manipulant la requête.
+    //
+    //   TEMPS 2 — Le fichier part DIRECTEMENT du navigateur vers Supabase.
+    //   Il ne transite jamais par notre application.
+    //
+    // 💡 POURQUOI CE DÉTOUR : Vercel plafonne le corps d'une requête serverless
+    // à 4,5 Mo. Nos fichiers montent à 4 Mo, et l'encodage multipart réduit
+    // encore la marge — on frôlerait l'échec en permanence. Faire transiter le
+    // fichier par une fonction serverless imposerait aussi de le charger
+    // entièrement en mémoire et de payer le temps d'exécution du transfert.
+    //
+    // Retourne le CHEMIN du fichier (ex: "cmp_a1b2/9f8e-idcard.jpg"), à joindre
+    // au formulaire. Ce n'est pas une URL : sans domaine ni protocole, et avec
+    // un bucket privé, il n'est pas adressable.
+    const uploadDocument = async (file: File, kind: "idcard" | "selfie"): Promise<string> => {
+        // --- TEMPS 1 : obtenir l'autorisation ---
+        const authRes = await fetch("/api/kyc-documents/upload-url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind, contentType: file.type }),
+        });
+
+        if (!authRes.ok) {
+            const data = await authRes.json().catch(() => ({} as any));
+            // 💡 On remonte le message du serveur tel quel : il est déjà précis
+            // (type non autorisé, quota de demandes dépassé, session expirée...).
+            // En inventer un ici masquerait la vraie cause à l'utilisateur.
+            throw new Error(data.error || "Impossible de préparer l'envoi du document.");
+        }
+
+        const { signedUrl, path } = await authRes.json();
+
+        // --- TEMPS 2 : envoyer le fichier directement à Supabase ---
+        // Un simple PUT sur l'URL signée, avec le fichier brut en corps de
+        // requête. Aucune clé Supabase n'est nécessaire côté navigateur : la
+        // signature contenue dans l'URL fait office d'autorisation, et elle ne
+        // vaut que pour CE chemin précis, pendant 15 minutes.
+        const uploadRes = await fetch(signedUrl, {
+            method: "PUT",
+            headers: { "Content-Type": file.type },
+            body: file,
+        });
+
+        if (!uploadRes.ok) {
+            // On journalise le détail technique en console pour le débogage,
+            // mais l'utilisateur reçoit un message actionnable.
+            console.error(
+                "[UPLOAD] Échec du transfert :",
+                uploadRes.status,
+                await uploadRes.text().catch(() => "")
+            );
+            throw new Error("Le transfert du document a échoué. Vérifiez votre connexion et réessayez.");
+        }
+
+        return path;
+    };
+
     // Compare le visage détecté sur la pièce d'identité et celui du "selfie"
     // (rappel : n'importe quelle image uploadée, pas forcément une vraie
-    // capture live — voir la note en tête de fichier). Les deux images sont
-    // chargées comme de simples <img> DOM (pas de flux vidéo), passées au
-    // détecteur, puis chaque visage est réduit à un "descriptor" (vecteur de
-    // 128 nombres qui encode les traits du visage). La distance euclidienne
-    // entre les deux vecteurs mesure la dissemblance ; elle est ensuite
-    // transformée en un score de similarité 0-100% via une formule linéaire
-    // calibrée empiriquement (distance de 1.2 ≈ 0% de similarité).
+    // capture live — voir la note en tête de fichier).
+    //
+    // 💡 Les deux paramètres sont des URLs `blob:` LOCALES, créées par
+    // URL.createObjectURL() dans handleFileChange — jamais des adresses
+    // distantes. La comparaison se fait donc entièrement en mémoire, sans le
+    // moindre téléchargement. C'est aussi ce qui la rend compatible avec le
+    // stockage privé : le navigateur n'a jamais besoin de relire le fichier
+    // depuis Supabase.
+    //
+    // Les images sont chargées comme de simples <img> DOM (pas de flux vidéo),
+    // passées au détecteur, puis chaque visage est réduit à un "descriptor"
+    // (vecteur de 128 nombres qui encode les traits du visage). La distance
+    // euclidienne entre les deux vecteurs mesure la dissemblance ; elle est
+    // ensuite transformée en un score de similarité 0-100% via une formule
+    // linéaire calibrée empiriquement (distance de 1.2 ≈ 0% de similarité).
     // Retourne `null` si un visage n'est détecté sur aucune des deux images
     // (traité côté serveur comme "vérification biométrique ignorée").
     const compareFaces = async (idUrl: string, selfieUrl: string): Promise<number | null> => {
         try {
+            // 💡 `crossOrigin` n'a plus d'utilité avec des URLs blob: locales
+            // (aucune requête réseau, donc aucune politique CORS en jeu). On le
+            // conserve : inoffensif, et utile si un jour on repasse par une URL
+            // distante signée.
             const idImg = new Image(); idImg.src = idUrl; idImg.crossOrigin = "anonymous";
             const selfieImg = new Image(); selfieImg.src = selfieUrl; selfieImg.crossOrigin = "anonymous";
 
@@ -207,20 +312,30 @@ export default function NewVerificationPage() {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        if (!file.type.startsWith('image/')) {
-            setGlobalError("Please upload an image file (PNG, JPG).");
-            return;
-        }
-        // ⚠️ Incohérence : validé ici à 5 Mo côté client, mais Uploadthing est
-        // configuré à 4 Mo max côté serveur (voir api/uploadthing/core.ts,
-        // `maxFileSize: "4MB"`). Un fichier entre 4 et 5 Mo passe cette
-        // vérification mais sera rejeté par `startUpload` plus bas, avec un
-        // message d'erreur moins clair ("Document upload failed").
-        if (file.size > 5 * 1024 * 1024) {
-            setGlobalError("File size must be under 5MB.");
+        // 🆕 [PHASE B] LISTE BLANCHE STRICTE au lieu de `startsWith('image/')`.
+        // L'ancienne vérification acceptait image/svg+xml, image/gif, et tout
+        // autre format exotique. On n'autorise plus que trois formats raster,
+        // exactement ceux acceptés par la route d'autorisation d'upload et par
+        // le bucket lui-même.
+        if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+            setGlobalError("Unsupported format. Please upload a JPEG, PNG or WebP image.");
             return;
         }
 
+        // 🆕 [PHASE B] 4 Mo — aligné sur la limite du bucket Supabase.
+        // Avant : 5 Mo ici contre 4 Mo côté serveur, donc un fichier de 4,5 Mo
+        // passait cette vérification puis échouait au transfert avec un message
+        // opaque. Les deux valeurs sont désormais cohérentes.
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+            setGlobalError("File size must be under 4MB.");
+            return;
+        }
+
+        setGlobalError("");
+
+        // 💡 Cette URL `blob:` sert à DEUX choses : l'aperçu affiché dans le
+        // formulaire, et l'analyse biométrique (compareFaces). Elle pointe vers
+        // la mémoire du navigateur, jamais vers le réseau.
         const previewUrl = URL.createObjectURL(file);
 
         if (type === "idCard") {
@@ -267,29 +382,39 @@ export default function NewVerificationPage() {
             try {
                 setLoadingText("Uploading secure documents...");
                 
-                let uploadedIdCardUrl = "";
-                let uploadedSelfieUrl = "";
+                // 🆕 [PHASE B] On récupère des CHEMINS, plus des URLs.
+                // La différence est fondamentale : une URL est directement
+                // adressable (la coller dans un navigateur affiche le fichier),
+                // un chemin ne l'est pas. C'est tout l'objet du correctif.
+                let uploadedIdCardPath = "";
+                let uploadedSelfiePath = "";
 
-                if (idCardFile) {
-                    const idRes = await startUpload([idCardFile]);
-                    if (idRes && idRes[0]) uploadedIdCardUrl = idRes[0].ufsUrl;
-                }
-                if (selfieFile) {
-                    const selfieRes = await startUpload([selfieFile]);
-                    if (selfieRes && selfieRes[0]) uploadedSelfieUrl = selfieRes[0].ufsUrl;
+                // 💡 Les deux envois sont lancés EN PARALLÈLE (Promise.all) au
+                // lieu de l'un après l'autre comme avant. Deux transferts de
+                // 4 Mo en série sur une connexion mobile, c'est une attente
+                // deux fois plus longue pour rien : ils sont indépendants.
+                if (idCardFile && selfieFile) {
+                    const [idPath, selfiePath] = await Promise.all([
+                        uploadDocument(idCardFile, "idcard"),
+                        uploadDocument(selfieFile, "selfie"),
+                    ]);
+                    uploadedIdCardPath = idPath;
+                    uploadedSelfiePath = selfiePath;
                 }
 
-                if (!uploadedIdCardUrl || !uploadedSelfieUrl) {
+                if (!uploadedIdCardPath || !uploadedSelfiePath) {
                     throw new Error("Document upload failed. Please try again.");
                 }
 
                 // Le score biométrique est calculé ICI, entièrement dans le
-                // navigateur, puis envoyé au serveur dans le body JSON juste en
-                // dessous. Le serveur (customers/route.ts) fait confiance à ce
-                // chiffre tel quel — c'est le point d'origine exact de la faille
-                // "biometricScore contournable" documentée au Lot 4 : rien
-                // n'empêche d'intercepter cette requête et de remplacer la
-                // valeur calculée par 99.9 avant l'envoi.
+                // navigateur, à partir des fichiers LOCAUX, puis envoyé au
+                // serveur dans le body JSON juste en dessous. Le serveur
+                // (customers/route.ts) fait confiance à ce chiffre tel quel —
+                // c'est le point d'origine exact de la faille "biometricScore
+                // contournable" : rien n'empêche d'intercepter cette requête et
+                // de remplacer la valeur calculée par 99.9 avant l'envoi.
+                // ⚠️ Correction prévue en Phase C (recalcul côté serveur), en
+                // même temps que le liveness.
                 setLoadingText("Executing Deep Learning Biometrics...");
                 let biometricScore: number | null = null;
                 if (idCardPreview && selfiePreview) {
@@ -310,9 +435,15 @@ export default function NewVerificationPage() {
                         nationality: nationality ? en[nationality as keyof typeof en] : "Not specified",
                         dateOfBirth,
                         phoneNumber: finalPhoneNumber,
-                        userId: (session?.user as any)?.id,
-                        idCardUrl: uploadedIdCardUrl,
-                        selfieUrl: uploadedSelfieUrl,
+                        // 🆕 [PHASE B] `userId` retiré du corps de la requête.
+                        // Le serveur dérive de toute façon l'identité de l'agent
+                        // de la session (`guard.userId`) et ignorait déjà cette
+                        // valeur. La laisser laissait croire que le client peut
+                        // désigner l'auteur d'un dossier — exactement ce qu'on a
+                        // corrigé côté serveur pour l'intégrité de la piste
+                        // d'audit. Autant que le code dise la vérité.
+                        idCardPath: uploadedIdCardPath,
+                        selfiePath: uploadedSelfiePath,
                         biometricScore: biometricScore 
                     }),
                 });
@@ -507,7 +638,10 @@ export default function NewVerificationPage() {
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     {/* Upload ID Card */}
                                     <div className="flex-1 flex flex-col gap-1">
-                                        <input type="file" accept="image/*" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} disabled={loading} />
+                                        {/* 🆕 [PHASE B] `accept` restreint aux 3 formats autorisés au lieu de
+                                            `image/*` : le sélecteur de fichiers du système filtre directement,
+                                            l'utilisateur ne peut plus choisir un format qui sera refusé ensuite. */}
+                                        <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} disabled={loading} />
                                         <div 
                                             onClick={() => !loading && idCardInputRef.current?.click()}
                                             className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
@@ -532,7 +666,8 @@ export default function NewVerificationPage() {
                                                         <FileText className={`w-5 h-5 ${fieldErrors.idCardFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
                                                     </div>
                                                     <p className="text-sm font-bold text-gray-700 mb-1">Upload Front ID</p>
-                                                    <p className="text-xs text-gray-500">PNG, JPG up to 5MB</p>
+                                                    {/* 🆕 Texte aligné sur la vraie limite (4 Mo, pas 5) */}
+                                                    <p className="text-xs text-gray-500">JPG, PNG or WebP up to 4MB</p>
                                                 </>
                                             )}
                                         </div>
@@ -541,7 +676,7 @@ export default function NewVerificationPage() {
 
                                     {/* Upload Selfie */}
                                     <div className="flex-1 flex flex-col gap-1">
-                                        <input type="file" accept="image/*" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} disabled={loading} />
+                                        <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} disabled={loading} />
                                         <div 
                                             onClick={() => !loading && selfieInputRef.current?.click()}
                                             className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.selfieFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
@@ -566,7 +701,7 @@ export default function NewVerificationPage() {
                                                         <Camera className={`w-5 h-5 ${fieldErrors.selfieFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
                                                     </div>
                                                     <p className="text-sm font-bold text-gray-700 mb-1">Upload Selfie</p>
-                                                    <p className="text-xs text-gray-500">PNG or JPG file</p>
+                                                    <p className="text-xs text-gray-500">JPG, PNG or WebP file</p>
                                                 </>
                                             )}
                                         </div>

@@ -150,6 +150,21 @@ export const passwordResetSubmitLimiter = new Ratelimit({
     prefix: "rl:password-reset-submit",
     analytics: false,
 });
+
+// 🆕 [PHASE B] Demandes d'autorisation d'upload de documents KYC.
+// Chaque appel réserve un emplacement d'écriture dans le bucket privé. Sans
+// limite, un agent authentifié pourrait en réclamer des milliers et saturer le
+// stockage (le plan gratuit Supabase plafonne à 1 Go).
+//
+// 💡 30 par 10 minutes = environ 15 dossiers KYC complets (pièce d'identité +
+// selfie) sur ce laps de temps. Très large pour un usage réel, très étroit pour
+// un script.
+export const documentUploadLimiter = new Ratelimit({
+    redis: getRedis(),
+    limiter: Ratelimit.slidingWindow(30, "10 m"),
+    prefix: "rl:doc-upload",
+    analytics: false,
+});
 // ----------------------------------------------------------------------------
 // EXTRACTION DE L'ADRESSE IP DU VISITEUR
 // ----------------------------------------------------------------------------
