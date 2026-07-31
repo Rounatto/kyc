@@ -79,6 +79,24 @@ model User {
   
   // 🔐 WEBAUTHN / PASSKEYS
   currentChallenge     String?
+
+  // 🆕 [PHASE B] Date d'expiration du challenge ci-dessus.
+  //
+  // Le problème corrigé : `currentChallenge` ne périmait JAMAIS. Il restait
+  // valide indéfiniment, jusqu'à ce qu'une nouvelle tentative de connexion
+  // l'écrase — parfois des semaines plus tard. Un attaquant obtenant une
+  // réponse signée pour ce challenge (via un log, un cache, ou en piégeant
+  // l'utilisateur) pouvait donc la REJOUER bien après coup pour se connecter.
+  //
+  // 💡 La norme WebAuthn recommande explicitement des challenges à durée de
+  // vie courte, précisément pour empêcher ce rejeu. On visera 2 minutes côté
+  // code : largement assez pour poser un doigt sur un capteur, assez court
+  // pour qu'une réponse interceptée soit inutilisable.
+  //
+  // Nullable : les comptes existants n'ont pas encore de date, et un challenge
+  // consommé est remis à null avec le champ ci-dessus.
+  challengeExpires     DateTime?
+
   passkeys             Passkey[]
   
   // 📱 2FA TOTP

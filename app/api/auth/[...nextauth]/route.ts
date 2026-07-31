@@ -147,7 +147,9 @@ export const authOptions: NextAuthOptions = {
             companyId: string | null; 
             role: string; 
             totpEnabled: boolean; 
-            totpSecret: string | null 
+            totpSecret: string | null;
+            // 🆕 [PHASE B] Date d'expiration du challenge WebAuthn (voir schéma).
+            challengeExpires: Date | null;
         };
 
         // 🌟 SCÉNARIO 1 : CONNEXION PAR PASSKEY (WebAuthn)
@@ -156,6 +158,38 @@ export const authOptions: NextAuthOptions = {
         // clé de sécurité...) et renvoie ici la réponse signée à vérifier.
         if (credentials.passkeyResponse) {
             if (!user.currentChallenge) throw new Error("Challenge expiré ou invalide");
+
+            // ================================================================
+            // 🆕 [PHASE B] VÉRIFICATION DE L'EXPIRATION DU CHALLENGE
+            // ================================================================
+            // C'EST ICI QUE LE CORRECTIF PREND EFFET. Sans ce bloc, un challenge
+            // généré puis abandonné restait valide INDÉFINIMENT en base — parfois
+            // des semaines — et une réponse signée pour lui, obtenue par un
+            // attaquant (log, cache, appareil compromis), pouvait être REJOUÉE
+            // bien plus tard pour ouvrir une session.
+            //
+            // Toute la protection anti-rejeu de WebAuthn repose sur le caractère
+            // ÉPHÉMÈRE du challenge. Sans expiration, elle ne tenait que par
+            // accident — jusqu'à ce qu'une nouvelle tentative l'écrase.
+            //
+            // 🔒 FAIL-CLOSED SUR LE CAS `null` : un challenge sans date
+            // d'expiration est traité comme EXPIRÉ. C'est délibéré. Ça concerne
+            // les challenges créés avant ce correctif : on refuse par principe
+            // plutôt que de leur accorder une validité illimitée "parce qu'on
+            // ne sait pas". La conséquence pour l'utilisateur est minime — il
+            // reclique sur "Passkey" et un challenge frais est généré.
+            //
+            // 🧹 On PURGE le challenge périmé au passage. Deux raisons : ne pas
+            // laisser traîner une valeur morte en base, et garantir qu'une
+            // seconde tentative repartira forcément d'un challenge neuf.
+            const challengeExpires = authUser.challengeExpires;
+            if (!challengeExpires || new Date() > challengeExpires) {
+                await prisma.user.update({
+                    where: { id: user.id },
+                    data: { currentChallenge: null, challengeExpires: null },
+                });
+                throw new Error("Challenge expiré ou invalide");
+            }
 
             const response = JSON.parse(credentials.passkeyResponse);
             const passkey = user.passkeys.find(pk => pk.credentialID === response.id);
@@ -184,9 +218,13 @@ export const authOptions: NextAuthOptions = {
                     where: { credentialID: passkey.credentialID },
                     data: { counter: verification.authenticationInfo.newCounter }
                 });
+                // 🆕 [PHASE B] On efface AUSSI la date d'expiration, pas seulement
+                // le challenge. Laisser une date orpheline en base n'aurait aucune
+                // conséquence fonctionnelle, mais une donnée qui ne correspond plus
+                // à rien finit toujours par tromper quelqu'un qui la relit.
                 await prisma.user.update({
                     where: { id: user.id },
-                    data: { currentChallenge: null }
+                    data: { currentChallenge: null, challengeExpires: null }
                 });
 
                 // 📜 AUDIT TRAIL : Succès Biométrique

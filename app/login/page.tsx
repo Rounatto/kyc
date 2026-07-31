@@ -11,17 +11,14 @@
 // Le bouton Passkey utilise `startAuthentication` (SimpleWebAuthn browser) qui
 // déclenche la boîte de dialogue native Face ID/empreinte/clé de sécurité.
 //
-// 🆕 [PHASE B] Le serveur applique désormais un rate limiting sur la connexion
+// 🆕 [PHASE B] Le serveur applique un rate limiting sur la connexion
 // (10 tentatives / 15 min par IP) et sur /api/auth/passkey/generate-login
-// (10 / min par IP). Cette page doit donc distinguer un vrai échec
-// d'authentification d'un simple blocage temporaire — sans quoi l'utilisateur
-// verrait "mot de passe incorrect" alors que son mot de passe est bon.
+// (10 / min par IP). Cette page distingue donc un vrai échec d'authentification
+// d'un simple blocage temporaire — sans quoi l'utilisateur verrait "mot de passe
+// incorrect" alors que son mot de passe est bon.
 //
-// ⚠️ Le lien "Forgot password?" pointe vers /forgot-password, qui N'EXISTE
-// PAS dans ce projet (aucune page, aucune route API de reset) — fonctionnalité
-// manquante, pas juste un lien mort à corriger.
-// ⚠️ L'icône d'aide (point d'interrogation, en haut à droite) a un curseur
-// "pointer" mais aucun onClick — élément visuellement cliquable qui ne fait rien.
+// ⚠️ Le lien "Forgot password?" pointe vers /forgot-password, qui existe
+// désormais (flux complet de réinitialisation, Phase B).
 import { useState } from "react";
 import Link from "next/link";
 import { Eye, Mail, Lock, EyeOff, Fingerprint, CircleQuestionMark, Loader2, ArrowLeft, ShieldAlert } from "lucide-react";
@@ -76,17 +73,10 @@ export default function Login() {
                 setTotpCode(""); // On vide la case
             } else if (resultat.error === "TOO_MANY_ATTEMPTS") {
                 // 🆕 [PHASE B] Blocage temporaire par le rate limiting serveur.
-                //
-                // Ce cas DOIT être distingué des autres : sans lui, l'utilisateur
-                // tomberait dans le `else` ci-dessous et lirait "Email or password
-                // incorrect" alors que ses identifiants sont peut-être parfaitement
-                // valides. Il essaierait alors de "corriger" un mot de passe qui
-                // n'a aucun problème, échouerait encore, et s'enfoncerait dans le
-                // blocage sans jamais comprendre pourquoi.
-                //
-                // 💡 On ne vide PAS les champs email/mot de passe ici : l'utilisateur
-                // n'a rien fait de mal, autant lui éviter de tout retaper dans
-                // quelques minutes.
+                // Sans cette branche, l'erreur tomberait dans le `else` ci-dessous
+                // et afficherait "Email or password incorrect" — alors que les
+                // identifiants sont peut-être parfaitement valides. L'utilisateur
+                // chercherait à corriger un mot de passe qui n'a aucun problème.
                 setError("Too many login attempts. Please wait a few minutes before trying again.");
             } else {
                 setError("Email or password incorrect.");
@@ -96,7 +86,7 @@ export default function Login() {
         }
     };
 
-    // ... [Logique Passkey inchangée]
+    // ... [Logique Passkey]
     const handlePasskeyLogin = async () => {
         setError("");
         if (!email) { setError("Please enter your email to use Passkey."); return; }
@@ -106,18 +96,11 @@ export default function Login() {
                 method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email })
             });
 
-            // 🆕 [PHASE B] Le code 429 doit être intercepté AVANT le test `!resp.ok`
-            // générique juste en dessous.
-            //
-            // Pourquoi c'est indispensable : un statut 429 n'est pas "ok", il
-            // tomberait donc dans le message "No passkey found for this email" —
-            // ce qui enverrait l'utilisateur configurer une passkey qu'il possède
-            // déjà, sans jamais lui dire qu'il est simplement bloqué quelques
-            // instants. Un message faux est pire qu'un message d'erreur brut.
-            //
-            // 💡 La route renvoie un corps { error, retryAfter } : on réutilise
-            // son message, qui contient déjà le délai exact d'attente. Le
-            // `.catch()` couvre le cas d'un corps illisible.
+            // 🆕 [PHASE B] Le 429 doit être intercepté AVANT le test `!resp.ok`
+            // générique. Un statut 429 n'est pas "ok", il tomberait donc dans
+            // "No passkey found for this email" — ce qui enverrait l'utilisateur
+            // configurer une passkey qu'il possède déjà, sans jamais lui dire
+            // qu'il est simplement bloqué quelques instants.
             if (resp.status === 429) {
                 const data = await resp.json().catch(() => ({} as any));
                 throw new Error(data.error || "Too many attempts. Please wait a moment and try again.");
@@ -127,7 +110,23 @@ export default function Login() {
             const options = await resp.json();
 
             let authenticationResponse;
-            try { authenticationResponse = await startAuthentication(options); } 
+            try {
+                // 🆕 [PHASE B] CORRECTION DE LA SIGNATURE D'APPEL.
+                //
+                // Avant : startAuthentication(options)
+                // Maintenant : startAuthentication({ optionsJSON: options })
+                //
+                // @simplewebauthn/browser v13 a changé sa signature : la fonction
+                // attend désormais un OBJET dont la propriété `optionsJSON`
+                // contient les options, au lieu des options directement.
+                //
+                // L'ancien appel fonctionnait encore par rétrocompatibilité, mais
+                // la librairie l'annonçait dans la console ("startAuthentication()
+                // was not called correctly") et le supprimera à la prochaine
+                // version majeure — la connexion par passkey casserait alors d'un
+                // coup, lors d'une simple mise à jour de dépendance.
+                authenticationResponse = await startAuthentication({ optionsJSON: options });
+            } 
             catch (authErr) { throw new Error("Biometric scan cancelled or failed."); }
 
             const resultat = await signIn("credentials", {
@@ -136,9 +135,7 @@ export default function Login() {
                 // 🆕 [PHASE B] `rememberMe` était ABSENT de cet appel : une
                 // connexion par passkey ignorait donc totalement la case cochée
                 // par l'utilisateur, qui repartait avec une session courte de 24 h
-                // au lieu des 15 jours promis. Le serveur lit bien cette valeur
-                // dans le scénario passkey (voir [...nextauth]/route.ts), encore
-                // fallait-il la lui envoyer.
+                // au lieu des 15 jours promis.
                 rememberMe: rememberMe.toString(),
                 redirect: false,
             });
@@ -172,7 +169,7 @@ export default function Login() {
                     💡 rel="noopener noreferrer" est obligatoire avec target="_blank" :
                     sans lui, la page ouverte peut manipuler la nôtre. */}
                 
-                <a  href="https://mail.google.com/mail/?view=cm&fs=1&to=rayan1mhalla@gmail.com&su=TrustVerify%20-%20Login%20assistance"
+                <a    href="https://mail.google.com/mail/?view=cm&fs=1&to=rayan1mhalla@gmail.com&su=TrustVerify%20-%20Login%20assistance"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-500 cursor-pointer hover:text-gray-700 text-lg"
@@ -214,7 +211,6 @@ export default function Login() {
 
                                 <div className="flex flex-row items-center justify-between mb-1">
                                     <label className="text-sm font-bold text-gray-700">Password</label>
-                                    {/* ⚠️ /forgot-password n'existe pas encore (voir note en tête de fichier) */}
                                     <Link href="/forgot-password" className="text-xs text-blue-700 font-bold hover:underline">Forgot password?</Link>
                                 </div>
                                 <div className="flex items-center gap-2 w-full border border-gray-300 rounded-sm py-2.5 px-3 mb-4 bg-white focus-within:border-blue-500 transition-colors">

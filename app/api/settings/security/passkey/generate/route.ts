@@ -8,6 +8,8 @@
 // clé déjà enregistrée (`generateAuthenticationOptions`). Deux cérémonies
 // WebAuthn différentes, deux jeux d'API SimpleWebAuthn différents.
 // `excludeCredentials` empêche de ré-enregistrer une clé déjà connue du compte.
+//
+// ✅ [PHASE B — RÉSOLU] Le challenge expire désormais (voir CHALLENGE_TTL_MS).
 import { NextResponse } from "next/server";
 import { generateRegistrationOptions } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
@@ -15,6 +17,25 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 const rpName = "TrustVerify KYC B2B";
+
+// ============================================================================
+// 🆕 [PHASE B] DURÉE DE VIE DU CHALLENGE — 5 MINUTES ICI, CONTRE 2 AU LOGIN
+// ============================================================================
+// Même correctif que dans generate-login (un challenge sans expiration reste
+// rejouable indéfiniment), mais avec une fenêtre VOLONTAIREMENT PLUS LONGUE.
+//
+// Pourquoi cette différence : la connexion se fait avec une clé DÉJÀ
+// configurée — un doigt sur le capteur, quelques secondes. L'ENREGISTREMENT,
+// lui, peut être la toute première fois que l'utilisateur crée une passkey :
+// Windows Hello peut lui demander de définir un code PIN, d'enrôler une
+// empreinte, parfois de traverser plusieurs écrans système. Deux minutes
+// suffiraient rarement, et un échec ici serait particulièrement frustrant :
+// l'utilisateur aurait fait tout le parcours pour rien.
+//
+// 5 minutes reste très loin de l'exposition illimitée d'avant, et le risque est
+// moindre : cette route exige déjà une session valide, contrairement au login
+// qui est ouvert à un visiteur non authentifié.
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 export async function GET() {
     try {
@@ -57,9 +78,15 @@ export async function GET() {
             },
         });
 
+        // 🆕 [PHASE B] Challenge ET date d'expiration écrits dans la même
+        // opération, pour qu'aucun challenge ne puisse exister sans limite de
+        // validité, même une fraction de seconde.
         await prisma.user.update({
             where: { id: user.id },
-            data: { currentChallenge: options.challenge },
+            data: {
+                currentChallenge: options.challenge,
+                challengeExpires: new Date(Date.now() + CHALLENGE_TTL_MS),
+            },
         });
 
         return NextResponse.json(options);

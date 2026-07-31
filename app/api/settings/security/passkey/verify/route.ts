@@ -7,6 +7,9 @@
 // persiste la clé publique + le compteur anti-rejeu dans le modèle `Passkey`.
 // Ce `counter` est incrémenté à chaque connexion (voir [...nextauth]/route.ts)
 // pour détecter un clonage de clé (une valeur qui ne progresse pas = suspect).
+//
+// ✅ [PHASE B — RÉSOLU] Le challenge expire désormais (5 min, écrites par
+// ./generate) et cette route refuse tout challenge périmé.
 import { NextResponse } from "next/server";
 import { verifyRegistrationResponse } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
@@ -29,6 +32,33 @@ export async function POST(req: Request) {
 
         if (!user || !user.currentChallenge) {
             return NextResponse.json({ error: "No active registration challenge found" }, { status: 400 });
+        }
+
+        // ====================================================================
+        // 🆕 [PHASE B] VÉRIFICATION DE L'EXPIRATION DU CHALLENGE
+        // ====================================================================
+        // Même correctif que dans le flux de connexion : sans cette vérification,
+        // un challenge d'enregistrement généré puis abandonné restait valide
+        // indéfiniment, et une réponse signée pour lui pouvait être rejouée bien
+        // plus tard pour rattacher une clé au compte.
+        //
+        // 🔒 FAIL-CLOSED SUR `null` : un challenge sans date est traité comme
+        // expiré (cas des challenges antérieurs à ce correctif). L'utilisateur
+        // n'a qu'à relancer l'enregistrement — un inconvénient bien moindre
+        // qu'une validité illimitée accordée par défaut.
+        //
+        // 🧹 Purge du challenge périmé au passage, pour ne pas laisser de valeur
+        // morte en base et garantir un redémarrage propre.
+        const challengeExpires = (user as any).challengeExpires as Date | null;
+        if (!challengeExpires || new Date() > challengeExpires) {
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { currentChallenge: null, challengeExpires: null },
+            });
+            return NextResponse.json(
+                { error: "Registration challenge expired. Please start again." },
+                { status: 400 }
+            );
         }
 
         // 💡 SÉCURITÉ : Faille de Claude n°5 corrigée (Variables d'environnement)
@@ -63,9 +93,13 @@ export async function POST(req: Request) {
                 },
             });
 
+            // 🆕 [PHASE B] La date d'expiration est effacée en même temps que le
+            // challenge : une donnée orpheline en base n'a aucune conséquence
+            // fonctionnelle, mais elle finit toujours par tromper quelqu'un qui
+            // la relit plus tard.
             await prisma.user.update({
                 where: { id: user.id },
-                data: { currentChallenge: null },
+                data: { currentChallenge: null, challengeExpires: null },
             });
 
             return NextResponse.json({ verified: true, message: "Passkey successfully registered!" });

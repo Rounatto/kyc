@@ -16,11 +16,34 @@
 // plateforme — information à valeur commerciale, et préalable classique à une
 // campagne de phishing ciblé. La réponse est désormais IDENTIQUE dans les deux
 // cas (voir buildDecoyOptions plus bas).
+//
+// ✅ [PHASE B — RÉSOLU] Le challenge expire désormais (voir CHALLENGE_TTL_MS).
 import { NextResponse } from "next/server";
 import { generateAuthenticationOptions, type AuthenticatorTransportFuture } from "@simplewebauthn/server";
 import prisma from "@/lib/prisma";
 import crypto from "crypto";
 import { enforceRateLimit, getClientIp, passkeyLoginLimiter } from "@/lib/ratelimit";
+
+// ============================================================================
+// 🆕 [PHASE B] DURÉE DE VIE DU CHALLENGE
+// ============================================================================
+// LE PROBLÈME CORRIGÉ : `currentChallenge` ne périmait JAMAIS. Il restait
+// valide en base jusqu'à ce qu'une nouvelle tentative l'écrase — parfois des
+// semaines plus tard.
+//
+// Le scénario concret : un utilisateur clique "Passkey", le serveur écrit un
+// challenge, puis l'utilisateur ABANDONNE (ferme l'onglet, annule la boîte de
+// dialogue, part déjeuner). Ce challenge reste exploitable indéfiniment. Si un
+// attaquant obtient une réponse signée pour lui — via un log, un cache, un
+// appareil compromis — il peut la REJOUER bien plus tard et se connecter.
+//
+// 💡 Toute la protection anti-rejeu de WebAuthn repose sur le fait que le
+// challenge soit ÉPHÉMÈRE. Sans expiration, elle ne tenait que par accident.
+//
+// Pourquoi 2 minutes : c'est largement suffisant pour poser un doigt sur un
+// capteur ou taper un PIN sur un appareil déjà configuré. La fenêtre d'attaque
+// passe d'infinie à 120 secondes.
+const CHALLENGE_TTL_MS = 2 * 60 * 1000;
 
 // ============================================================================
 // 🆕 [PHASE B] FABRICATION D'UNE RÉPONSE LEURRE
@@ -129,6 +152,7 @@ export async function POST(req: Request) {
             // 💡 Aucune écriture en base ici : il n'existe aucun utilisateur à
             // qui rattacher ce challenge. C'est sans conséquence, il ne sera
             // jamais vérifié — l'appareil échouera avant même d'arriver là.
+            // 🆕 Corollaire : pas de date d'expiration à écrire non plus.
             return NextResponse.json(decoyOptions);
         }
 
@@ -154,9 +178,17 @@ export async function POST(req: Request) {
         // (« declared but its value is never read »), le petit soulignement grisé.
         // On ne voulait que l'EFFET DE BORD (écrire le challenge en base), pas la
         // valeur de retour : on appelle donc update() sans rien capturer.
+        //
+        // 🆕 [PHASE B] La date d'expiration est écrite EN MÊME TEMPS que le
+        // challenge, dans la même opération. C'est important : deux écritures
+        // séparées laisseraient une fenêtre — même infime — où un challenge
+        // existerait sans date, donc sans limite de validité.
         await prisma.user.update({
             where: { id: user.id },
-            data: { currentChallenge: options.challenge },
+            data: {
+                currentChallenge: options.challenge,
+                challengeExpires: new Date(Date.now() + CHALLENGE_TTL_MS),
+            },
         });
 
         return NextResponse.json(options);
