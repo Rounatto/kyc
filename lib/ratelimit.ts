@@ -165,6 +165,21 @@ export const documentUploadLimiter = new Ratelimit({
     prefix: "rl:doc-upload",
     analytics: false,
 });
+
+// 🆕 [PHASE B] Changement de mot de passe depuis les Settings.
+// Route authentifiée, mais le scénario à bloquer est réel : quelqu'un trouve
+// un poste non verrouillé et veut s'approprier le compte. Il lui faut le mot
+// de passe ACTUEL, qu'il ne connaît pas — sans limite, il pourrait le
+// brute-forcer tranquillement depuis la session ouverte.
+//
+// 💡 5 tentatives / 15 min : très large pour quelqu'un qui hésite sur son
+// propre mot de passe, très étroit pour un script.
+export const passwordChangeLimiter = new Ratelimit({
+    redis: getRedis(),
+    limiter: Ratelimit.slidingWindow(5, "15 m"),
+    prefix: "rl:password-change",
+    analytics: false,
+});
 // ----------------------------------------------------------------------------
 // EXTRACTION DE L'ADRESSE IP DU VISITEUR
 // ----------------------------------------------------------------------------

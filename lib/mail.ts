@@ -2,14 +2,32 @@
 // ✉️ SERVICE D'ENVOI D'EMAILS — TOUS LES TEMPLATES TRANSACTIONNELS
 // ============================================================================
 // Pourquoi ce fichier existe : centralise l'unique transporteur SMTP (Nodemailer
-// + Gmail) et les 5 templates HTML utilisés par l'application, pour ne pas
-// dupliquer la config d'envoi ni le style visuel dans chaque route API.
+// + Gmail) et les 6 templates utilisés par l'application, pour ne pas dupliquer
+// la config d'envoi ni le style visuel dans chaque route API.
 //
 // ✅ [A4 — RÉSOLU] Les valeurs interpolées dans le HTML (nom du client, motif
 // de rejet, etc.) viennent de formulaires utilisateurs : elles sont désormais
-// TOUTES passées par escapeHtml() avant injection dans les templates. Un
-// `customerName` contenant du HTML/JS s'affiche maintenant comme du texte
-// inerte au lieu d'être interprété par le client email.
+// TOUTES passées par escapeHtml() avant injection dans les templates.
+//
+// 🆕 [DÉLIVRABILITÉ] Les emails atterrissaient systématiquement en SPAM. Quatre
+// causes ont été corrigées ici :
+//   1. Sujets en MAJUSCULES avec "ACTION REQUIRED" et emojis — déclencheurs
+//      classiques de filtres anti-spam
+//   2. Emails 100% HTML sans version texte brut — fortement pénalisé
+//   3. Cinq noms d'expéditeur différents depuis une seule adresse Gmail, ce qui
+//      ressemble à de l'usurpation pour un filtre
+//   4. Boutons sans lien de secours en clair (voir note ci-dessous)
+//
+// ⚠️ LIMITE HONNÊTE QUI SUBSISTE : ces corrections améliorent nettement le
+// score, mais ne le résolvent pas totalement. La cause profonde est l'envoi via
+// GMAIL SMTP depuis une adresse personnelle, en se présentant comme
+// "TrustVerify", sur un domaine vercel.app qu'on ne contrôle pas — impossible
+// d'y configurer SPF et DKIM, les preuves cryptographiques que les filtres
+// attendent d'un expéditeur légitime.
+// 📋 La vraie solution, le jour venu : un nom de domaine (~10 €/an) + un service
+// transactionnel (Resend, Postmark — gratuits jusqu'à ~3000 emails/mois) avec
+// enregistrements DNS vérifiés. Les emails arriveraient alors en boîte de
+// réception.
 import nodemailer from "nodemailer";
 
 // ============================================================================
@@ -20,20 +38,16 @@ import nodemailer from "nodemailer";
 // dans du HTML. Sans échappement, un nom comme
 // `<a href="https://site-pirate.com">Cliquez ici</a>` partirait dans l'email
 // comme un VRAI lien cliquable — du phishing envoyé depuis notre propre
-// adresse "Compliance Operations", avec notre design et notre réputation.
-//
-// La parade : remplacer les 5 caractères qui ont un sens spécial en HTML par
-// leur entité inoffensive. Après ce traitement, le HTML malveillant s'affiche
-// comme du simple texte visible (l'utilisateur voit littéralement `<a href=...`
-// écrit en toutes lettres) au lieu d'être interprété.
+// adresse, avec notre design et notre réputation.
 //
 // ⚠️ L'ordre compte : `&` DOIT être remplacé en premier, sinon on ré-échapperait
 // les entités qu'on vient de créer (`<` → `&lt;` → `&amp;lt;` = cassé).
 //
-// Règle d'application : on échappe TOUT ce qui vient d'un humain (name,
-// customerName, rejectionReason, actionBy). On n'échappe PAS ce que notre
-// serveur génère lui-même (otpCode, stats numériques, couleurs internes) —
-// inutile, puisque nous en contrôlons le contenu.
+// 💡 IMPORTANT — cet échappement ne concerne QUE le HTML. Les versions TEXTE
+// BRUT ajoutées plus bas utilisent les valeurs ORIGINALES, non échappées : un
+// email texte n'est jamais interprété comme du HTML, donc rien à neutraliser.
+// Y mettre les versions échappées ferait lire "O&#39;Brien" à un client
+// nommé O'Brien.
 const escapeHtml = (value: string): string => {
   return value
     .replace(/&/g, "&amp;")
@@ -42,6 +56,45 @@ const escapeHtml = (value: string): string => {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 };
+
+// ============================================================================
+// 🆕 [DÉLIVRABILITÉ] IDENTITÉ D'EXPÉDITEUR UNIQUE
+// ============================================================================
+// Ce fichier utilisait CINQ noms différents depuis la même adresse Gmail :
+// "Compliance Operations", "Security Admin", "Security Operations",
+// "TrustVerify Internal", "TrustVerify Analytics".
+//
+// Pour un filtre anti-spam, une adresse qui change sans cesse d'identité est un
+// signal d'usurpation — c'est exactement le comportement d'un spammeur qui
+// imite plusieurs services. Une marque unique et constante construit au
+// contraire une réputation d'expéditeur stable, sur laquelle les filtres
+// s'appuient pour classer les messages suivants.
+//
+// 💡 Bénéfice secondaire : dans la boîte du destinataire, tous les emails
+// s'affichent désormais sous le même nom, donc regroupés et identifiables.
+const FROM = `"TrustVerify" <${process.env.EMAIL_USER}>`;
+
+// ============================================================================
+// 🆕 [DÉLIVRABILITÉ] BLOC DE SECOURS SOUS CHAQUE BOUTON
+// ============================================================================
+// ⚠️ CECI RÉSOUT UN PROBLÈME CONCRET ET IMMÉDIAT : quand Gmail classe un
+// message en spam, il DÉSACTIVE les liens cliquables par sécurité. Le bouton
+// "Activate Your Account" paraissait alors cassé ou "statique" — alors que le
+// lien lui-même était parfaitement valide.
+//
+// En affichant l'URL en toutes lettres juste en dessous, le destinataire peut
+// la copier-coller manuellement dans son navigateur. C'est aussi une pratique
+// standard des grands services (GitHub, Stripe le font) pour les clients mail
+// qui bloquent ou dégradent le HTML.
+//
+// 💡 `word-break: break-all` évite que l'URL, longue et sans espaces, ne déborde
+// hors du cadre sur mobile.
+const linkFallbackBlock = (safeLink: string) => `
+      <p style="font-size: 12px; line-height: 1.6; color: #9ca3af; text-align: center; margin-top: 8px;">
+        If the button doesn't work, copy and paste this link into your browser:<br/>
+        <span style="color: #6b7280; word-break: break-all;">${safeLink}</span>
+      </p>
+`;
 
 // Un seul transporteur, réutilisé par toutes les fonctions ci-dessous.
 // Utilise le compte Gmail défini par EMAIL_USER / EMAIL_APP_PASSWORD (mot de
@@ -69,16 +122,21 @@ export const sendKYCEmail = async (
   rejectionReason?: string
 ) => {
   // 🆕 [A4] Neutralisation des valeurs utilisateur AVANT toute interpolation.
-  // On échappe une seule fois ici, en haut, puis les templates n'utilisent
-  // QUE les versions sûres — impossible d'oublier un endroit plus bas.
   const safeName = escapeHtml(name);
   const safeRejectionReason = rejectionReason ? escapeHtml(rejectionReason) : undefined;
 
+  // 🆕 [DÉLIVRABILITÉ] Valeurs NON échappées, réservées à la version texte brut.
+  const plainRejectionReason = rejectionReason || "The provided identification documents do not satisfy readability, clarity, or security requirements.";
+
   let subject = "";
   let htmlContent = "";
+  let textContent = "";
 
   if (status === "verified") {
-    subject = "KYC Verification Approved - Access Granted";
+    // 🆕 [DÉLIVRABILITÉ] Ancien sujet : "KYC Verification Approved - Access
+    // Granted". "Access Granted" a une tournure promotionnelle qui attire les
+    // filtres. Le nouveau est factuel et descriptif.
+    subject = "Your identity verification is complete";
     htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
         <div style="margin-bottom: 24px;">
@@ -94,8 +152,24 @@ export const sendKYCEmail = async (
         </div>
       </div>
     `;
+    // 🆕 [DÉLIVRABILITÉ] Version texte : reprend le MÊME message, sans mise en
+    // forme. Un email dont les versions HTML et texte racontent des choses
+    // différentes est encore plus suspect qu'un email sans version texte.
+    textContent = `Hello ${name},
+
+Your identity verification request has been reviewed and approved by our compliance operations team.
+
+All provisional account restrictions have been lifted. You now have full access to the platform.
+
+Best regards,
+The Compliance & Risk Operations Team
+TrustVerify`;
   } else if (status === "rejected") {
-    subject = "ACTION REQUIRED: KYC Verification Update";
+    // 🆕 [DÉLIVRABILITÉ] Ancien sujet : "ACTION REQUIRED: KYC Verification
+    // Update". Les majuscules et la formule "ACTION REQUIRED" sont des
+    // marqueurs de spam très reconnus — ils créent une urgence artificielle,
+    // exactement ce que font les campagnes de phishing.
+    subject = "Update on your identity verification";
     htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
         <div style="margin-bottom: 24px;">
@@ -117,12 +191,27 @@ export const sendKYCEmail = async (
         </div>
       </div>
     `;
+    textContent = `Hello ${name},
+
+We have processed your identity verification request, but we were unable to authenticate your application with the documents provided.
+
+Reason: ${plainRejectionReason}
+
+Please sign back into your secure portal, review our document guidelines, and submit a clear, uncropped copy of your identification document to start a new verification.
+
+Best regards,
+The Compliance & Risk Operations Team
+TrustVerify`;
   }
 
   await transporter.sendMail({
-    from: `"Compliance Operations" <${process.env.EMAIL_USER}>`,
+    from: FROM,
     to,
     subject,
+    // 🆕 [DÉLIVRABILITÉ] `text` AVANT `html` : c'est l'ordre attendu par la
+    // norme MIME (du format le plus simple au plus riche). Les clients mail
+    // affichent la dernière version qu'ils savent lire.
+    text: textContent,
     html: htmlContent,
   });
 };
@@ -142,12 +231,15 @@ export const sendAgentInvitationEmail = async (
 ) => {
   // 🆕 [A4] `name` est saisi par l'admin dans le formulaire d'invitation → on
   // l'échappe. `setupLink` est généré par NOTRE serveur, mais on l'échappe
-  // aussi par défense en profondeur : il est injecté dans un attribut href, et
-  // si sa construction change un jour en amont, l'email restera sûr.
+  // aussi par défense en profondeur : il est injecté dans un attribut href.
   const safeName = escapeHtml(name);
   const safeSetupLink = escapeHtml(setupLink);
 
-  const subject = "ACTION REQUIRED: Join the Compliance Team";
+  // 🆕 [DÉLIVRABILITÉ] Ancien sujet : "ACTION REQUIRED: Join the Compliance
+  // Team". C'était le pire des trois : majuscules, urgence artificielle, et
+  // une formulation vague qui ne dit pas de quel service il s'agit. Le nouveau
+  // nomme le produit et décrit factuellement l'action attendue.
+  const subject = "Activate your TrustVerify account";
   const htmlContent = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
       <div style="margin-bottom: 24px;">
@@ -160,6 +252,8 @@ export const sendAgentInvitationEmail = async (
       <div style="margin: 32px 0; text-align: center;">
         <a href="${safeSetupLink}" style="background-color: #1d4ed8; color: #ffffff; padding: 14px 28px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-block;">Activate Your Account</a>
       </div>
+
+      ${linkFallbackBlock(safeSetupLink)}
       
       <p style="font-size: 13px; line-height: 1.6; color: #6b7280; text-align: center;">
         This secure link will expire in exactly 24 hours. If it expires, please contact your administrator for a new invitation.
@@ -167,15 +261,31 @@ export const sendAgentInvitationEmail = async (
 
       <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
         Securely yours,<br/>
-        <strong style="color: #4b5563;">System Administrator</strong>
+        <strong style="color: #4b5563;">TrustVerify</strong>
       </div>
     </div>
   `;
 
+  // 🆕 [DÉLIVRABILITÉ] Le lien apparaît EN CLAIR dans la version texte. C'est
+  // souvent le seul moyen d'activer un compte quand le client mail dégrade ou
+  // bloque le HTML.
+  const textContent = `Hello ${name},
+
+Your administrator has created a KYC Agent account for you on TrustVerify.
+
+To activate it, open this link and choose your password:
+${setupLink}
+
+This link expires in 24 hours. If it expires, ask your administrator to send a new invitation.
+
+Securely yours,
+TrustVerify`;
+
   await transporter.sendMail({
-    from: `"Security Admin" <${process.env.EMAIL_USER}>`,
+    from: FROM,
     to,
     subject,
+    text: textContent,
     html: htmlContent,
   });
 };
@@ -189,11 +299,16 @@ export const sendAgentInvitationEmail = async (
 // après 10 minutes) et vérifié par app/api/auth/verify-register.
 //
 // 🆕 [A4] Pas d'échappement ici, et c'est VOULU : `otpCode` est généré par
-// notre propre serveur (6 chiffres), jamais saisi par un utilisateur. Il n'y a
-// aucune donnée d'origine externe dans ce template.
+// notre propre serveur (6 chiffres), jamais saisi par un utilisateur.
 // ============================================================================
 export const sendVerificationOtpEmail = async (to: string, otpCode: string) => {
-  const subject = "Verify Your Business Email";
+  // 🆕 [DÉLIVRABILITÉ] Sujet légèrement reformulé pour nommer le produit.
+  //
+  // ⚠️ CHOIX DÉLIBÉRÉ : on ne met PAS le code dans le sujet ("123456 is your
+  // code"), bien que ce soit courant. Un sujet est visible dans les
+  // notifications d'écran verrouillé et dans les aperçus — quelqu'un ayant
+  // l'appareil sous les yeux lirait le code sans même déverrouiller.
+  const subject = "Your TrustVerify verification code";
   const htmlContent = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
       <div style="margin-bottom: 24px;">
@@ -212,15 +327,27 @@ export const sendVerificationOtpEmail = async (to: string, otpCode: string) => {
 
       <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
         Securely yours,<br/>
-        <strong style="color: #4b5563;">The Security Operations Team</strong>
+        <strong style="color: #4b5563;">TrustVerify</strong>
       </div>
     </div>
   `;
 
+  const textContent = `Your TrustVerify verification code is: ${otpCode}
+
+Enter this code to finish registering your workspace.
+
+This code expires in 10 minutes. Do not share it with anyone.
+
+If you did not request this code, you can safely ignore this email.
+
+Securely yours,
+TrustVerify`;
+
   await transporter.sendMail({
-    from: `"Security Operations" <${process.env.EMAIL_USER}>`,
+    from: FROM,
     to,
     subject,
+    text: textContent,
     html: htmlContent,
   });
 };
@@ -230,9 +357,7 @@ export const sendVerificationOtpEmail = async (to: string, otpCode: string) => {
 // ============================================================================
 // Envoyé à un AGENT/ADMIN interne (pas au client final) quand un dossier KYC
 // change de statut, SEULEMENT si l'utilisateur a activé cette préférence dans
-// ses réglages (`emailNotifSuccess` / `emailNotifAlerts` en base — voir
-// app/api/settings/notifications). `type` détermine le ton : succès ou alerte
-// nécessitant une revue.
+// ses réglages (`emailNotifSuccess` / `emailNotifAlerts` en base).
 // ============================================================================
 export const sendAgentNotificationEmail = async (
   to: string, 
@@ -240,19 +365,21 @@ export const sendAgentNotificationEmail = async (
   customerName: string, 
   actionBy: string
 ) => {
-  // 🆕 [A4] `customerName` vient du formulaire de création du dossier KYC, et
-  // `actionBy` du profil de l'agent (fullName, saisi à l'inscription) : les
-  // deux sont d'origine humaine → échappés. Le sujet de l'email n'a PAS besoin
-  // d'échappement HTML (un sujet est du texte brut, jamais interprété comme du
-  // HTML par les clients mail) — on n'y met donc pas la version échappée,
-  // sinon un client s'appelant "O'Brien" verrait "O&#39;Brien" dans le sujet.
+  // 🆕 [A4] `customerName` et `actionBy` sont d'origine humaine → échappés pour
+  // le HTML. Le sujet, lui, est du texte brut : on y utilise la valeur
+  // ORIGINALE, sinon un client nommé "O'Brien" apparaîtrait "O&#39;Brien".
   const safeCustomerName = escapeHtml(customerName);
   const safeActionBy = escapeHtml(actionBy);
 
   const isAlert = type === "ALERT";
+
+  // 🆕 [DÉLIVRABILITÉ] Anciens sujets : "⚠️ AUDIT REQUIRED: Action taken on X"
+  // et "✅ VERIFICATION SUCCESS: X". Deux problèmes cumulés — les emojis en
+  // début de sujet et les majuscules sont tous deux des marqueurs de spam
+  // classiques. Le nouveau format reste parfaitement lisible en liste.
   const subject = isAlert 
-    ? `⚠️ AUDIT REQUIRED: Action taken on ${customerName}` 
-    : `✅ VERIFICATION SUCCESS: ${customerName}`;
+    ? `Verification flagged: ${customerName}` 
+    : `Verification approved: ${customerName}`;
   
   const tagColor = isAlert ? "#fee2e2" : "#dcfce7";
   const tagTextColor = isAlert ? "#991b1b" : "#166534";
@@ -276,16 +403,45 @@ export const sendAgentNotificationEmail = async (
 
       <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
         This email was sent because you enabled this notification type in your Account Settings.<br/>
-        <strong style="color: #4b5563;">TrustVerify System</strong>
+        <strong style="color: #4b5563;">TrustVerify</strong>
       </div>
     </div>
   `;
 
+  const textContent = `Internal notification from your TrustVerify workspace.
+
+Customer profile: ${customerName}
+Action taken: ${isAlert ? "Rejected / Flagged" : "Approved"}
+Processed by: ${actionBy}
+
+Log in to your dashboard to review the full audit log for this profile.
+
+You received this email because you enabled this notification type in your account settings.
+
+TrustVerify`;
+
   await transporter.sendMail({
-    from: `"TrustVerify Internal" <${process.env.EMAIL_USER}>`,
+    from: FROM,
     to,
     subject,
+    text: textContent,
     html: htmlContent,
+    // 🆕 [DÉLIVRABILITÉ] En-tête List-Unsubscribe, présent uniquement sur les
+    // emails de NOTIFICATION (celui-ci et le rapport hebdomadaire) — pas sur
+    // les transactionnels critiques comme un code OTP ou une réinitialisation
+    // de mot de passe, où proposer un désabonnement n'aurait aucun sens.
+    //
+    // Ce que ça change : les filtres considèrent qu'un expéditeur offrant une
+    // sortie facile agit de bonne foi, et Gmail affiche un bouton "Se
+    // désabonner" natif — ce qui évite qu'un destinataire agacé clique sur
+    // "Signaler comme spam", geste bien plus dommageable pour la réputation.
+    //
+    // ⚠️ Honnêtement partiel : ce mailto ouvre juste un email vers le support,
+    // il n'existe pas encore de traitement automatisé derrière. Les préférences
+    // restent modifiables dans les Settings de l'application.
+    headers: {
+      "List-Unsubscribe": `<mailto:${process.env.EMAIL_USER}?subject=Unsubscribe>`,
+    },
   });
 };
 
@@ -302,12 +458,14 @@ export const sendWeeklyReportEmail = async (
   name: string, 
   stats: { total: number; approved: number; rejected: number; highRisk: number }
 ) => {
-  // 🆕 [A4] `name` = fullName de l'utilisateur (saisi à l'inscription) →
-  // échappé. Les `stats` sont des NOMBRES calculés par Prisma (count) : aucun
-  // humain ne peut y glisser du HTML, pas d'échappement nécessaire.
+  // 🆕 [A4] `name` échappé pour le HTML ; les `stats` sont des NOMBRES calculés
+  // par Prisma, aucun humain ne peut y glisser du HTML.
   const safeName = escapeHtml(name);
 
-  const subject = "📊 Your TrustVerify Weekly Compliance Report";
+  // 🆕 [DÉLIVRABILITÉ] Ancien sujet : "📊 Your TrustVerify Weekly Compliance
+  // Report". Un emoji en tout début de sujet est l'un des marqueurs les plus
+  // fréquemment associés aux campagnes de masse.
+  const subject = "Your weekly TrustVerify summary";
   
   const htmlContent = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
@@ -342,16 +500,33 @@ export const sendWeeklyReportEmail = async (
       
       <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
         This automated report was generated based on your Account Settings preferences.<br/>
-        <strong style="color: #4b5563;">TrustVerify Analytics Engine</strong>
+        <strong style="color: #4b5563;">TrustVerify</strong>
       </div>
     </div>
   `;
 
+  const textContent = `Hello ${name},
+
+Here is the summary of your workspace's KYC activity over the last 7 days.
+
+Total verifications processed: ${stats.total}
+Successfully approved: ${stats.approved}
+Rejected applications: ${stats.rejected}
+High risk alerts flagged: ${stats.highRisk}
+
+This report was generated based on your account settings preferences.
+
+TrustVerify`;
+
   await transporter.sendMail({
-    from: `"TrustVerify Analytics" <${process.env.EMAIL_USER}>`,
+    from: FROM,
     to,
     subject,
+    text: textContent,
     html: htmlContent,
+    headers: {
+      "List-Unsubscribe": `<mailto:${process.env.EMAIL_USER}?subject=Unsubscribe>`,
+    },
   });
 };
 
@@ -372,13 +547,11 @@ export const sendPasswordResetEmail = async (
   name: string,
   resetLink: string
 ) => {
-  // 🆕 [A4] Même règle que partout ailleurs dans ce fichier : toute valeur
-  // d'origine utilisateur est échappée avant d'entrer dans le HTML.
-  // `resetLink` est généré par notre serveur, mais on l'échappe aussi par
-  // défense en profondeur — il est injecté dans un attribut href.
   const safeName = escapeHtml(name);
   const safeResetLink = escapeHtml(resetLink);
 
+  // 🆕 [DÉLIVRABILITÉ] Sujet conservé : il était déjà correct — factuel, sans
+  // majuscules ni emoji, et il nomme le produit.
   const subject = "Reset Your TrustVerify Password";
   const htmlContent = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1f2937; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
@@ -393,6 +566,8 @@ export const sendPasswordResetEmail = async (
         <a href="${safeResetLink}" style="background-color: #1d4ed8; color: #ffffff; padding: 14px 28px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-block;">Reset My Password</a>
       </div>
 
+      ${linkFallbackBlock(safeResetLink)}
+
       <p style="font-size: 13px; line-height: 1.6; color: #6b7280; text-align: center;">
         This secure link expires in 30 minutes and can only be used once.
       </p>
@@ -405,15 +580,30 @@ export const sendPasswordResetEmail = async (
 
       <div style="margin-top: 32px; border-top: 1px solid #f3f4f6; padding-top: 16px; font-size: 13px; color: #9ca3af;">
         Securely yours,<br/>
-        <strong style="color: #4b5563;">The Security Operations Team</strong>
+        <strong style="color: #4b5563;">TrustVerify</strong>
       </div>
     </div>
   `;
 
+  const textContent = `Hello ${name},
+
+We received a request to reset the password for your TrustVerify account.
+
+Open this link to choose a new password:
+${resetLink}
+
+This link expires in 30 minutes and can only be used once.
+
+If you did not request this, you can safely ignore this email — your password will remain unchanged.
+
+Securely yours,
+TrustVerify`;
+
   await transporter.sendMail({
-    from: `"Security Operations" <${process.env.EMAIL_USER}>`,
+    from: FROM,
     to,
     subject,
+    text: textContent,
     html: htmlContent,
   });
 };
