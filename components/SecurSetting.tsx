@@ -232,17 +232,40 @@ export default function SecurSetting() {
             // garde que des empreintes HMAC. Fermer la modale à ce moment ferait
             // disparaître les codes à tout jamais, et l'utilisateur se
             // retrouverait exactement dans la situation qu'ils doivent éviter.
-            setBackupCodes(data.backupCodes || null);
+            // 🆕 [PHASE B] GARDE-FOU : les codes DOIVENT arriver dans cette réponse.
+            // S'ils manquent, la modale resterait figée sur le QR code sans le
+            // moindre message. Ce cas ne devrait jamais se produire, mais un
+            // bundle JavaScript périmé suffit à le déclencher.
+            if (!Array.isArray(data.backupCodes) || data.backupCodes.length === 0) {
+                setTotpStatus({
+                    type: "error",
+                    text: "2FA is enabled, but the backup codes could not be displayed. Reload the page and regenerate them from your security settings.",
+                });
+                console.error("[2FA] Réponse sans backupCodes :", data);
+                return;
+            }
+
+            setBackupCodes(data.backupCodes);
             setBackupCodesSaved(false);
-            
-            // 💡 MISE À JOUR DE LA SESSION SANS DÉCONNEXION
-            await update({
-                ...session,
-                user: {
-                    ...session?.user,
-                    totpEnabled: true
-                }
-            });
+
+            // ⚠️ [PHASE B] `update()` A ÉTÉ DÉPLACÉ DANS handleCloseBackupCodes.
+            //
+            // LE BUG QUE ÇA CORRIGE : cet appel rafraîchit la session NextAuth,
+            // ce qui fait REMONTER le composant parent (app/dashboard/settings/
+            // page.tsx). Or l'onglet actif y est un simple `useState` initialisé
+            // à "Profile Info" — un remontage le ramène donc à cette valeur, ce
+            // qui DÉMONTE SecurSetting et détruit tout son état local, y compris
+            // les codes qu'on vient tout juste de recevoir.
+            //
+            // Résultat visible : la 2FA s'activait bien, mais l'écran des codes
+            // disparaissait instantanément et l'utilisateur se retrouvait sur
+            // l'onglet Profil sans avoir rien vu — alors que ces codes ne
+            // reviendront jamais, le serveur n'en gardant que des empreintes.
+            //
+            // La session est donc rafraîchie plus tard, quand l'utilisateur
+            // confirme avoir sauvegardé ses codes. Rien ne presse : `totpEnabled`
+            // n'est lu que pour afficher le badge "Enabled", qui est déjà géré
+            // localement par setIs2faEnabled(true) juste au-dessus.
 
         } catch (error: any) {
             setTotpStatus({ type: "error", text: error.message });
@@ -310,10 +333,33 @@ export default function SecurSetting() {
     };
 
     // 🆕 [PHASE B] Fermeture de l'écran des codes.
-    const handleCloseBackupCodes = () => {
+   // 🆕 [PHASE B] Fermeture de l'écran des codes.
+    //
+    // C'est ICI qu'on rafraîchit enfin la session — une fois les codes
+    // sauvegardés et l'écran sur le point de disparaître. Le remontage du
+    // composant parent qu'il provoque n'a alors plus aucune conséquence.
+    const handleCloseBackupCodes = async () => {
         setBackupCodes(null);
         setBackupCodesSaved(false);
         setIs2faModalOpen(false);
+
+        // 💡 MISE À JOUR DE LA SESSION SANS DÉCONNEXION
+        // Elle propage `totpEnabled: true` au JWT, pour que le reste de
+        // l'application (et le verrou MFA du layout) voie la 2FA active sans
+        // exiger une reconnexion.
+        try {
+            await update({
+                ...session,
+                user: {
+                    ...session?.user,
+                    totpEnabled: true
+                }
+            });
+        } catch (error) {
+            // Échec non bloquant : la 2FA est déjà active en base. Au pire, la
+            // session actuelle l'ignore jusqu'à la prochaine connexion.
+            console.error("[2FA] Échec du rafraîchissement de session :", error);
+        }
     };
 
     return (
