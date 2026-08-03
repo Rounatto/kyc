@@ -180,6 +180,20 @@ export const passwordChangeLimiter = new Ratelimit({
     prefix: "rl:password-change",
     analytics: false,
 });
+
+// 🆕 [PHASE B] Invitations et renvois d'invitation d'agents.
+// Chaque appel déclenche un VRAI envoi d'email. Sans limite, un admin (ou un
+// script utilisant sa session) pourrait harceler une adresse en boucle et
+// brûler le quota Gmail du projet.
+//
+// 💡 10 par heure : très large pour constituer une équipe en une session,
+// très étroit pour un usage abusif.
+export const teamInviteLimiter = new Ratelimit({
+    redis: getRedis(),
+    limiter: Ratelimit.slidingWindow(10, "1 h"),
+    prefix: "rl:team-invite",
+    analytics: false,
+});
 // ----------------------------------------------------------------------------
 // EXTRACTION DE L'ADRESSE IP DU VISITEUR
 // ----------------------------------------------------------------------------
