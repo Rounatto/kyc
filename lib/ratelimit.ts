@@ -194,6 +194,21 @@ export const teamInviteLimiter = new Ratelimit({
     prefix: "rl:team-invite",
     analytics: false,
 });
+
+// 🆕 [PHASE B] Gestion du second facteur (désactivation, régénération des codes).
+// Deux opérations sensibles qui exigent le mot de passe actuel : sans limite,
+// quelqu'un disposant d'une session ouverte pourrait le brute-forcer depuis
+// l'interface, tranquillement.
+//
+// 💡 Limiteur DISTINCT de passwordChangeLimiter, alors que les deux protègent
+// une saisie de mot de passe : partager le quota permettrait de contourner la
+// limite en alternant les deux formulaires.
+export const twoFactorManageLimiter = new Ratelimit({
+    redis: getRedis(),
+    limiter: Ratelimit.slidingWindow(5, "15 m"),
+    prefix: "rl:2fa-manage",
+    analytics: false,
+});
 // ----------------------------------------------------------------------------
 // EXTRACTION DE L'ADRESSE IP DU VISITEUR
 // ----------------------------------------------------------------------------

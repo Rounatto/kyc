@@ -7,16 +7,20 @@
 //   1. Changement de mot de passe → POST /api/settings/security/password.
 //   2. Enregistrement de passkey → cérémonie WebAuthn en 2 appels
 //      (generate → startRegistration navigateur → verify).
-//   3. Activation 2FA → modale QR code, flux generate → verify, avec `update()`
-//      NextAuth pour rafraîchir `totpEnabled` en session sans reconnexion.
-//      🆕 Suivie d'un ÉCRAN DE CODES DE SECOURS (voir plus bas).
+//   3. Gestion 2FA → activation (QR + codes de secours), 🆕 régénération des
+//      codes, 🆕 désactivation. Les deux dernières exigent le mot de passe.
 //   4. Liste des sessions actives → GET/DELETE /api/settings/security/sessions.
 //      ⚠️ Le bouton "Revoke" reste cosmétique tant que la stratégie de session
 //      est "jwt" : le token déjà émis reste valide (item M2 de la roadmap).
-import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X, Copy, Download, ShieldAlert } from "lucide-react";
+import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X, Copy, Download, ShieldAlert, RefreshCw, ShieldOff } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import { useState, useEffect } from "react";
 import { startRegistration } from "@simplewebauthn/browser";
+
+// 🆕 Seuil sous lequel on alerte visuellement sur la réserve de codes.
+// À zéro, une simple perte de téléphone remettrait l'utilisateur dans l'impasse
+// que ces codes existent précisément pour éviter.
+const LOW_BACKUP_CODES_THRESHOLD = 3;
 
 export default function SecurSetting() {
     const { data: session, update } = useSession();
@@ -50,15 +54,31 @@ export default function SecurSetting() {
 
     // 🆕 [PHASE B] ÉTATS DES CODES DE SECOURS
     //
-    // 💡 `backupCodes` n'est rempli QUE juste après une activation réussie, le
-    // temps d'afficher les codes. Ils ne sont jamais rechargés depuis le serveur
-    // ensuite : celui-ci n'en garde que des empreintes HMAC et ne peut donc pas
-    // les reconstituer, par conception.
+    // 💡 `backupCodes` n'est rempli QUE juste après une activation ou une
+    // régénération, le temps d'afficher les codes. Ils ne sont jamais rechargés
+    // depuis le serveur : celui-ci n'en garde que des empreintes HMAC et ne peut
+    // donc pas les reconstituer, par conception.
     const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
-    // Case "j'ai bien sauvegardé mes codes". Bloque la fermeture tant qu'elle
-    // n'est pas cochée — voir la note sur ce choix plus bas.
     const [backupCodesSaved, setBackupCodesSaved] = useState(false);
     const [copyFeedback, setCopyFeedback] = useState(false);
+
+    // 🆕 Nombre de codes encore utilisables, lu depuis l'API. `null` tant que
+    // l'information n'est pas chargée — à distinguer de 0, qui signifie
+    // "réserve épuisée".
+    const [remainingCodes, setRemainingCodes] = useState<number | null>(null);
+
+    // 🆕 [PHASE B] MODALE DE CONFIRMATION PAR MOT DE PASSE — MUTUALISÉE
+    //
+    // 💡 Une SEULE modale pour les deux actions (régénérer / désactiver), avec
+    // `confirmAction` qui indique laquelle est en cours. Deux modales presque
+    // identiques auraient dupliqué la saisie, la validation et la gestion
+    // d'erreur — et deux copies d'un même écran de sécurité finissent toujours
+    // par diverger.
+    const [confirmAction, setConfirmAction] = useState<"regenerate" | "disable" | null>(null);
+    const [confirmPasswordInput, setConfirmPasswordInput] = useState("");
+    const [showConfirmPasswordInput, setShowConfirmPasswordInput] = useState(false);
+    const [confirmLoading, setConfirmLoading] = useState(false);
+    const [confirmError, setConfirmError] = useState("");
 
     // LOGIQUE DE VALIDATION EN TEMPS RÉEL (Mot de passe)
     const correctLength = newPassword.length >= 12;
@@ -88,6 +108,32 @@ export default function SecurSetting() {
         }
         fetchSessions();
     }, []);
+
+    // 🆕 [PHASE B] Récupère le nombre de codes restants.
+    //
+    // 💡 Cet appel ne renvoie qu'un NOMBRE, jamais les codes : la base n'en
+    // contient que des empreintes HMAC, le serveur en est donc incapable. Cette
+    // route ne peut structurellement rien divulguer.
+    const fetchBackupCodesCount = async () => {
+        try {
+            const res = await fetch("/api/settings/security/totp/backup-codes");
+            if (res.ok) {
+                const data = await res.json();
+                setRemainingCodes(typeof data.remaining === "number" ? data.remaining : null);
+            }
+        } catch (error) {
+            console.error("Failed to load backup codes count:", error);
+        }
+    };
+
+    // 🆕 On (re)charge le compteur dès que la 2FA est active.
+    useEffect(() => {
+        if (is2faEnabled) {
+            fetchBackupCodesCount();
+        } else {
+            setRemainingCodes(null);
+        }
+    }, [is2faEnabled]);
 
     const handlePasswordUpdate = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -225,13 +271,6 @@ export default function SecurSetting() {
             setIs2faEnabled(true);
             setTotpCodeInput("");
 
-            // 🆕 [PHASE B] LA MODALE NE SE FERME PLUS ICI.
-            //
-            // Elle bascule vers l'écran des codes de secours, qui arrivent dans
-            // cette réponse et n'existeront JAMAIS ailleurs — le serveur n'en
-            // garde que des empreintes HMAC. Fermer la modale à ce moment ferait
-            // disparaître les codes à tout jamais, et l'utilisateur se
-            // retrouverait exactement dans la situation qu'ils doivent éviter.
             // 🆕 [PHASE B] GARDE-FOU : les codes DOIVENT arriver dans cette réponse.
             // S'ils manquent, la modale resterait figée sur le QR code sans le
             // moindre message. Ce cas ne devrait jamais se produire, mais un
@@ -247,25 +286,20 @@ export default function SecurSetting() {
 
             setBackupCodes(data.backupCodes);
             setBackupCodesSaved(false);
+            setRemainingCodes(data.backupCodes.length);
 
             // ⚠️ [PHASE B] `update()` A ÉTÉ DÉPLACÉ DANS handleCloseBackupCodes.
             //
             // LE BUG QUE ÇA CORRIGE : cet appel rafraîchit la session NextAuth,
-            // ce qui fait REMONTER le composant parent (app/dashboard/settings/
-            // page.tsx). Or l'onglet actif y est un simple `useState` initialisé
-            // à "Profile Info" — un remontage le ramène donc à cette valeur, ce
-            // qui DÉMONTE SecurSetting et détruit tout son état local, y compris
-            // les codes qu'on vient tout juste de recevoir.
-            //
-            // Résultat visible : la 2FA s'activait bien, mais l'écran des codes
-            // disparaissait instantanément et l'utilisateur se retrouvait sur
-            // l'onglet Profil sans avoir rien vu — alors que ces codes ne
-            // reviendront jamais, le serveur n'en gardant que des empreintes.
+            // ce qui fait REMONTER le composant parent. Le composant SecurSetting
+            // est alors DÉMONTÉ et tout son état local détruit — y compris les
+            // codes qu'on vient tout juste de recevoir, et qui ne reviendront
+            // jamais puisque le serveur n'en garde que des empreintes.
             //
             // La session est donc rafraîchie plus tard, quand l'utilisateur
             // confirme avoir sauvegardé ses codes. Rien ne presse : `totpEnabled`
-            // n'est lu que pour afficher le badge "Enabled", qui est déjà géré
-            // localement par setIs2faEnabled(true) juste au-dessus.
+            // n'est lu que pour afficher le badge "Enabled", déjà géré localement
+            // par setIs2faEnabled(true) juste au-dessus.
 
         } catch (error: any) {
             setTotpStatus({ type: "error", text: error.message });
@@ -333,7 +367,6 @@ export default function SecurSetting() {
     };
 
     // 🆕 [PHASE B] Fermeture de l'écran des codes.
-   // 🆕 [PHASE B] Fermeture de l'écran des codes.
     //
     // C'est ICI qu'on rafraîchit enfin la session — une fois les codes
     // sauvegardés et l'écran sur le point de disparaître. Le remontage du
@@ -361,6 +394,102 @@ export default function SecurSetting() {
             console.error("[2FA] Échec du rafraîchissement de session :", error);
         }
     };
+
+    // ========================================================================
+    // 🆕 [PHASE B] CONFIRMATION PAR MOT DE PASSE — RÉGÉNÉRER OU DÉSACTIVER
+    // ========================================================================
+    // 🔒 POURQUOI EXIGER LE MOT DE PASSE alors que la session est déjà valide :
+    // ces deux actions dégradent ou contournent la protection du compte.
+    //   - Régénérer, c'est se fabriquer dix clés de secours permanentes.
+    //   - Désactiver, c'est retirer le second facteur.
+    // Quelqu'un profitant d'une session ouverte (poste non verrouillé, appareil
+    // volé) pourrait faire l'un ou l'autre en un clic et conserver un accès au
+    // compte même après un changement de mot de passe. La victime n'aurait
+    // aucun moyen de s'en apercevoir.
+    const openConfirm = (action: "regenerate" | "disable") => {
+        setConfirmAction(action);
+        setConfirmPasswordInput("");
+        setConfirmError("");
+        setShowConfirmPasswordInput(false);
+    };
+
+    const closeConfirm = () => {
+        setConfirmAction(null);
+        setConfirmPasswordInput("");
+        setConfirmError("");
+    };
+
+    const handleConfirmSubmit = async () => {
+        if (!confirmAction || !confirmPasswordInput) return;
+
+        setConfirmLoading(true);
+        setConfirmError("");
+
+        // Une seule fonction pour les deux actions : seuls l'URL et le
+        // traitement du succès diffèrent.
+        const endpoint =
+            confirmAction === "regenerate"
+                ? "/api/settings/security/totp/backup-codes"
+                : "/api/settings/security/totp/disable";
+
+        try {
+            const res = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: confirmPasswordInput }),
+            });
+
+            const data = await res.json();
+
+            // 🆕 Le rate limiting (5 tentatives / 15 min) doit être distingué
+            // d'un mot de passe erroné : sans ça, l'utilisateur croirait s'être
+            // trompé et continuerait d'essayer, s'enfonçant dans le blocage.
+            if (res.status === 429) {
+                throw new Error(data.error || "Too many attempts. Please wait a few minutes.");
+            }
+
+            if (!res.ok) throw new Error(data.error || "Operation failed.");
+
+            if (confirmAction === "regenerate") {
+                // La modale de confirmation se ferme et laisse place à l'écran
+                // des codes — exactement le même que lors de l'activation.
+                closeConfirm();
+                setBackupCodes(data.backupCodes);
+                setBackupCodesSaved(false);
+                setRemainingCodes(data.backupCodes?.length ?? null);
+                setIs2faModalOpen(true);
+            } else {
+                // DÉSACTIVATION
+                closeConfirm();
+                setIs2faEnabled(false);
+                setRemainingCodes(null);
+                setTotpStatus({
+                    type: "success",
+                    text: "Two-factor authentication has been disabled.",
+                });
+                setTimeout(() => setTotpStatus(null), 5000);
+
+                // Ici, le rafraîchissement de session est immédiat : aucun code
+                // n'est affiché, il n'y a donc rien à préserver d'un remontage.
+                try {
+                    await update({
+                        ...session,
+                        user: { ...session?.user, totpEnabled: false },
+                    });
+                } catch (updateError) {
+                    console.error("[2FA] Échec du rafraîchissement de session :", updateError);
+                }
+            }
+        } catch (error: any) {
+            setConfirmError(error.message);
+        } finally {
+            setConfirmLoading(false);
+        }
+    };
+
+    // 🆕 Réserve de codes faible ou épuisée.
+    const isLowOnCodes =
+        is2faEnabled && remainingCodes !== null && remainingCodes < LOW_BACKUP_CODES_THRESHOLD;
 
     return (
         <div className="flex flex-col gap-6 w-full relative">
@@ -488,31 +617,119 @@ export default function SecurSetting() {
             </div>
 
             {/* 💡 BLOC 3 : Authentification Double Facteur (2FA) */}
-            <div className="flex flex-row flex-wrap items-center justify-between p-5 md:p-6 bg-white rounded-sm border border-gray-400 shadow-sm gap-5">
-                <div className="flex flex-row gap-4 items-center flex-1 min-w-[280px]">
-                    <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0 border border-blue-100">
-                        <Smartphone className="w-6 h-6 text-blue-600" />
+            {/* 🆕 [PHASE B] Le bloc devient une carte à part entière : il porte
+                désormais l'état, le compteur de codes et trois actions. */}
+            <div className="flex flex-col w-full bg-white rounded-sm border border-gray-400 shadow-sm">
+                <div className="flex flex-row flex-wrap items-center justify-between p-5 md:p-6 gap-5">
+                    <div className="flex flex-row gap-4 items-center flex-1 min-w-[280px]">
+                        <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0 border border-blue-100">
+                            <Smartphone className="w-6 h-6 text-blue-600" />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                            <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                                Two-Factor Authentication (2FA)
+                                {is2faEnabled ? (
+                                    <span className="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded-sm uppercase border border-green-200">Enabled</span>
+                                ) : (
+                                    <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded-sm uppercase border border-red-200">Disabled</span>
+                                )}
+                            </h4>
+                            <p className="text-xs text-gray-500 leading-relaxed max-w-md mt-0.5">Enforce bank-grade compliance security by requiring a code from an authenticator application at login.</p>
+                        </div>
                     </div>
-                    <div className="flex flex-col gap-1">
-                        <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                            Two-Factor Authentication (2FA)
-                            {is2faEnabled ? (
-                                <span className="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded-sm uppercase border border-green-200">Enabled</span>
-                            ) : (
-                                <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded-sm uppercase border border-red-200">Disabled</span>
-                            )}
-                        </h4>
-                        <p className="text-xs text-gray-500 leading-relaxed max-w-md mt-0.5">Enforce bank-grade compliance security by requiring a code from an authenticator application at login.</p>
-                    </div>
+                    {!is2faEnabled && (
+                        <button 
+                            onClick={handleStart2faSetup} 
+                            disabled={is2faLoading} 
+                            className="w-full sm:w-auto text-sm font-bold text-blue-700 bg-white border border-blue-700 px-5 h-10 rounded-sm hover:bg-blue-50 transition-colors shrink-0 text-center cursor-pointer disabled:opacity-50"
+                        >
+                            {is2faLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Configure 2FA"}
+                        </button>
+                    )}
                 </div>
-                {!is2faEnabled && (
-                    <button 
-                        onClick={handleStart2faSetup} 
-                        disabled={is2faLoading} 
-                        className="w-full sm:w-auto text-sm font-bold text-blue-700 bg-white border border-blue-700 px-5 h-10 rounded-sm hover:bg-blue-50 transition-colors shrink-0 text-center cursor-pointer disabled:opacity-50"
-                    >
-                        {is2faLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Configure 2FA"}
-                    </button>
+
+                {/* 🆕 [PHASE B] SOUS-BLOC VISIBLE UNIQUEMENT SI LA 2FA EST ACTIVE.
+                    Affiche la réserve de codes et les deux actions de gestion. */}
+                {is2faEnabled && (
+                    <div className="border-t border-gray-200 p-5 md:p-6 flex flex-col gap-4 bg-gray-50/50">
+
+                        {/* Message de statut (succès de désactivation, erreur...) */}
+                        {totpStatus && (
+                            <div className={`flex items-start gap-2 p-3 rounded-sm text-xs font-semibold border ${
+                                totpStatus.type === "success"
+                                    ? "bg-green-50 text-green-700 border-green-200"
+                                    : "bg-red-50 text-red-700 border-red-200"
+                            }`}>
+                                {totpStatus.type === "success" ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+                                <span>{totpStatus.text}</span>
+                            </div>
+                        )}
+
+                        <div className="flex flex-row flex-wrap items-center justify-between gap-4">
+                            <div className="flex flex-col gap-1 flex-1 min-w-[260px]">
+                                <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                                    Backup Codes
+                                    {/* 🆕 COMPTEUR. `null` = pas encore chargé, à ne pas
+                                        confondre avec 0 qui signifie "réserve épuisée". */}
+                                    {remainingCodes !== null && (
+                                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded-sm uppercase border ${
+                                            remainingCodes === 0
+                                                ? "bg-red-100 text-red-700 border-red-200"
+                                                : isLowOnCodes
+                                                    ? "bg-amber-100 text-amber-700 border-amber-200"
+                                                    : "bg-gray-100 text-gray-600 border-gray-200"
+                                        }`}>
+                                            {remainingCodes} left
+                                        </span>
+                                    )}
+                                </p>
+                                <p className="text-xs text-gray-500 leading-relaxed max-w-md">
+                                    One-time codes that let you sign in if you lose access to your authenticator app.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => openConfirm("regenerate")}
+                                className="w-full sm:w-auto flex items-center justify-center gap-2 text-sm font-bold text-gray-900 bg-white border border-gray-300 px-5 h-10 rounded-sm hover:bg-gray-50 transition-colors shadow-sm shrink-0 cursor-pointer"
+                            >
+                                <RefreshCw className="w-4 h-4 text-gray-600" /> Regenerate
+                            </button>
+                        </div>
+
+                        {/* 🆕 AVERTISSEMENT quand la réserve s'épuise.
+                            💡 Le message diffère à zéro : ce n'est plus un rappel mais
+                            un risque immédiat — une perte de téléphone rendrait le
+                            compte inaccessible. */}
+                        {isLowOnCodes && (
+                            <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-sm">
+                                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                                <p className="text-xs text-amber-800 leading-relaxed">
+                                    {remainingCodes === 0
+                                        ? "You have no backup codes left. If you lose access to your authenticator app now, you will not be able to sign in. Generate a new set."
+                                        : `Only ${remainingCodes} backup code(s) remaining. Generate a new set to stay covered.`}
+                                </p>
+                            </div>
+                        )}
+
+                        {/* 🆕 ZONE DE DÉSACTIVATION, visuellement séparée.
+                            💡 Le style discret (texte rouge, pas de bouton plein) est
+                            volontaire : c'est une action de DÉGRADATION de sécurité, on
+                            ne l'affiche pas avec la même proéminence qu'une action
+                            constructive. Elle reste accessible, sans être suggérée. */}
+                        <div className="flex flex-row flex-wrap items-center justify-between gap-4 pt-4 border-t border-gray-200">
+                            <div className="flex flex-col gap-1 flex-1 min-w-[260px]">
+                                <p className="text-sm font-bold text-gray-900">Disable Two-Factor Authentication</p>
+                                <p className="text-xs text-gray-500 leading-relaxed max-w-md">
+                                    Your account will be protected by your password alone. Not recommended.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => openConfirm("disable")}
+                                className="w-full sm:w-auto flex items-center justify-center gap-2 text-sm font-bold text-red-600 bg-white border border-red-200 px-5 h-10 rounded-sm hover:bg-red-50 transition-colors shrink-0 cursor-pointer"
+                            >
+                                <ShieldOff className="w-4 h-4" /> Disable 2FA
+                            </button>
+                        </div>
+                    </div>
                 )}
             </div>
 
@@ -580,7 +797,8 @@ export default function SecurSetting() {
                         {/* 🆕 [PHASE B] LA MODALE A DEUX ÉCRANS.
                             Tant que `backupCodes` est null, on affiche le QR code.
                             Une fois l'activation réussie, on bascule sur les codes de
-                            secours — sans jamais refermer la fenêtre entre les deux. */}
+                            secours — sans jamais refermer la fenêtre entre les deux.
+                            💡 Une régénération ouvre directement le second écran. */}
                         {!backupCodes ? (
                             <>
                                 <div className="flex justify-between items-center p-4 border-b border-gray-100">
@@ -709,6 +927,117 @@ export default function SecurSetting() {
                                 </div>
                             </>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* 🆕 [PHASE B] MODALE DE CONFIRMATION PAR MOT DE PASSE
+                ====================================================
+                Mutualisée entre les deux actions sensibles. `confirmAction` dicte
+                le titre, le texte d'avertissement et la couleur du bouton — mais
+                la saisie, la validation et la gestion d'erreur sont partagées. */}
+            {confirmAction && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className={`flex items-center gap-3 p-4 border-b border-gray-100 ${
+                            confirmAction === "disable" ? "bg-red-50" : "bg-gray-50"
+                        }`}>
+                            {confirmAction === "disable" ? (
+                                <ShieldOff className="w-5 h-5 text-red-600 shrink-0" />
+                            ) : (
+                                <RefreshCw className="w-5 h-5 text-gray-600 shrink-0" />
+                            )}
+                            <h3 className="font-bold text-lg text-gray-900">
+                                {confirmAction === "disable" ? "Disable 2FA" : "Regenerate Backup Codes"}
+                            </h3>
+                        </div>
+
+                        <div className="p-6 flex flex-col gap-5">
+                            {/* 💡 L'avertissement précise CE QUI VA SE PASSER, pas
+                                seulement ce qu'on demande. Un utilisateur qui régénère
+                                sans savoir que ses anciens codes deviennent caducs
+                                garderait une feuille périmée en croyant être couvert. */}
+                            <div className={`flex items-start gap-2 p-3 rounded-sm border ${
+                                confirmAction === "disable"
+                                    ? "bg-red-50 border-red-200"
+                                    : "bg-amber-50 border-amber-200"
+                            }`}>
+                                <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${
+                                    confirmAction === "disable" ? "text-red-600" : "text-amber-600"
+                                }`} />
+                                <p className={`text-xs leading-relaxed ${
+                                    confirmAction === "disable" ? "text-red-800" : "text-amber-800"
+                                }`}>
+                                    {confirmAction === "disable"
+                                        ? "Your account will be protected by your password alone. Your authenticator setup and all backup codes will be permanently deleted."
+                                        : "Your current backup codes will stop working immediately. Make sure you can save the new ones before continuing."}
+                                </p>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-semibold text-gray-700">
+                                    Confirm with your password
+                                </label>
+                                <div className="flex items-center gap-2 border border-gray-300 rounded-sm py-2.5 px-3 focus-within:border-blue-500 bg-white">
+                                    <Lock className="w-4 h-4 text-gray-400 shrink-0" />
+                                    <input
+                                        type={showConfirmPasswordInput ? "text" : "password"}
+                                        autoFocus
+                                        value={confirmPasswordInput}
+                                        onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                                        // 💡 Soumission à la touche Entrée : sur un
+                                        // champ unique, obliger à viser un bouton est
+                                        // une friction inutile.
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" && confirmPasswordInput && !confirmLoading) {
+                                                handleConfirmSubmit();
+                                            }
+                                        }}
+                                        placeholder="••••••••"
+                                        className="w-full outline-none text-sm text-gray-900"
+                                    />
+                                    <span
+                                        className="cursor-pointer text-gray-400 hover:text-gray-600 shrink-0"
+                                        onClick={() => setShowConfirmPasswordInput(!showConfirmPasswordInput)}
+                                    >
+                                        {showConfirmPasswordInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {confirmError && (
+                                <div className="p-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-sm font-medium">
+                                    {confirmError}
+                                </div>
+                            )}
+
+                            <div className="flex gap-3 justify-end pt-2 border-t border-gray-100">
+                                <button
+                                    onClick={closeConfirm}
+                                    disabled={confirmLoading}
+                                    className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-sm transition-colors disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleConfirmSubmit}
+                                    disabled={!confirmPasswordInput || confirmLoading}
+                                    className={`px-5 py-2 text-sm font-bold text-white rounded-sm transition-colors shadow-sm disabled:opacity-50 min-w-[130px] flex items-center justify-center ${
+                                        confirmAction === "disable"
+                                            ? "bg-red-600 hover:bg-red-700"
+                                            : "bg-blue-700 hover:bg-blue-800"
+                                    }`}
+                                >
+                                    {confirmLoading ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : confirmAction === "disable" ? (
+                                        "Disable 2FA"
+                                    ) : (
+                                        "Regenerate"
+                                    )}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
