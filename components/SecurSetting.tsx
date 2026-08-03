@@ -6,15 +6,14 @@
 // 4 blocs indépendants, chacun avec son propre état de chargement/statut :
 //   1. Changement de mot de passe → POST /api/settings/security/password.
 //   2. Enregistrement de passkey → cérémonie WebAuthn en 2 appels
-//      (generate → startRegistration navigateur → verify), voir Lot 3.
-//   3. Activation 2FA → modale QR code, flux generate → verify (Lot 3),
-//      avec `update()` NextAuth pour rafraîchir `totpEnabled` en session sans
-//      forcer une reconnexion.
+//      (generate → startRegistration navigateur → verify).
+//   3. Activation 2FA → modale QR code, flux generate → verify, avec `update()`
+//      NextAuth pour rafraîchir `totpEnabled` en session sans reconnexion.
+//      🆕 Suivie d'un ÉCRAN DE CODES DE SECOURS (voir plus bas).
 //   4. Liste des sessions actives → GET/DELETE /api/settings/security/sessions.
-//      ⚠️ Le bouton "Revoke" ici déclenche l'appel DELETE affecté par la
-//      faille IDOR documentée au Lot 3 (aucune vérification serveur que la
-//      session révoquée appartient à l'utilisateur courant).
-import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X } from "lucide-react";
+//      ⚠️ Le bouton "Revoke" reste cosmétique tant que la stratégie de session
+//      est "jwt" : le token déjà émis reste valide (item M2 de la roadmap).
+import { Smartphone, LogOut, Laptop, ShieldCheck, KeyRound, Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Lock, Fingerprint, X, Copy, Download, ShieldAlert } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import { useState, useEffect } from "react";
 import { startRegistration } from "@simplewebauthn/browser";
@@ -40,7 +39,7 @@ export default function SecurSetting() {
     const [sessions, setSessions] = useState<any[]>([]);
     const [sessionsLoading, setSessionsLoading] = useState(true);
 
-    // 💡 NOUVEAUX ÉTATS POUR LE 2FA (TOTP)
+    // 💡 ÉTATS 2FA (TOTP)
     const [is2faModalOpen, setIs2faModalOpen] = useState(false);
     const [qrCodeUrl, setQrCodeUrl] = useState("");
     const [totpSecret, setTotpSecret] = useState("");
@@ -48,6 +47,18 @@ export default function SecurSetting() {
     const [is2faLoading, setIs2faLoading] = useState(false);
     const [is2faEnabled, setIs2faEnabled] = useState(false); 
     const [totpStatus, setTotpStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+    // 🆕 [PHASE B] ÉTATS DES CODES DE SECOURS
+    //
+    // 💡 `backupCodes` n'est rempli QUE juste après une activation réussie, le
+    // temps d'afficher les codes. Ils ne sont jamais rechargés depuis le serveur
+    // ensuite : celui-ci n'en garde que des empreintes HMAC et ne peut donc pas
+    // les reconstituer, par conception.
+    const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+    // Case "j'ai bien sauvegardé mes codes". Bloque la fermeture tant qu'elle
+    // n'est pas cochée — voir la note sur ce choix plus bas.
+    const [backupCodesSaved, setBackupCodesSaved] = useState(false);
+    const [copyFeedback, setCopyFeedback] = useState(false);
 
     // LOGIQUE DE VALIDATION EN TEMPS RÉEL (Mot de passe)
     const correctLength = newPassword.length >= 12;
@@ -131,7 +142,11 @@ export default function SecurSetting() {
 
             let attResp;
             try {
-                attResp = await startRegistration(options);
+                // 🆕 Signature v13 de @simplewebauthn/browser : la fonction attend
+                // un objet enveloppe `{ optionsJSON }`. L'ancien appel direct
+                // fonctionnait encore par rétrocompatibilité mais était annoncé
+                // comme déprécié dans la console.
+                attResp = await startRegistration({ optionsJSON: options });
             } catch (error: any) {
                 if (error.name === "NotAllowedError") {
                     throw new Error("Registration cancelled by user.");
@@ -208,8 +223,17 @@ export default function SecurSetting() {
             if (!res.ok) throw new Error(data.error || "Invalid verification code");
 
             setIs2faEnabled(true);
-            setIs2faModalOpen(false);
             setTotpCodeInput("");
+
+            // 🆕 [PHASE B] LA MODALE NE SE FERME PLUS ICI.
+            //
+            // Elle bascule vers l'écran des codes de secours, qui arrivent dans
+            // cette réponse et n'existeront JAMAIS ailleurs — le serveur n'en
+            // garde que des empreintes HMAC. Fermer la modale à ce moment ferait
+            // disparaître les codes à tout jamais, et l'utilisateur se
+            // retrouverait exactement dans la situation qu'ils doivent éviter.
+            setBackupCodes(data.backupCodes || null);
+            setBackupCodesSaved(false);
             
             // 💡 MISE À JOUR DE LA SESSION SANS DÉCONNEXION
             await update({
@@ -225,6 +249,71 @@ export default function SecurSetting() {
         } finally {
             setIs2faLoading(false);
         }
+    };
+
+    // 🆕 [PHASE B] TÉLÉCHARGEMENT DES CODES EN FICHIER TEXTE
+    //
+    // 💡 Pourquoi un fichier plutôt qu'une simple copie : un presse-papiers est
+    // volatile et souvent écrasé dans la minute. Un fichier survit à la
+    // fermeture du navigateur, peut être imprimé ou rangé dans un coffre —
+    // c'est l'usage réel de ces codes, qui servent justement le jour où
+    // l'utilisateur n'a plus accès à son téléphone.
+    //
+    // Le fichier est fabriqué et téléchargé entièrement dans le navigateur : ces
+    // codes ne repassent jamais par le réseau.
+    const handleDownloadCodes = () => {
+        if (!backupCodes) return;
+
+        const content = [
+            "TrustVerify — Two-Factor Authentication Backup Codes",
+            `Account: ${session?.user?.email ?? ""}`,
+            `Generated: ${new Date().toLocaleString()}`,
+            "",
+            "Each code can be used ONCE to sign in if you lose access to your",
+            "authenticator app. Keep this file somewhere safe and private.",
+            "",
+            ...backupCodes.map((code, i) => `${String(i + 1).padStart(2, "0")}.  ${code}`),
+            "",
+            "These codes cannot be displayed again. If you lose them, you will",
+            "need to generate a new set from your security settings.",
+        ].join("\n");
+
+        // On crée un fichier temporaire en mémoire, on simule un clic dessus,
+        // puis on libère l'URL — sans cette libération, le blob resterait en
+        // mémoire jusqu'au rechargement de la page.
+        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "trustverify-backup-codes.txt";
+        link.click();
+        URL.revokeObjectURL(url);
+
+        // Télécharger vaut sauvegarde : on considère l'utilisateur en règle.
+        setBackupCodesSaved(true);
+    };
+
+    // 🆕 [PHASE B] COPIE DANS LE PRESSE-PAPIERS
+    const handleCopyCodes = async () => {
+        if (!backupCodes) return;
+        try {
+            await navigator.clipboard.writeText(backupCodes.join("\n"));
+            setCopyFeedback(true);
+            setBackupCodesSaved(true);
+            setTimeout(() => setCopyFeedback(false), 2000);
+        } catch {
+            // L'API clipboard échoue sur les contextes non sécurisés (HTTP) ou si
+            // l'utilisateur refuse la permission. Les codes restent affichés à
+            // l'écran : il peut toujours les sélectionner à la main.
+            setCopyFeedback(false);
+        }
+    };
+
+    // 🆕 [PHASE B] Fermeture de l'écran des codes.
+    const handleCloseBackupCodes = () => {
+        setBackupCodes(null);
+        setBackupCodesSaved(false);
+        setIs2faModalOpen(false);
     };
 
     return (
@@ -306,10 +395,11 @@ export default function SecurSetting() {
                     </div>
                     
                     <div className="flex flex-row flex-wrap justify-between items-center mt-2 pt-4 border-t border-gray-100 gap-4">
-                        {/* ⚠️ Inexact : le backend hash uniquement avec bcrypt
-                            (voir api/settings/security/password/route.ts, Lot 3) —
-                            SHA-256 n'intervient nulle part dans ce flux. */}
-                        <p className="text-xs text-gray-500">Security Standard: <span className="font-bold text-gray-700">SHA-256 / Bcrypt</span></p>
+                        {/* 🆕 Mention corrigée : le backend hache uniquement avec bcrypt
+                            (12 tours, voir api/settings/security/password/route.ts).
+                            SHA-256 n'intervient à aucun moment dans ce flux — l'afficher
+                            donnait une information fausse sur notre propre sécurité. */}
+                        <p className="text-xs text-gray-500">Security Standard: <span className="font-bold text-gray-700">Bcrypt (12 rounds)</span></p>
                         <button 
                             type="submit"
                             disabled={passwordLoading || !isValid || currentPassword.length === 0}
@@ -415,24 +505,15 @@ export default function SecurSetting() {
                                 </div>
                             ))
                         ) : (
-                            // ⚠️ Ce bloc n'affiche PAS des données réelles : c'est un
-                            // "Windows 11 Workstation (Chrome)" codé en dur, montré
-                            // uniquement si `sessions` est vide après le chargement.
-                            // En pratique le GET de l'API insère toujours une ligne
-                            // pour l'appareil courant (voir Lot 3), donc ce cas ne
-                            // devrait presque jamais se produire — mais si jamais
-                            // l'API échoue silencieusement, l'utilisateur verrait
-                            // cette fausse session plutôt qu'un état vide honnête.
-                            <div className="flex flex-row items-center justify-between py-3.5">
-                                <div className="flex flex-row items-center gap-4">
-                                    <Laptop className="w-6 h-6 text-gray-400 shrink-0" />
-                                    <div className="flex flex-col">
-                                        <p className="text-sm font-bold text-gray-900">Windows 11 Workstation (Chrome)</p>
-                                        <p className="text-xs text-green-600 font-semibold flex items-center gap-1 mt-0.5">
-                                            <ShieldCheck className="w-3.5 h-3.5" /> Active Session (This Device)
-                                        </p>
-                                    </div>
-                                </div>
+                            /* 🆕 ÉTAT VIDE HONNÊTE.
+                               Ce bloc affichait auparavant un faux appareil codé en dur
+                               ("Windows 11 Workstation (Chrome)"). Montrer une donnée
+                               inventée dans un registre de sécurité est trompeur : si
+                               l'API échoue silencieusement, l'utilisateur croyait voir
+                               une session réelle. Un état vide dit la vérité. */
+                            <div className="flex flex-col items-center justify-center py-8 gap-3 text-center">
+                                <Laptop className="w-8 h-8 text-gray-300" />
+                                <p className="text-sm text-gray-500 font-medium">No active session records found.</p>
                                 <button 
                                     onClick={() => signOut({ callbackUrl: "/login" })}
                                     className="flex flex-row items-center gap-1.5 text-xs font-bold bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-sm hover:bg-red-100 transition-colors cursor-pointer"
@@ -448,49 +529,140 @@ export default function SecurSetting() {
             {/* 💡 MODALE DE CONFIGURATION 2FA */}
             {is2faModalOpen && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                    <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                        <div className="flex justify-between items-center p-4 border-b border-gray-100">
-                            <h3 className="font-bold text-lg text-gray-900">Setup Authenticator App</h3>
-                            <button onClick={() => setIs2faModalOpen(false)} className="text-gray-400 hover:text-gray-600">
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-6 flex flex-col items-center gap-6">
-                            <p className="text-sm text-gray-600 text-center">
-                                Scan this QR code with your authenticator app (like Google Authenticator, Authy, or 1Password).
-                            </p>
-                            
-                            <div className="p-2 bg-white border border-gray-200 rounded-lg shadow-sm">
-                                {qrCodeUrl ? (
-                                    <img src={qrCodeUrl} alt="2FA QR Code" className="w-48 h-48" />
-                                ) : (
-                                    <div className="w-48 h-48 flex items-center justify-center bg-gray-50 text-gray-400">Loading...</div>
-                                )}
-                            </div>
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
 
-                            <div className="w-full">
-                                <label className="text-xs font-bold text-gray-700 mb-1.5 block">Enter the 6-digit code</label>
-                                <input 
-                                    type="text" 
-                                    maxLength={6}
-                                    placeholder="000000"
-                                    value={totpCodeInput}
-                                    onChange={(e) => setTotpCodeInput(e.target.value.replace(/[^0-9]/g, ''))}
-                                    className="w-full border border-gray-300 rounded-sm py-2.5 px-3 text-center tracking-[0.5em] font-mono text-lg focus-within:border-blue-500 outline-none transition-colors"
-                                />
-                                {totpStatus?.type === "error" && (
-                                    <p className="text-xs text-red-600 mt-2 flex items-center justify-center gap-1"><AlertCircle className="w-3 h-3"/> {totpStatus.text}</p>
-                                )}
-                            </div>
+                        {/* 🆕 [PHASE B] LA MODALE A DEUX ÉCRANS.
+                            Tant que `backupCodes` est null, on affiche le QR code.
+                            Une fois l'activation réussie, on bascule sur les codes de
+                            secours — sans jamais refermer la fenêtre entre les deux. */}
+                        {!backupCodes ? (
+                            <>
+                                <div className="flex justify-between items-center p-4 border-b border-gray-100">
+                                    <h3 className="font-bold text-lg text-gray-900">Setup Authenticator App</h3>
+                                    <button onClick={() => setIs2faModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                </div>
+                                <div className="p-6 flex flex-col items-center gap-6 overflow-y-auto">
+                                    <p className="text-sm text-gray-600 text-center">
+                                        Scan this QR code with your authenticator app (like Google Authenticator, Authy, or 1Password).
+                                    </p>
+                                    
+                                    <div className="p-2 bg-white border border-gray-200 rounded-lg shadow-sm">
+                                        {qrCodeUrl ? (
+                                            <img src={qrCodeUrl} alt="2FA QR Code" className="w-48 h-48" />
+                                        ) : (
+                                            <div className="w-48 h-48 flex items-center justify-center bg-gray-50 text-gray-400">Loading...</div>
+                                        )}
+                                    </div>
 
-                            <button 
-                                onClick={handleVerify2fa}
-                                disabled={totpCodeInput.length !== 6 || is2faLoading}
-                                className="w-full bg-blue-700 text-white font-bold py-2.5 rounded-sm hover:bg-blue-800 disabled:opacity-50 transition-colors flex justify-center items-center h-11"
-                            >
-                                {is2faLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify and Enable 2FA"}
-                            </button>
-                        </div>
+                                    <div className="w-full">
+                                        <label className="text-xs font-bold text-gray-700 mb-1.5 block">Enter the 6-digit code</label>
+                                        <input 
+                                            type="text" 
+                                            maxLength={6}
+                                            placeholder="000000"
+                                            value={totpCodeInput}
+                                            onChange={(e) => setTotpCodeInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                            className="w-full border border-gray-300 rounded-sm py-2.5 px-3 text-center tracking-[0.5em] font-mono text-lg focus-within:border-blue-500 outline-none transition-colors"
+                                        />
+                                        {totpStatus?.type === "error" && (
+                                            <p className="text-xs text-red-600 mt-2 flex items-center justify-center gap-1"><AlertCircle className="w-3 h-3"/> {totpStatus.text}</p>
+                                        )}
+                                    </div>
+
+                                    <button 
+                                        onClick={handleVerify2fa}
+                                        disabled={totpCodeInput.length !== 6 || is2faLoading}
+                                        className="w-full bg-blue-700 text-white font-bold py-2.5 rounded-sm hover:bg-blue-800 disabled:opacity-50 transition-colors flex justify-center items-center h-11"
+                                    >
+                                        {is2faLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify and Enable 2FA"}
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            /* 🆕 [PHASE B] ÉCRAN DES CODES DE SECOURS
+                               ================================================
+                               ⚠️ SEULE ET UNIQUE APPARITION DE CES CODES. Le serveur
+                               n'en conserve que des empreintes HMAC : il lui est
+                               mathématiquement impossible de les réafficher, même à
+                               la demande d'un administrateur.
+                               
+                               💡 Pas de bouton de fermeture en croix ici, contrairement
+                               à l'écran précédent. C'est délibéré : fermer par
+                               inadvertance (clic sur la croix, touche Échap réflexe)
+                               ferait perdre les codes définitivement. La seule sortie
+                               passe par une confirmation explicite. */
+                            <>
+                                <div className="flex items-center gap-3 p-4 border-b border-gray-100 bg-amber-50">
+                                    <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
+                                    <h3 className="font-bold text-lg text-gray-900">Save Your Backup Codes</h3>
+                                </div>
+
+                                <div className="p-6 flex flex-col gap-5 overflow-y-auto">
+                                    <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-sm">
+                                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                                        <p className="text-xs text-amber-800 leading-relaxed">
+                                            <strong>These codes will never be shown again.</strong> Each one lets you sign in once if you lose access to your authenticator app. Store them somewhere safe and private.
+                                        </p>
+                                    </div>
+
+                                    {/* 💡 `select-all` permet de tout sélectionner d'un
+                                        seul clic — utile si l'API clipboard échoue. */}
+                                    <div className="grid grid-cols-2 gap-2 p-4 bg-gray-50 border border-gray-200 rounded-sm select-all">
+                                        {backupCodes.map((code, index) => (
+                                            <div key={index} className="font-mono text-sm text-gray-900 tracking-wide text-center py-1">
+                                                {code}
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={handleDownloadCodes}
+                                            className="flex-1 flex items-center justify-center gap-2 text-sm font-bold text-gray-900 bg-white border border-gray-300 py-2.5 rounded-sm hover:bg-gray-50 transition-colors"
+                                        >
+                                            <Download className="w-4 h-4" /> Download
+                                        </button>
+                                        <button
+                                            onClick={handleCopyCodes}
+                                            className="flex-1 flex items-center justify-center gap-2 text-sm font-bold text-gray-900 bg-white border border-gray-300 py-2.5 rounded-sm hover:bg-gray-50 transition-colors"
+                                        >
+                                            {copyFeedback ? (
+                                                <><CheckCircle2 className="w-4 h-4 text-green-600" /> Copied</>
+                                            ) : (
+                                                <><Copy className="w-4 h-4" /> Copy</>
+                                            )}
+                                        </button>
+                                    </div>
+
+                                    {/* 💡 Case de confirmation obligatoire.
+                                        Une friction volontaire : elle force un geste
+                                        conscient plutôt qu'une fermeture réflexe. Le
+                                        coût d'un clic en trop est dérisoire face à
+                                        celui d'un compte définitivement inaccessible. */}
+                                    <label className="flex items-start gap-2.5 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={backupCodesSaved}
+                                            onChange={(e) => setBackupCodesSaved(e.target.checked)}
+                                            className="mt-0.5 accent-blue-600 cursor-pointer"
+                                        />
+                                        <span className="text-xs text-gray-700 font-medium leading-relaxed">
+                                            I have saved these backup codes in a safe place.
+                                        </span>
+                                    </label>
+
+                                    <button
+                                        onClick={handleCloseBackupCodes}
+                                        disabled={!backupCodesSaved}
+                                        className="w-full bg-blue-700 text-white font-bold py-2.5 rounded-sm hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors h-11"
+                                    >
+                                        Done
+                                    </button>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

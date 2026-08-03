@@ -8,18 +8,20 @@
 // en base + on active le flag `totpEnabled`.
 //
 // ✅ [PHASE B — RÉSOLU] Le secret n'est plus écrit en clair : il passe par
-// encrypt() (AES-256-GCM, voir lib/crypto.ts) avant d'atteindre la base. Un
-// dump de la table User ne révèle donc plus de quoi générer les codes 2FA.
-// ⚠️ La ligne `console.log` ci-dessous n'est PAS la piste d'audit officielle
-// (celle-ci passe par lib/logger.ts → table AuditLog) : c'est juste un log
-// console, invisible dans l'écran "Audit Trail" de l'app.
+// encrypt() (AES-256-GCM, voir lib/crypto.ts) avant d'atteindre la base.
+//
+// 🆕 [PHASE B] GÉNÉRATION DES CODES DE SECOURS. Sans eux, perdre son téléphone
+// signifiait être définitivement verrouillé dehors. Ils sont générés ICI, au
+// seul moment où l'on peut les montrer à l'utilisateur, et renvoyés EN CLAIR
+// dans la réponse — la seule et unique fois où ils quitteront le serveur.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { verifySync } from "otplib";
-// 🆕 [PHASE B] Module de chiffrement au repos.
 import { encrypt } from "@/lib/crypto";
+// 🆕 [PHASE B] Génération et hachage des codes de secours.
+import { generateBackupCodes, hashBackupCodes } from "@/lib/backup-codes";
 
 export async function POST(req: Request) {
     try {
@@ -38,9 +40,6 @@ export async function POST(req: Request) {
 
         // 1. VÉRIFICATION CRYPTOGRAPHIQUE (Le cœur du réacteur)
         // On laisse otplib faire les mathématiques temporelles complexes (HMAC-SHA1)
-        // 💡 Note : on vérifie avec le secret EN CLAIR reçu du client — le
-        // chiffrement n'intervient qu'au moment de l'écriture en base, juste
-        // en dessous. otplib ne saurait pas quoi faire d'une valeur chiffrée.
         const { valid: isValid } = verifySync({ token, secret });
 
         if (!isValid) {
@@ -50,23 +49,25 @@ export async function POST(req: Request) {
             }, { status: 400 });
         }
 
-        // 🆕 [PHASE B] 2. CHIFFREMENT AVANT LE SCELLEMENT EN BASE
-        // Le code saisi est valide : l'utilisateur a bien scanné le QR et son
-        // app génère les bons codes. On peut activer la 2FA.
+        // 🆕 [PHASE B] 2. GÉNÉRATION DES CODES DE SECOURS
         //
-        // Le secret est chiffré ICI, juste avant l'écriture. À partir de
-        // maintenant, la colonne `totpSecret` contient une chaîne du type
-        // "enc:v1:a3f2...:8b1c...:d94e..." et non plus le secret lisible.
+        // ⚠️ MOMENT CRUCIAL : c'est la SEULE occasion où ces codes existeront en
+        // clair hors du navigateur de l'utilisateur. La base ne recevra que des
+        // empreintes HMAC — le serveur sera donc mathématiquement incapable de
+        // les réafficher plus tard, exactement comme pour une clé API.
         //
-        // Si le chiffrement échoue (ENCRYPTION_KEY absente ou malformée), on
-        // n'écrit RIEN et on renvoie une erreur : mieux vaut refuser d'activer
-        // la 2FA que de l'activer avec un secret non protégé, ou pire, écrire
-        // une valeur corrompue qui bloquerait l'utilisateur au prochain login.
+        // 💡 On les génère AVANT l'écriture en base, pour que le chiffrement du
+        // secret et le hachage des codes échouent ou réussissent ensemble : une
+        // 2FA activée sans codes de secours ramènerait le problème qu'on corrige.
+        const plainBackupCodes = generateBackupCodes();
+
         let encryptedSecret: string;
+        let hashedBackupCodes: string;
         try {
             encryptedSecret = encrypt(secret);
+            hashedBackupCodes = hashBackupCodes(plainBackupCodes);
         } catch (cryptoError) {
-            console.error("[2FA] Échec du chiffrement du secret TOTP :", cryptoError);
+            console.error("[2FA] Échec du chiffrement ou du hachage :", cryptoError);
             return NextResponse.json({
                 error: "Server encryption is not configured. Please contact your administrator."
             }, { status: 500 });
@@ -77,7 +78,9 @@ export async function POST(req: Request) {
             where: { email: session.user.email },
             data: {
                 totpEnabled: true,
-                totpSecret: encryptedSecret // 🆕 [PHASE B] chiffré, plus en clair
+                totpSecret: encryptedSecret,
+                // 🆕 [PHASE B] Empreintes uniquement, jamais les codes lisibles.
+                backupCodes: hashedBackupCodes,
             }
         });
 
@@ -85,7 +88,15 @@ export async function POST(req: Request) {
         console.log(`🛡️ 2FA Successfully enabled for user: ${session.user.email}`);
 
         return NextResponse.json({ 
-            message: "Two-Factor Authentication has been successfully enabled." 
+            message: "Two-Factor Authentication has been successfully enabled.",
+            // 🆕 [PHASE B] LES CODES EN CLAIR, RENVOYÉS UNE SEULE FOIS.
+            //
+            // ⚠️ Cette réponse est la dernière occasion pour l'utilisateur de
+            // les sauvegarder. Le frontend DOIT les afficher de façon insistante
+            // (téléchargement, copie, confirmation explicite avant fermeture) —
+            // un utilisateur qui ferme la modale sans les noter se retrouvera
+            // exactement dans la situation qu'on cherche à éviter.
+            backupCodes: plainBackupCodes,
         }, { status: 200 });
 
     } catch (error) {
