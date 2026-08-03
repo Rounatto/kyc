@@ -23,6 +23,8 @@ import { logSecurityEvent } from "@/lib/logger"; // Piste d'audit : chaque login
 import { decrypt, encrypt, isEncrypted } from "@/lib/crypto";
 // 🆕 [PHASE B] Limiteur de tentatives de connexion (Upstash Redis).
 import { loginLimiter } from "@/lib/ratelimit";
+// 🆕 [PHASE B] Vérification et consommation des codes de secours 2FA.
+import { verifyAndConsumeBackupCode } from "@/lib/backup-codes";
 
 // ============================================================================
 // 🆕 [PHASE B] DURÉES DE SESSION — LE "REMEMBER ME" RENDU FONCTIONNEL
@@ -84,7 +86,10 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
         rememberMe: { label: "Remember Me", type: "checkbox" },
         passkeyResponse: { label: "Passkey Response", type: "text" },
-        totpCode: { label: "2FA Code", type: "text" } 
+        totpCode: { label: "2FA Code", type: "text" },
+        // 🆕 [PHASE B] Code de secours, alternative au code TOTP quand
+        // l'utilisateur n'a plus accès à son application d'authentification.
+        backupCode: { label: "Backup Code", type: "text" }
       },
       // 🆕 [PHASE B] Le second paramètre `req` était jusqu'ici ignoré. On le
       // récupère maintenant : c'est la SEULE façon d'obtenir l'adresse IP de
@@ -150,6 +155,8 @@ export const authOptions: NextAuthOptions = {
             totpSecret: string | null;
             // 🆕 [PHASE B] Date d'expiration du challenge WebAuthn (voir schéma).
             challengeExpires: Date | null;
+            // 🆕 [PHASE B] Empreintes HMAC des codes de secours (JSON en base).
+            backupCodes: string | null;
         };
 
         // 🌟 SCÉNARIO 1 : CONNEXION PAR PASSKEY (WebAuthn)
@@ -257,10 +264,140 @@ export const authOptions: NextAuthOptions = {
             if (!isPasswordValid) return null;
 
             if (authUser.totpEnabled) {
-                // Le frontend envoie un premier POST sans totpCode ; NextAuth relaie
-                // cette erreur "2FA_REQUIRED" jusqu'au formulaire de login, qui affiche
-                // alors le champ code à 6 chiffres et renvoie une 2e tentative complète.
-                if (!credentials.totpCode) throw new Error("2FA_REQUIRED");
+                // ============================================================
+                // 🆕 [PHASE B] DEUX FAÇONS DE FRANCHIR LE SECOND FACTEUR
+                // ============================================================
+                // Soit un code TOTP à 6 chiffres lu dans l'application
+                // d'authentification, soit un CODE DE SECOURS à usage unique,
+                // pour l'utilisateur qui n'a plus accès à son téléphone.
+                //
+                // ⚠️ L'ordre des tests compte : on traite le code de secours EN
+                // PREMIER. Si l'utilisateur en a envoyé un, c'est justement
+                // qu'il ne peut pas produire de code TOTP — le vérifier d'abord
+                // éviterait de toute façon un échec certain.
+                //
+                // Le frontend envoie un premier POST sans aucun des deux ;
+                // NextAuth relaie l'erreur "2FA_REQUIRED" jusqu'au formulaire de
+                // login, qui affiche alors le champ approprié et renvoie une 2e
+                // tentative complète.
+                if (!credentials.totpCode && !credentials.backupCode) {
+                    throw new Error("2FA_REQUIRED");
+                }
+
+                // ------------------------------------------------------------
+                // 🆕 VOIE A : CODE DE SECOURS
+                // ------------------------------------------------------------
+                if (credentials.backupCode) {
+                    // `verifyAndConsumeBackupCode` calcule tout mais n'écrit
+                    // rien : elle renvoie la liste amputée du code utilisé, ou
+                    // `null` si le code est invalide. C'est nous qui décidons
+                    // d'écrire — un module qui touche à la base de son propre
+                    // chef serait bien plus difficile à réutiliser et à tester.
+                    const result = verifyAndConsumeBackupCode(
+                        authUser.backupCodes,
+                        credentials.backupCode
+                    );
+
+                    if (!result) {
+                        // 📜 AUDIT TRAIL : un code de secours refusé est un
+                        // signal notable — bien plus qu'un simple code TOTP
+                        // erroné, qui arrive couramment (horloge décalée, code
+                        // expiré entre la lecture et la saisie).
+                        if (authUser.companyId) {
+                            await logSecurityEvent({
+                                action: "LOGIN_FAILED",
+                                details: "User provided correct password but an invalid 2FA backup code.",
+                                companyId: authUser.companyId,
+                                agentId: user.id
+                            });
+                        }
+                        throw new Error("INVALID_BACKUP_CODE");
+                    }
+
+                    // 🔒 CONSOMMATION IMMÉDIATE, ET C'EST TOUT L'ENJEU.
+                    // Sans cette écriture, le code resterait réutilisable
+                    // indéfiniment : il deviendrait un second mot de passe
+                    // permanent, exactement l'inverse de l'objectif. Un code
+                    // intercepté une fois ouvrirait le compte à volonté.
+                    await prisma.user.update({
+                        where: { id: user.id },
+                        data: { backupCodes: result.remainingJson },
+                    });
+
+                    // 📜 AUDIT TRAIL : l'usage d'un code de secours mérite une
+                    // trace distincte d'une connexion ordinaire. Il signale que
+                    // l'utilisateur a perdu l'accès à son second facteur — une
+                    // information utile en cas d'enquête, et un signal d'alerte
+                    // si l'intéressé n'a jamais rien perdu.
+                    if (authUser.companyId) {
+                        await logSecurityEvent({
+                            action: "LOGIN_SUCCESS",
+                            details: `User authenticated using a 2FA backup code. ${result.remainingCount} backup code(s) remaining.`,
+                            companyId: authUser.companyId,
+                            agentId: user.id
+                        });
+                    }
+
+                    // ========================================================
+                    // 🆕 [PHASE B] ALERTE VISIBLE POUR L'UTILISATEUR
+                    // ========================================================
+                    // Un `console.warn` ne sert qu'à nous : l'utilisateur ne voit
+                    // rien. Or c'est LUI qui doit savoir combien de codes il lui
+                    // reste — à zéro, une simple perte de téléphone le remettrait
+                    // dans l'impasse que ces codes existent pour éviter.
+                    //
+                    // On crée donc une vraie notification en base, qui apparaîtra
+                    // dans sa cloche au prochain chargement du dashboard.
+                    //
+                    // 💡 Le ton s'adapte au nombre restant : un rappel informatif
+                    // tant qu'il en a plusieurs, une alerte franche quand la
+                    // réserve s'épuise. Crier au loup à chaque usage banaliserait
+                    // le message et le rendrait invisible au moment où il compte.
+                    if (authUser.companyId) {
+                        const isCritical = result.remainingCount <= 2;
+                        const isEmpty = result.remainingCount === 0;
+
+                        try {
+                            await prisma.notification.create({
+                                data: {
+                                    // "SYSTEM" quand c'est informatif, "HIGH_RISK_ALERT"
+                                    // quand il faut agir : ton frontend colore déjà
+                                    // les notifications selon ce type.
+                                    type: isCritical ? "HIGH_RISK_ALERT" : "SYSTEM",
+                                    title: isEmpty
+                                        ? "No backup codes left"
+                                        : isCritical
+                                            ? "Backup codes running low"
+                                            : "Backup code used",
+                                    message: isEmpty
+                                        ? "You just used your last 2FA backup code. If you lose access to your authenticator app now, you will not be able to sign in. Generate a new set from Security settings."
+                                        : `A 2FA backup code was used to sign in. You have ${result.remainingCount} code(s) remaining.`,
+                                    companyId: authUser.companyId,
+                                    // 💡 Notification CIBLÉE sur cet utilisateur, et non
+                                    // diffusée à toute l'entreprise : c'est une
+                                    // information personnelle sur son second facteur,
+                                    // ses collègues n'ont pas à la voir.
+                                    userId: user.id,
+                                },
+                            });
+                        } catch (notifError) {
+                            // Échec NON bloquant : la connexion est déjà validée. Un
+                            // problème d'écriture de notification ne doit jamais
+                            // empêcher quelqu'un d'accéder à son compte.
+                            console.error("[2FA] Échec de création de la notification :", notifError);
+                        }
+                    }
+
+                    return {
+                        id: user.id, email: user.email, name: user.fullName, image: user.avatarUrl,
+                        companyId: authUser.companyId, role: authUser.role,
+                        rememberMe: credentials.rememberMe === "true"
+                    };
+                }
+
+                // ------------------------------------------------------------
+                // VOIE B : CODE TOTP CLASSIQUE
+                // ------------------------------------------------------------
                 if (!authUser.totpSecret) throw new Error("Erreur de configuration 2FA");
 
                 // 🆕 [PHASE B] DÉCHIFFREMENT DU SECRET AVANT VÉRIFICATION
@@ -287,7 +424,7 @@ export const authOptions: NextAuthOptions = {
                 }
 
                 const { valid: isValidTotp } = verifySync({
-                  token: credentials.totpCode,
+                  token: credentials.totpCode as string,
                   secret: decryptedSecret,
                 });
 

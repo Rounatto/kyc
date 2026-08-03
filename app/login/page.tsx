@@ -11,21 +11,35 @@
 // Le bouton Passkey utilise `startAuthentication` (SimpleWebAuthn browser) qui
 // déclenche la boîte de dialogue native Face ID/empreinte/clé de sécurité.
 //
+// 🆕 [PHASE B] L'étape 2FA propose désormais DEUX modes, pilotés par
+// `useBackupCode` : le code à 6 chiffres de l'application d'authentification,
+// ou un CODE DE SECOURS à usage unique pour l'utilisateur qui n'a plus accès à
+// son téléphone. Sans cette option, perdre son appareil signifiait être
+// définitivement verrouillé dehors.
+//
+// 💡 POURQUOI LE MOT DE PASSE EST RENVOYÉ À L'ÉTAPE 2 : le serveur ne garde
+// AUCUN état entre les deux appels — il ne "se souvient" pas que le mot de
+// passe était bon. C'est ce qui rend le flux "stateless" : aucune session
+// temporaire à créer, à faire expirer ou à sécuriser entre les deux étapes.
+// D'où le fait que `password` reste en mémoire côté client et reparte avec le
+// second appel.
+//
 // 🆕 [PHASE B] Le serveur applique un rate limiting sur la connexion
 // (10 tentatives / 15 min par IP) et sur /api/auth/passkey/generate-login
 // (10 / min par IP). Cette page distingue donc un vrai échec d'authentification
 // d'un simple blocage temporaire — sans quoi l'utilisateur verrait "mot de passe
 // incorrect" alors que son mot de passe est bon.
-//
-// ⚠️ Le lien "Forgot password?" pointe vers /forgot-password, qui existe
-// désormais (flux complet de réinitialisation, Phase B).
 import { useState } from "react";
 import Link from "next/link";
-import { Eye, Mail, Lock, EyeOff, Fingerprint, CircleQuestionMark, Loader2, ArrowLeft, ShieldAlert } from "lucide-react";
+import { Eye, Mail, Lock, EyeOff, Fingerprint, CircleQuestionMark, Loader2, ArrowLeft, ShieldAlert, KeyRound } from "lucide-react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import LoginBtn from "@/components/login-btn"; // ⚠️ Importé mais jamais utilisé dans ce fichier (le bouton Google est réécrit inline plus bas)
 import { startAuthentication } from "@simplewebauthn/browser";
+
+// 🆕 [PHASE B] Longueur d'un code de secours une fois normalisé (tiret et
+// espaces retirés). Doit correspondre à CODE_LENGTH dans lib/backup-codes.ts.
+const BACKUP_CODE_LENGTH = 10;
 
 export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
@@ -35,12 +49,40 @@ export default function Login() {
     const [rememberMe, setRememberMe] = useState(false);
     const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
 
-    // 💡 NOUVEAUX ÉTATS POUR LE 2FA
+    // 💡 ÉTATS POUR LE 2FA
     const [is2faStep, setIs2faStep] = useState(false);
     const [totpCode, setTotpCode] = useState("");
     const [isLoginLoading, setIsLoginLoading] = useState(false);
 
+    // 🆕 [PHASE B] Bascule entre le code à 6 chiffres et le code de secours.
+    //
+    // 💡 POURQUOI UN CHAMP SÉPARÉ plutôt qu'une détection automatique du format
+    // ("si ça fait 6 chiffres c'est un TOTP, sinon un code de secours") : le
+    // champ TOTP filtre déjà les non-chiffres et limite la saisie à 6
+    // caractères — il faudrait de toute façon changer son comportement. Autant
+    // être explicite : l'utilisateur qui cherche cette issue de secours la
+    // trouve, au lieu de deviner qu'il peut taper autre chose.
+    const [useBackupCode, setUseBackupCode] = useState(false);
+    const [backupCode, setBackupCode] = useState("");
+
     const router = useRouter();
+
+    // 🆕 [PHASE B] Normalisation côté client, uniquement pour activer ou non le
+    // bouton de soumission. Le serveur applique EXACTEMENT la même normalisation
+    // de son côté (voir normalizeBackupCode dans lib/backup-codes.ts) — celle-ci
+    // n'est qu'un confort d'interface, elle ne protège rien.
+    const normalizedBackupCode = backupCode.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const isBackupCodeComplete = normalizedBackupCode.length === BACKUP_CODE_LENGTH;
+
+    // 🆕 [PHASE B] Bascule entre les deux modes. On vide systématiquement l'autre
+    // champ et le message d'erreur : laisser un code à moitié saisi ou une
+    // erreur qui concernait l'autre mode ne ferait que semer la confusion.
+    const toggleBackupMode = () => {
+        setUseBackupCode((prev) => !prev);
+        setTotpCode("");
+        setBackupCode("");
+        setError("");
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -55,9 +97,17 @@ export default function Login() {
             redirect: false,
         };
 
-        // Si on est à l'étape 2, on ajoute le code à la valise
+        // 🆕 [PHASE B] À l'étape 2, on n'envoie QUE le champ correspondant au
+        // mode actif. Envoyer les deux (dont un vide) fonctionnerait — le
+        // serveur teste le code de secours en premier — mais transmettre une
+        // valeur vide dans une requête d'authentification brouille la lecture
+        // des logs et le débogage.
         if (is2faStep) {
-            payload.totpCode = totpCode;
+            if (useBackupCode) {
+                payload.backupCode = backupCode;
+            } else {
+                payload.totpCode = totpCode;
+            }
         }
 
         const resultat = await signIn("credentials", payload);
@@ -71,6 +121,16 @@ export default function Login() {
             } else if (resultat.error === "INVALID_2FA_CODE") {
                 setError("Incorrect 6-digit code. Please try again.");
                 setTotpCode(""); // On vide la case
+            } else if (resultat.error === "INVALID_BACKUP_CODE") {
+                // 🆕 [PHASE B] Message distinct de celui du code TOTP.
+                //
+                // 💡 La mention "usage unique" est délibérée : c'est de loin la
+                // cause d'échec la plus probable. L'utilisateur ressaisit un code
+                // qu'il a déjà consommé lors d'une connexion précédente, et sans
+                // ce rappel il croirait le système cassé — le code est bien sur
+                // sa feuille, correctement recopié, et pourtant refusé.
+                setError("Invalid backup code. Each code can only be used once — try a different one from your list.");
+                setBackupCode("");
             } else if (resultat.error === "TOO_MANY_ATTEMPTS") {
                 // 🆕 [PHASE B] Blocage temporaire par le rate limiting serveur.
                 // Sans cette branche, l'erreur tomberait dans le `else` ci-dessous
@@ -186,9 +246,24 @@ export default function Login() {
                     <div className="text-center mb-3 text-2xl font-bold">
                         {is2faStep ? (
                             <>
-                                <ShieldAlert className="w-10 h-10 text-blue-700 mx-auto mb-2" />
-                                <h1 className="text-2xl font-bold text-gray-900">Two-Factor Auth</h1>
-                                <p className="text-sm text-gray-500 m-2">Enter the 6-digit code from your authenticator app.</p>
+                                {/* 🆕 [PHASE B] L'icône et le texte changent selon le
+                                    mode : une clé pour le code de secours, un
+                                    bouclier pour le code habituel. L'utilisateur voit
+                                    immédiatement dans quel mode il se trouve, sans
+                                    avoir à interpréter le champ de saisie. */}
+                                {useBackupCode ? (
+                                    <>
+                                        <KeyRound className="w-10 h-10 text-blue-700 mx-auto mb-2" />
+                                        <h1 className="text-2xl font-bold text-gray-900">Backup Code</h1>
+                                        <p className="text-sm text-gray-500 m-2">Enter one of the recovery codes you saved when enabling two-factor authentication.</p>
+                                    </>
+                                ) : (
+                                    <>
+                                        <ShieldAlert className="w-10 h-10 text-blue-700 mx-auto mb-2" />
+                                        <h1 className="text-2xl font-bold text-gray-900">Two-Factor Auth</h1>
+                                        <p className="text-sm text-gray-500 m-2">Enter the 6-digit code from your authenticator app.</p>
+                                    </>
+                                )}
                             </>
                         ) : (
                             <>
@@ -231,20 +306,62 @@ export default function Login() {
                         {/* 💡 ÉTAPE 2 : LE CODE 2FA (Visible uniquement si requis) */}
                         {is2faStep && (
                             <div className="animate-in slide-in-from-right-4 fade-in duration-300 mb-5">
-                                <input 
-                                    type="text" 
-                                    maxLength={6}
-                                    placeholder="000000"
-                                    required
-                                    autoFocus
-                                    value={totpCode}
-                                    onChange={(e) => setTotpCode(e.target.value.replace(/[^0-9]/g, ''))}
-                                    className="w-full border border-gray-300 rounded-sm py-3 px-4 text-center tracking-[0.7em] font-mono text-2xl focus-within:border-blue-500 outline-none transition-colors"
-                                />
+
+                                {/* 🆕 [PHASE B] DEUX CHAMPS MUTUELLEMENT EXCLUSIFS.
+                                    Leurs contraintes de saisie n'ont rien à voir : le
+                                    TOTP n'accepte que 6 chiffres, le code de secours
+                                    des lettres ET des chiffres avec un tiret. Un champ
+                                    unique aurait forcé à relâcher le filtrage du TOTP,
+                                    au détriment de la saisie la plus courante. */}
+                                {useBackupCode ? (
+                                    <input
+                                        type="text"
+                                        maxLength={13}
+                                        placeholder="XXXXX-XXXXX"
+                                        required
+                                        autoFocus
+                                        value={backupCode}
+                                        // 💡 Passage en majuscules à la volée : les codes
+                                        // sont affichés et stockés en majuscules. Voir sa
+                                        // saisie en minuscules ferait douter l'utilisateur
+                                        // alors que le serveur normalise de toute façon.
+                                        onChange={(e) => setBackupCode(e.target.value.toUpperCase())}
+                                        className="w-full border border-gray-300 rounded-sm py-3 px-4 text-center tracking-[0.25em] font-mono text-xl focus-within:border-blue-500 outline-none transition-colors uppercase"
+                                    />
+                                ) : (
+                                    <input 
+                                        type="text" 
+                                        maxLength={6}
+                                        placeholder="000000"
+                                        required
+                                        autoFocus
+                                        value={totpCode}
+                                        onChange={(e) => setTotpCode(e.target.value.replace(/[^0-9]/g, ''))}
+                                        className="w-full border border-gray-300 rounded-sm py-3 px-4 text-center tracking-[0.7em] font-mono text-2xl focus-within:border-blue-500 outline-none transition-colors"
+                                    />
+                                )}
+
+                                {/* 🆕 [PHASE B] LE LIEN QUI REND LES CODES DE SECOURS
+                                    ACCESSIBLES. Sans lui, ils existeraient en base sans
+                                    qu'aucun utilisateur ne puisse jamais s'en servir —
+                                    exactement l'état du champ `backupCodes` avant ce
+                                    travail : présent au schéma, mort dans le code. */}
+                                <button
+                                    type="button"
+                                    onClick={toggleBackupMode}
+                                    className="flex items-center justify-center gap-1.5 text-xs text-blue-700 font-bold mt-4 mx-auto hover:underline transition-colors"
+                                >
+                                    {useBackupCode ? (
+                                        <><ShieldAlert className="w-3 h-3" /> Use authenticator code instead</>
+                                    ) : (
+                                        <><KeyRound className="w-3 h-3" /> Use a backup code instead</>
+                                    )}
+                                </button>
+
                                 <button 
                                     type="button" 
-                                    onClick={() => { setIs2faStep(false); setTotpCode(""); }}
-                                    className="flex items-center justify-center gap-1.5 text-xs text-gray-500 mt-4 mx-auto hover:text-gray-900 transition-colors"
+                                    onClick={() => { setIs2faStep(false); setTotpCode(""); setBackupCode(""); setUseBackupCode(false); setError(""); }}
+                                    className="flex items-center justify-center gap-1.5 text-xs text-gray-500 mt-3 mx-auto hover:text-gray-900 transition-colors"
                                 >
                                     <ArrowLeft className="w-3 h-3" /> Back to password
                                 </button>
@@ -255,7 +372,13 @@ export default function Login() {
                         
                         <button 
                             type="submit"
-                            disabled={isLoginLoading || (is2faStep && totpCode.length !== 6)}
+                            // 🆕 [PHASE B] La condition d'activation dépend du mode :
+                            // 6 chiffres pour le TOTP, 10 caractères normalisés pour un
+                            // code de secours.
+                            disabled={
+                                isLoginLoading ||
+                                (is2faStep && (useBackupCode ? !isBackupCodeComplete : totpCode.length !== 6))
+                            }
                             className="w-full bg-blue-700 text-white font-bold py-2.5 rounded-sm hover:bg-blue-800 disabled:opacity-50 transition-colors flex justify-center items-center"
                         >
                             {isLoginLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : (is2faStep ? "Verify Code" : "Sign In")}
