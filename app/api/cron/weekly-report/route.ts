@@ -6,6 +6,18 @@
 // et envoie les emails de façon séquentielle dans le temps d'exécution de la
 // requête HTTP — acceptable au volume actuel, mais à surveiller si le nombre
 // d'entreprises abonnées grandit (risque de timeout serverless).
+//
+// 🆕 [FIX] LES MÉTRIQUES MESURAIENT LA MAUVAISE CHOSE.
+// Les compteurs "approuvé" et "rejeté" filtraient sur `submittedAt`, c'est-à-dire
+// la date de DÉPÔT du dossier. Le rapport répondait donc à la question "parmi
+// les dossiers reçus cette semaine, combien sont approuvés aujourd'hui ?" au
+// lieu de "qu'a fait mon équipe cette semaine ?".
+//
+// Conséquence concrète : un agent traitant lundi 50 dossiers déposés le mois
+// précédent voyait "Successfully Approved: 0" — tout son travail invisible.
+// Et l'écart entre le total et la somme approuvé+rejeté (les dossiers encore
+// en attente) n'était expliqué nulle part, ce qui donnait l'impression de
+// chiffres faux.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendWeeklyReportEmail } from "@/lib/mail";
@@ -38,28 +50,74 @@ export async function GET(req: Request) {
         for (const sub of subscribers) {
             if (!sub.companyId) continue;
 
-            // Compilation des métriques isolées B2B avec Prisma
-            const [total, approved, rejected, highRisk] = await Promise.all([
+            // ================================================================
+            // 🆕 [FIX] DEUX FENÊTRES TEMPORELLES DISTINCTES
+            // ================================================================
+            // Le rapport mélangeait deux questions sans le dire :
+            //
+            //   • CE QUI EST ARRIVÉ  → date de dépôt (`submittedAt`)
+            //   • CE QUI A ÉTÉ FAIT  → date de décision (`updatedAt`)
+            //
+            // Ce sont deux mesures légitimes, mais elles ne répondent pas à la
+            // même chose. Un rapport d'activité hebdomadaire doit refléter le
+            // TRAVAIL ACCOMPLI, sinon il ne sert à rien à un responsable qui
+            // veut savoir ce que son équipe a produit.
+            //
+            // 💡 `updatedAt` est mis à jour automatiquement par Prisma
+            // (@updatedAt dans le schéma) à chaque modification. Pour un dossier
+            // passé en "verified" ou "rejected", c'est donc bien la date de la
+            // DÉCISION de l'agent — exactement ce qu'on cherche.
+            const [submitted, pending, approved, rejected, highRisk] = await Promise.all([
+                // ── FENÊTRE "ARRIVÉE" : dossiers déposés cette semaine ──
                 prisma.verificationRequest.count({ 
                     where: { companyId: sub.companyId, submittedAt: { gte: sevenDaysAgo } } 
                 }),
+
+                // 🆕 EN ATTENTE — la ligne qui manquait et rendait le rapport
+                // incompréhensible. Sans elle, l'écart entre le total et la somme
+                // approuvé+rejeté donnait l'impression que des dossiers avaient
+                // disparu. C'est aussi la métrique la plus actionnable du rapport :
+                // elle dit à un responsable ce qu'il reste à traiter.
+                //
+                // ⚠️ Pas de filtre de date ici, et c'est VOULU : un dossier déposé
+                // il y a trois semaines et toujours en attente est justement le
+                // plus préoccupant. Le limiter aux 7 derniers jours masquerait
+                // précisément les retards qu'on veut faire remonter.
+                prisma.verificationRequest.count({
+                    where: { companyId: sub.companyId, status: "pending" }
+                }),
+
+                // ── FENÊTRE "ACTIVITÉ" : décisions prises cette semaine ──
+                // 🆕 `updatedAt` au lieu de `submittedAt`.
                 prisma.verificationRequest.count({ 
-                    where: { companyId: sub.companyId, status: "verified", submittedAt: { gte: sevenDaysAgo } } 
+                    where: { companyId: sub.companyId, status: "verified", updatedAt: { gte: sevenDaysAgo } } 
                 }),
                 prisma.verificationRequest.count({ 
-                    where: { companyId: sub.companyId, status: "rejected", submittedAt: { gte: sevenDaysAgo } } 
+                    where: { companyId: sub.companyId, status: "rejected", updatedAt: { gte: sevenDaysAgo } } 
                 }),
+
+                // 🆕 HAUT RISQUE : reste sur `submittedAt`, et c'est délibéré.
+                // Le niveau de risque est calculé par le moteur AU MOMENT DE LA
+                // CRÉATION du dossier et ne change plus ensuite. Compter sur
+                // `updatedAt` ferait donc réapparaître dans le rapport un vieux
+                // dossier à haut risque simplement parce qu'un agent l'a rouvert
+                // — un signalement trompeur.
                 prisma.verificationRequest.count({ 
                     where: { companyId: sub.companyId, riskLevel: "High", submittedAt: { gte: sevenDaysAgo } } 
                 })
             ]);
 
-            // Si aucune activité cette semaine, on peut choisir de ne pas spammer
-            if (total === 0) continue;
+            // 🆕 Condition d'envoi élargie. Avant, on ne testait que `total` :
+            // une semaine sans nouveau dépôt mais avec 40 anciens dossiers
+            // traités ne déclenchait AUCUN rapport, alors que c'est précisément
+            // la semaine où l'équipe a le plus travaillé.
+            const hasActivity = submitted > 0 || approved > 0 || rejected > 0;
+            if (!hasActivity) continue;
 
             // 4. Envoi de l'e-mail compilé
             await sendWeeklyReportEmail(sub.email, sub.fullName, {
-                total,
+                submitted,
+                pending,
                 approved,
                 rejected,
                 highRisk

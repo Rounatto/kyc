@@ -453,18 +453,38 @@ TrustVerify`;
 // `emailNotifWeekly`. Résume l'activité KYC des 7 derniers jours de SON
 // entreprise (les métriques sont déjà filtrées par companyId en amont).
 // ============================================================================
+// ============================================================================
+// 📊 EMAIL DE RAPPORT HEBDOMADAIRE (CRON JOB)
+// ============================================================================
+// Déclenché une fois par semaine par app/api/cron/weekly-report (planifié dans
+// vercel.json, protégé par CRON_SECRET), pour chaque utilisateur ayant activé
+// `emailNotifWeekly`. Résume l'activité KYC des 7 derniers jours de SON
+// entreprise (les métriques sont déjà filtrées par companyId en amont).
+//
+// 🆕 [FIX] LES LIBELLÉS DÉCRIVAIENT MAL CE QU'ILS COMPTAIENT.
+// "Total Verifications Processed" affichait en réalité les dossiers REÇUS, y
+// compris ceux encore en attente — d'où des rapports du type "Total: 2,
+// Approuvés: 0, Rejetés: 1" où le second dossier semblait s'être évaporé.
+//
+// Le rapport distingue désormais explicitement les deux natures de métriques :
+// ce qui est ARRIVÉ (nouveaux dossiers) et ce qui a été FAIT (décisions prises).
+// ============================================================================
 export const sendWeeklyReportEmail = async (
   to: string, 
   name: string, 
-  stats: { total: number; approved: number; rejected: number; highRisk: number }
+  // 🆕 `total` devient `submitted` (nom honnête : ce sont des dépôts, pas des
+  // traitements), et `pending` fait son entrée.
+  stats: { submitted: number; pending: number; approved: number; rejected: number; highRisk: number }
 ) => {
   // 🆕 [A4] `name` échappé pour le HTML ; les `stats` sont des NOMBRES calculés
   // par Prisma, aucun humain ne peut y glisser du HTML.
   const safeName = escapeHtml(name);
 
-  // 🆕 [DÉLIVRABILITÉ] Ancien sujet : "📊 Your TrustVerify Weekly Compliance
-  // Report". Un emoji en tout début de sujet est l'un des marqueurs les plus
-  // fréquemment associés aux campagnes de masse.
+  // 🆕 Total réel des décisions prises cette semaine. C'est LA métrique qu'un
+  // responsable cherche en priorité : combien de dossiers l'équipe a-t-elle
+  // effectivement traités ?
+  const processed = stats.approved + stats.rejected;
+
   const subject = "Your weekly TrustVerify summary";
   
   const htmlContent = `
@@ -476,23 +496,49 @@ export const sendWeeklyReportEmail = async (
       <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">Hello <strong>${safeName}</strong>,</p>
       <p style="font-size: 15px; line-height: 1.6; color: #4b5563;">Here is the automated summary of your workspace's KYC verification activities over the last 7 days.</p>
       
+      <!-- 🆕 SECTION 1 — CE QUE VOTRE ÉQUIPE A FAIT.
+           Placée en PREMIER car c'est la question à laquelle un rapport
+           d'activité doit répondre. Les sous-totaux approuvé/rejeté sont
+           volontairement indentés sous "Decisions Made" : le lecteur voit
+           immédiatement qu'ils s'additionnent pour former ce total, ce qui
+           supprime toute impression de chiffres incohérents. -->
       <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 24px; border-radius: 8px; margin: 24px 0;">
-        <h3 style="margin-top: 0; color: #111827; font-size: 16px;">Last 7 Days Metrics:</h3>
+        <h3 style="margin-top: 0; color: #111827; font-size: 16px;">Work completed this week</h3>
         <table style="width: 100%; border-collapse: collapse; margin-top: 12px;">
           <tr>
-            <td style="padding: 8px 0; color: #4b5563; font-size: 14px; border-bottom: 1px solid #e2e8f0;">Total Verifications Processed:</td>
-            <td style="padding: 8px 0; color: #111827; font-weight: bold; text-align: right; border-bottom: 1px solid #e2e8f0;">${stats.total}</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Decisions Made:</td>
+            <td style="padding: 8px 0; color: #111827; font-weight: bold; text-align: right; border-bottom: 1px solid #e2e8f0;">${processed}</td>
           </tr>
           <tr>
-            <td style="padding: 8px 0; color: #4b5563; font-size: 14px; border-bottom: 1px solid #e2e8f0;">Successfully Approved:</td>
+            <td style="padding: 8px 0 8px 16px; color: #4b5563; font-size: 14px; border-bottom: 1px solid #e2e8f0;">→ Approved:</td>
             <td style="padding: 8px 0; color: #166534; font-weight: bold; text-align: right; border-bottom: 1px solid #e2e8f0;">${stats.approved}</td>
           </tr>
           <tr>
-            <td style="padding: 8px 0; color: #4b5563; font-size: 14px; border-bottom: 1px solid #e2e8f0;">Rejected Applications:</td>
-            <td style="padding: 8px 0; color: #991b1b; font-weight: bold; text-align: right; border-bottom: 1px solid #e2e8f0;">${stats.rejected}</td>
+            <td style="padding: 8px 0 8px 16px; color: #4b5563; font-size: 14px;">→ Rejected:</td>
+            <td style="padding: 8px 0; color: #991b1b; font-weight: bold; text-align: right;">${stats.rejected}</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- 🆕 SECTION 2 — CE QUI EST ARRIVÉ ET CE QUI RESTE À FAIRE.
+           "Awaiting Review" est la métrique la plus actionnable du rapport, et
+           elle était totalement absente. Sa mention "(all time)" est
+           importante : contrairement aux autres, elle n'est pas limitée à 7
+           jours — un dossier en attente depuis trois semaines est justement le
+           plus préoccupant, le masquer irait à l'encontre du but. -->
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 24px; border-radius: 8px; margin: 24px 0;">
+        <h3 style="margin-top: 0; color: #111827; font-size: 16px;">Incoming &amp; backlog</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 12px;">
+          <tr>
+            <td style="padding: 8px 0; color: #4b5563; font-size: 14px; border-bottom: 1px solid #e2e8f0;">New Applications Received:</td>
+            <td style="padding: 8px 0; color: #111827; font-weight: bold; text-align: right; border-bottom: 1px solid #e2e8f0;">${stats.submitted}</td>
           </tr>
           <tr>
-            <td style="padding: 8px 0; color: #4b5563; font-size: 14px;">High Risk Alerts Flagged:</td>
+            <td style="padding: 8px 0; color: #4b5563; font-size: 14px; border-bottom: 1px solid #e2e8f0;">Awaiting Review <span style="color: #9ca3af; font-size: 12px;">(all time)</span>:</td>
+            <td style="padding: 8px 0; color: ${stats.pending > 0 ? "#b45309" : "#111827"}; font-weight: bold; text-align: right; border-bottom: 1px solid #e2e8f0;">${stats.pending}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #4b5563; font-size: 14px;">High Risk Flagged <span style="color: #9ca3af; font-size: 12px;">(new)</span>:</td>
             <td style="padding: 8px 0; color: #b45309; font-weight: bold; text-align: right;">${stats.highRisk}</td>
           </tr>
         </table>
@@ -505,14 +551,22 @@ export const sendWeeklyReportEmail = async (
     </div>
   `;
 
+  // 🆕 La version texte suit exactement la même structure en deux sections. Un
+  // email dont les versions HTML et texte racontent des choses différentes est
+  // plus suspect aux yeux des filtres anti-spam qu'un email sans version texte.
   const textContent = `Hello ${name},
 
 Here is the summary of your workspace's KYC activity over the last 7 days.
 
-Total verifications processed: ${stats.total}
-Successfully approved: ${stats.approved}
-Rejected applications: ${stats.rejected}
-High risk alerts flagged: ${stats.highRisk}
+WORK COMPLETED THIS WEEK
+Decisions made: ${processed}
+  - Approved: ${stats.approved}
+  - Rejected: ${stats.rejected}
+
+INCOMING & BACKLOG
+New applications received: ${stats.submitted}
+Awaiting review (all time): ${stats.pending}
+High risk flagged (new): ${stats.highRisk}
 
 This report was generated based on your account settings preferences.
 
@@ -529,7 +583,6 @@ TrustVerify`;
     },
   });
 };
-
 // ============================================================================
 // 🆕 [PHASE B] 🔓 EMAIL DE RÉINITIALISATION DE MOT DE PASSE
 // ============================================================================
