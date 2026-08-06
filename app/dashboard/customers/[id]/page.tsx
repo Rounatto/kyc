@@ -4,7 +4,7 @@
 // 🔍 ÉCRAN DE DÉTAIL D'UN DOSSIER KYC — "VERIFICATION STUDIO" DE L'AGENT
 // ============================================================================
 // Vue complète d'un dossier (documents, métadonnées, score IA, audit trail)
-// + les 2 actions qui appellent PATCH /api/customers/[id] (Lot 4) : approuver
+// + les 2 actions qui appellent PATCH /api/customers/[id] : approuver
 // (`handleDecision("verified")`) ou rejeter avec un motif (modale dédiée,
 // motifs prédéfinis + option "Custom Reason"). `params` est une Promise (pas
 // un objet direct) car ce projet utilise le nouveau modèle asynchrone des
@@ -16,12 +16,15 @@
 // délivrés uniquement après vérification que l'agent appartient bien à
 // l'entreprise propriétaire du dossier. Voir la note sur l'expiration plus bas.
 //
+// 🆕 [CONFORMITÉ] Le motif de rejet est désormais DÉDOUBLÉ : un texte interne
+// pour la piste d'audit, un texte séparé pour l'email au client. Voir le bloc
+// PREDEFINED_REASONS ci-dessous — c'est une obligation légale, pas un confort.
+//
 // ⚠️ Le "Verification Studio" (modale plein écran de comparaison zoomable)
 // étiquette la photo du selfie "Live Selfie" — mais comme documenté dans
-// new-verification/page.tsx (Lot 7), ce n'est PAS une capture live, c'est un
-// fichier uploadé comme un autre. Ce libellé renforce une fausse impression
-// de preuve de vie pour l'agent qui prend la décision d'approuver/rejeter.
-// (Correction prévue en Phase C, avec l'ajout du liveness.)
+// new-verification/page.tsx, ce n'est PAS une capture live, c'est un fichier
+// uploadé comme un autre. Ce libellé renforce une fausse impression de preuve
+// de vie pour l'agent qui prend la décision. (Correction prévue en Phase C.)
 import { useState, useEffect, use } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -31,16 +34,162 @@ import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
 
-// Motifs de rejet standardisés, réutilisables — évite que chaque agent
-// invente sa propre formulation (cohérence des emails envoyés au client,
-// voir sendKYCEmail dans lib/mail.ts).
-const PREDEFINED_REASONS = [
-    "The provided ID document is blurry, pixelated or unreadable.",
-    "The edges of the document are cropped or cut off.",
-    "The face on the identification document does not match the biometric selfie.",
-    "The identification document has expired.",
-    "The name on the document does not match the registered profile name."
+// ============================================================================
+// 🆕 [CONFORMITÉ] MOTIFS DE REJET — DEUX TEXTES PAR MOTIF
+// ============================================================================
+// Chaque motif porte désormais DEUX formulations distinctes :
+//   • `label`           → ce que voit l'agent, et ce qui part dans l'audit trail
+//   • `customerMessage` → ce que reçoit réellement le client par email
+//
+// ⚠️ POURQUOI CETTE SÉPARATION EST OBLIGATOIRE, PAS COSMÉTIQUE :
+// pour un rejet lié à des sanctions financières ou à une suspicion de
+// blanchiment, la plupart des juridictions INTERDISENT de révéler la raison à
+// la personne concernée. C'est le "tipping off" — l'avertir qu'elle fait
+// l'objet d'un signalement — et c'est un DÉLIT PÉNAL, en Tunisie comme dans
+// l'UE. Jusqu'ici, le motif sélectionné partait tel quel dans l'email : un
+// agent choisissant "correspondance sur liste de sanctions" mettait l'entreprise
+// cliente en infraction sans le savoir.
+//
+// 💡 Pour la majorité des motifs (document flou, expiré, nom incorrect), les
+// deux textes disent la même chose. Aucune raison de cacher quoi que ce soit —
+// au contraire, l'information aide le client à corriger et à resoumettre.
+//
+// 💡 `category` sert uniquement à regrouper visuellement les motifs dans la
+// modale. Avec douze entrées, une liste plate serait illisible.
+type RejectionReason = {
+    id: string;
+    category: "Document Quality" | "Data Mismatch" | "Fraud Indicators" | "Compliance";
+    label: string;
+    customerMessage: string;
+    // `true` = la vraie raison ne doit JAMAIS atteindre le client.
+    isConfidential?: boolean;
+};
+
+const PREDEFINED_REASONS: RejectionReason[] = [
+    // ── QUALITÉ DU DOCUMENT ──
+    // Ces motifs sont entièrement transparents : plus le client comprend ce qui
+    // n'allait pas, plus sa seconde tentative a de chances d'aboutir.
+    {
+        id: "doc-unreadable",
+        category: "Document Quality",
+        label: "The provided ID document is blurry, pixelated or unreadable.",
+        customerMessage: "The provided ID document is blurry, pixelated or unreadable.",
+    },
+    {
+        id: "doc-cropped",
+        category: "Document Quality",
+        label: "The edges of the document are cropped or cut off.",
+        customerMessage: "The edges of the document are cropped or cut off.",
+    },
+    {
+        id: "doc-expired",
+        category: "Document Quality",
+        label: "The identification document has expired.",
+        customerMessage: "The identification document has expired.",
+    },
+    {
+        id: "selfie-unusable",
+        category: "Document Quality",
+        // 🆕 Motif absent jusqu'ici alors que le cas est fréquent : le moteur
+        // biométrique renvoie `null` quand aucun visage exploitable n'est
+        // détecté (photo trop sombre, de profil, visage partiellement masqué).
+        // L'agent n'avait aucun motif correspondant à cocher.
+        label: "No usable face could be detected in the selfie.",
+        customerMessage: "We could not detect a clear face in your selfie. Please retake it in good lighting, facing the camera directly.",
+    },
+
+    // ── INCOHÉRENCE DES DONNÉES ──
+    // 🆕 Le moteur OCR compare déjà le nom ET le numéro de document saisis au
+    // texte réellement extrait de l'image. Seul le nom avait un motif ; les
+    // deux autres cas obligeaient l'agent à écrire un texte libre.
+    {
+        id: "name-mismatch",
+        category: "Data Mismatch",
+        label: "The name on the document does not match the registered profile name.",
+        customerMessage: "The name on the document does not match the name provided in your application.",
+    },
+    {
+        id: "number-mismatch",
+        category: "Data Mismatch",
+        label: "The document number does not match the ID number provided.",
+        customerMessage: "The document number does not match the ID number provided in your application.",
+    },
+    {
+        id: "dob-mismatch",
+        category: "Data Mismatch",
+        label: "The date of birth does not match the document.",
+        customerMessage: "The date of birth provided does not match your identification document.",
+    },
+    {
+        id: "face-mismatch",
+        category: "Data Mismatch",
+        label: "The face on the identification document does not match the biometric selfie.",
+        customerMessage: "The face on your identification document does not sufficiently match the selfie provided.",
+    },
+
+    // ── INDICES DE FRAUDE ──
+    // 🆕 Catégorie entièrement absente, alors que ce sont les deux cas de
+    // fraude documentaire les plus courants.
+    //
+    // ⚠️ Message client volontairement ADOUCI : accuser explicitement quelqu'un
+    // de falsification par email est juridiquement risqué (diffamation) et
+    // inutile. On énonce le fait constaté — le document ne peut pas être
+    // authentifié — sans qualifier l'intention. La formulation précise reste
+    // dans l'audit trail.
+    {
+        id: "doc-tampered",
+        category: "Fraud Indicators",
+        label: "The document shows signs of alteration or tampering.",
+        customerMessage: "We were unable to authenticate the document provided. Please submit an original, unaltered document.",
+    },
+    {
+        id: "doc-not-original",
+        category: "Fraud Indicators",
+        label: "The submitted file appears to be a photocopy or a screenshot, not an original.",
+        customerMessage: "The file submitted appears to be a photocopy or a screen capture. Please provide a photograph of the original physical document.",
+    },
+
+    // ── CONFORMITÉ — LA VRAIE RAISON NE SORT JAMAIS ──
+    // 🆕 Catégorie critique et totalement absente jusqu'ici, alors que le moteur
+    // de règles DÉTECTE DÉJÀ ces trois cas : correspondance sur listes de
+    // sanctions, statut de personne politiquement exposée, et minorité (règle
+    // hard_kill). L'agent devait donc rédiger un texte libre sur les dossiers
+    // les plus sensibles juridiquement de tout le produit.
+    //
+    // 🔒 `isConfidential: true` : ces motifs déclenchent un message client
+    // strictement générique, IDENTIQUE pour les deux. C'est délibéré — si les
+    // messages différaient, on pourrait déduire la raison par recoupement, ce
+    // qui reviendrait au même problème.
+    {
+        id: "aml-sanctions",
+        category: "Compliance",
+        label: "Sanctions or watchlist match confirmed after review.",
+        customerMessage: "We are unable to complete your verification at this time. Please contact our support team for assistance.",
+        isConfidential: true,
+    },
+    {
+        id: "pep-review",
+        category: "Compliance",
+        label: "Politically Exposed Person — enhanced due diligence not satisfied.",
+        customerMessage: "We are unable to complete your verification at this time. Please contact our support team for assistance.",
+        isConfidential: true,
+    },
+    {
+        id: "underage",
+        category: "Compliance",
+        // 💡 Seule exception de cette catégorie : la minorité n'a rien de
+        // confidentiel, elle relève d'une condition d'éligibilité publique.
+        // Le client a le droit — et l'intérêt — de la connaître.
+        label: "Applicant is below the minimum age requirement.",
+        customerMessage: "You do not currently meet the minimum age requirement to use this service.",
+    },
 ];
+
+// Regroupement par catégorie, calculé une seule fois au chargement du module
+// plutôt qu'à chaque rendu de la modale.
+const REASON_CATEGORIES = Array.from(
+    new Set(PREDEFINED_REASONS.map((r) => r.category))
+);
 
 // 🆕 [PHASE B] Nombre maximal de renouvellements automatiques des liens.
 // Garde-fou anti-boucle infinie : si les liens fraîchement obtenus échouent
@@ -71,7 +220,10 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
 
     // États pour la Modal de Rejet
     const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
-    const [selectedReason, setSelectedReason] = useState(PREDEFINED_REASONS[0]);
+    // 🆕 On stocke désormais l'OBJET motif entier, plus une simple chaîne.
+    // C'est ce qui permet d'accéder à la fois au `label` (pour l'audit) et au
+    // `customerMessage` (pour l'email) au moment de l'envoi.
+    const [selectedReason, setSelectedReason] = useState<RejectionReason>(PREDEFINED_REASONS[0]);
     const [customReason, setCustomReason] = useState("");
     const [isCustom, setIsCustom] = useState(false);
 
@@ -145,7 +297,14 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
         }
     };
 
-    const handleDecision = async (newStatus: "verified" | "rejected", reasonText?: string) => {
+    // 🆕 [CONFORMITÉ] Deux textes distincts au lieu d'un seul :
+    //   `internalReason`  → piste d'audit, visible des agents uniquement
+    //   `customerMessage` → contenu réel de l'email envoyé au client
+    const handleDecision = async (
+        newStatus: "verified" | "rejected",
+        internalReason?: string,
+        customerMessage?: string
+    ) => {
         setActionLoading(newStatus);
         
         if (newStatus === "rejected") {
@@ -165,7 +324,16 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                         // au body pour dire QUI agit. L'envoyer quand même laissait
                         // croire l'inverse à quiconque lit ce code : que le client
                         // peut désigner l'auteur d'une décision de conformité.
-                        rejectionReason: reasonText
+                        //
+                        // 🆕 [CONFORMITÉ] `rejectionReason` conserve son nom : c'est
+                        // le motif INTERNE, celui qui alimente la piste d'audit. Le
+                        // renommer aurait cassé la compatibilité avec la route sans
+                        // aucun bénéfice.
+                        rejectionReason: internalReason,
+                        // 🆕 [CONFORMITÉ] Nouveau champ : le seul texte que le client
+                        // verra. La route l'utilisera pour l'email, et n'enverra
+                        // JAMAIS `rejectionReason` à l'extérieur.
+                        customerMessage: customerMessage
                     }),
                 });
                 
@@ -348,6 +516,10 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                         </div>
 
                         {/* AUDIT LOGS */}
+                        {/* 🆕 [CONFORMITÉ] C'est ICI que le motif de rejet PRÉCIS apparaît.
+                            L'agent y lit "Sanctions or watchlist match confirmed" tandis
+                            que le client n'aura reçu qu'un message générique. Cette
+                            asymétrie est exactement le but recherché. */}
                         <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col gap-6">
                             <h3 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-gray-800 border-b border-gray-100 pb-3">
                                 <History className="w-4 h-4 text-blue-600" /> System Audit Trail
@@ -445,21 +617,58 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                             <AlertCircle className="w-6 h-6" />
                             <h3 className="text-lg font-bold text-gray-900">Specify Rejection Reason</h3>
                         </div>
-                        <p className="text-sm text-gray-500">Select the non-compliance marker. This precise text will be sent to the client via an automated email notification.</p>
+                        {/* 🆕 [CONFORMITÉ] Texte corrigé. L'ancien affirmait "This precise
+                            text will be sent to the client" — désormais faux, et
+                            dangereusement faux : un agent s'y fiant croirait avoir
+                            informé le client d'un problème de conformité alors que
+                            celui-ci n'aura reçu qu'un message générique. */}
+                        <p className="text-sm text-gray-500">Select the non-compliance marker. The reason you pick is recorded in the audit trail; the message sent to the applicant may be worded differently for legal reasons.</p>
                         
-                        <div className="flex flex-col gap-3 my-2">
-                            {PREDEFINED_REASONS.map((reason, idx) => (
-                                <label key={idx} className="flex items-start gap-3 p-3 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors">
-                                    <input 
-                                        type="radio" 
-                                        name="rejection_reason" 
-                                        checked={!isCustom && selectedReason === reason} 
-                                        onChange={() => { setIsCustom(false); setSelectedReason(reason); }} 
-                                        className="mt-1 accent-blue-600" 
-                                    />
-                                    <span className="text-sm text-gray-700 font-medium">{reason}</span>
-                                </label>
+                        {/* 🆕 [CONFORMITÉ] MOTIFS GROUPÉS PAR CATÉGORIE.
+                            Douze motifs en liste plate seraient illisibles ; les
+                            regrouper permet à l'agent de trouver le bon en balayant
+                            les intitulés de section.
+                            💡 `max-h` + `overflow-y-auto` : la liste dépasse désormais
+                            la hauteur d'écran, il faut pouvoir la faire défiler sans
+                            perdre de vue les boutons de validation en bas. */}
+                        <div className="flex flex-col gap-4 my-2 max-h-[45vh] overflow-y-auto pr-1">
+                            {REASON_CATEGORIES.map((category) => (
+                                <div key={category} className="flex flex-col gap-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 pl-1">
+                                        {category}
+                                    </p>
+                                    {PREDEFINED_REASONS.filter((r) => r.category === category).map((reason) => (
+                                        <label
+                                            key={reason.id}
+                                            className="flex items-start gap-3 p-3 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors"
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="rejection_reason"
+                                                // 💡 Comparaison par `id` et non par référence d'objet :
+                                                // plus lisible, et robuste si la liste venait un jour
+                                                // d'une API plutôt que d'une constante.
+                                                checked={!isCustom && selectedReason.id === reason.id}
+                                                onChange={() => { setIsCustom(false); setSelectedReason(reason); }}
+                                                className="mt-1 accent-blue-600"
+                                            />
+                                            <span className="text-sm text-gray-700 font-medium flex-1">
+                                                {reason.label}
+                                                {/* 🆕 Badge signalant que le client ne verra PAS ce texte.
+                                                    L'agent doit le savoir — sinon il croirait avoir
+                                                    informé le client d'un problème de conformité et
+                                                    n'assurerait aucun suivi. */}
+                                                {reason.isConfidential && (
+                                                    <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-700 text-[10px] font-bold rounded border border-amber-200 align-middle">
+                                                        INTERNAL ONLY
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
                             ))}
+
                             <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors">
                                 <input 
                                     type="radio" 
@@ -472,13 +681,45 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                             </label>
                         </div>
 
+                        {/* 🆕 [CONFORMITÉ] APERÇU DE CE QUE LE CLIENT RECEVRA RÉELLEMENT.
+                            Affiché uniquement pour les motifs confidentiels, là où les
+                            deux textes divergent. Sans cet aperçu, l'agent n'aurait
+                            aucun moyen de savoir ce qui part vraiment — et découvrirait
+                            l'écart en lisant une réclamation. */}
+                        {!isCustom && selectedReason.isConfidential && (
+                            <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                                <div className="flex flex-col gap-1">
+                                    <p className="text-xs font-bold text-amber-800">
+                                        The applicant will receive a generic message
+                                    </p>
+                                    <p className="text-xs text-amber-700 leading-relaxed italic">
+                                        "{selectedReason.customerMessage}"
+                                    </p>
+                                    <p className="text-[10px] text-amber-600 mt-1">
+                                        Disclosing a compliance-related rejection reason to the applicant may constitute unlawful tipping off. The full reason is recorded in the audit trail.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
                         {isCustom && (
-                            <textarea 
-                                value={customReason} 
-                                onChange={(e) => setCustomReason(e.target.value)} 
-                                placeholder="Type the specific regulatory compliance failure reason..." 
-                                className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-600 h-24 text-gray-800 transition-all resize-none shadow-inner" 
-                            />
+                            <>
+                                <textarea 
+                                    value={customReason} 
+                                    onChange={(e) => setCustomReason(e.target.value)} 
+                                    placeholder="Type the specific regulatory compliance failure reason..." 
+                                    className="w-full border border-gray-300 rounded-lg p-3 text-sm outline-none focus:border-blue-600 h-24 text-gray-800 transition-all resize-none shadow-inner" 
+                                />
+                                {/* 🆕 [CONFORMITÉ] Avertissement sur le mode libre.
+                                    En mode personnalisé, le MÊME texte part dans l'audit
+                                    ET dans l'email — impossible de deviner ce que l'agent
+                                    voulait garder confidentiel. Il doit donc savoir que ce
+                                    qu'il écrit sera lu par le client. */}
+                                <p className="text-[10px] text-gray-500 leading-relaxed -mt-2">
+                                    ⚠️ A custom reason is sent to the applicant exactly as written. Never mention sanctions, watchlists or suspected money laundering here.
+                                </p>
+                            </>
                         )}
 
                         <div className="flex gap-3 justify-end border-t border-gray-100 pt-4 mt-2">
@@ -489,7 +730,15 @@ export default function CustomerReviewPage({ params }: { params: Promise<{ id: s
                                 Cancel
                             </button>
                             <button 
-                                onClick={() => handleDecision("rejected", isCustom ? customReason : selectedReason)} 
+                                onClick={() => handleDecision(
+                                    "rejected",
+                                    // Motif interne : le texte libre, ou le label du motif choisi.
+                                    isCustom ? customReason : selectedReason.label,
+                                    // 🆕 Message client. En mode personnalisé, c'est le même
+                                    // texte — l'agent est alors seul responsable de ce qu'il
+                                    // écrit, et l'avertissement ci-dessus le lui rappelle.
+                                    isCustom ? customReason : selectedReason.customerMessage
+                                )} 
                                 disabled={isCustom && !customReason.trim()} 
                                 className="px-5 py-2 text-sm font-bold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
                             >

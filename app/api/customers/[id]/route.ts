@@ -13,6 +13,10 @@
 // par une URL publique : cette route fabrique, à chaque appel, des liens
 // signés à durée de vie très courte — et seulement après avoir vérifié que le
 // demandeur appartient bien à l'entreprise propriétaire du dossier.
+//
+// 🆕 [CONFORMITÉ] PATCH reçoit désormais DEUX textes pour un rejet : le motif
+// interne (piste d'audit) et le message client (email). Voir le bloc dédié
+// plus bas — c'est une obligation légale, pas un raffinement.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendKYCEmail, sendAgentNotificationEmail } from "@/lib/mail";
@@ -28,6 +32,24 @@ import { createSignedDocumentUrls } from "@/lib/storage";
 // mégarde — dans un historique de navigateur, un log de proxy, une capture
 // d'écran — soit déjà périmé quand quelqu'un tombe dessus.
 const DOCUMENT_URL_TTL_SECONDS = 5 * 60;
+
+// ============================================================================
+// 🆕 [CONFORMITÉ] MESSAGE DE REPLI ENVOYÉ AU CLIENT
+// ============================================================================
+// Utilisé quand aucun `customerMessage` n'accompagne la requête.
+//
+// ⚠️ CE REPLI EST VOLONTAIREMENT GÉNÉRIQUE, ET C'EST LE POINT LE PLUS IMPORTANT
+// DE CE FICHIER. La tentation serait d'écrire `customerMessage ?? rejectionReason` —
+// après tout, autant envoyer quelque chose d'utile plutôt qu'un texte vague.
+// Ce serait ROUVRIR LA FAILLE : il suffirait qu'un navigateur serve une version
+// en cache de la page de détail, ou qu'un appel API direct omette le champ,
+// pour que le motif interne reparte au client. Un garde-fou qui cède au premier
+// cas limite ne protège rien.
+//
+// Un message générique est moins informatif, mais il n'expose jamais rien.
+// Face à un risque pénal, c'est le bon compromis.
+const GENERIC_CUSTOMER_MESSAGE =
+    "We are unable to complete your verification at this time. Please contact our support team for assistance.";
 
 export async function GET(
     req: Request, 
@@ -196,7 +218,20 @@ export async function PATCH(
         }
 
         // --- DÉCISION FINALE DE L'AGENT (le vrai changement de statut KYC) ---
-        const { status, rejectionReason } = body;
+        //
+        // 🆕 [CONFORMITÉ] Deux textes distincts au lieu d'un seul :
+        //   `rejectionReason`  → motif INTERNE, alimente la piste d'audit
+        //   `customerMessage`  → le seul texte que le client verra par email
+        //
+        // ⚠️ POURQUOI CETTE SÉPARATION EST OBLIGATOIRE : pour un rejet lié à des
+        // sanctions financières ou à une suspicion de blanchiment, la plupart
+        // des juridictions INTERDISENT de révéler la raison à la personne
+        // concernée — c'est le "tipping off", un délit pénal en Tunisie comme
+        // dans l'UE. Jusqu'ici, le motif sélectionné par l'agent partait tel
+        // quel dans l'email : choisir "correspondance sur liste de sanctions"
+        // mettait l'entreprise cliente en infraction sans que personne ne le
+        // remarque.
+        const { status, rejectionReason, customerMessage } = body;
 
         if (!status || !["verified", "rejected", "pending"].includes(status)) {
             return NextResponse.json({ message: "Invalid status value." }, { status: 400 });
@@ -210,6 +245,10 @@ export async function PATCH(
             logDetails = `KYC Profile manually approved by ${serverAgentName}.`;
         } else if (status === "rejected") {
             actionName = "REJECTED";
+            // 💡 C'est bien `rejectionReason` — le motif PRÉCIS — qui est
+            // consigné ici. La piste d'audit doit dire exactement pourquoi la
+            // décision a été prise ; c'est sa raison d'être, et elle n'est
+            // consultable que par les agents de l'entreprise.
             logDetails = `KYC Profile rejected by ${serverAgentName}.${rejectionReason ? ` Reason: ${rejectionReason}` : ""}`;
         }
         
@@ -234,6 +273,9 @@ export async function PATCH(
         });
 
         // 💡 NOTIFICATIONS TEMPS RÉEL SUR LE DASHBOARD
+        // 💡 Notifications INTERNES : elles restent volontairement sobres et ne
+        // reprennent pas le motif. La cloche du dashboard sert à alerter qu'une
+        // décision a été prise ; le détail se lit dans l'audit trail du dossier.
         if (status === "verified") {
             await prisma.notification.create({
                 data: {
@@ -277,9 +319,9 @@ export async function PATCH(
         }
 
         // 💡 EMAIL EXTERNE (Pour le Client final)
-        // ✅ `customerName`/`rejectionReason` sont désormais échappés dans le
-        // template (voir escapeHtml dans lib/mail.ts) — plus de risque
-        // d'injection HTML dans l'email envoyé depuis notre domaine.
+        // ✅ `customerName` et le message sont échappés dans le template (voir
+        // escapeHtml dans lib/mail.ts) — plus de risque d'injection HTML dans
+        // l'email envoyé depuis notre domaine.
         //
         // 🆕 CORRECTION D'UN PIÈGE JS : `sendKYCEmail(...)` n'était pas "await"é,
         // donc le try/catch qui l'entourait ne captait RIEN — le bloc était déjà
@@ -290,11 +332,23 @@ export async function PATCH(
         // `.catch()` attaché — le même motif que pour les emails d'agents
         // ci-dessus, qui lui était déjà correct.
         if (status === "verified" || status === "rejected") {
+            // 🆕 [CONFORMITÉ] C'EST LA LIGNE QUI FERME LA FAILLE : on envoie
+            // `customerMessage`, jamais `rejectionReason`. Le motif interne
+            // reste confiné à la piste d'audit (voir logDetails plus haut),
+            // consultable uniquement par les agents de l'entreprise.
+            //
+            // ⚠️ Le repli est GÉNÉRIQUE, pas `?? rejectionReason` — voir la
+            // note sur GENERIC_CUSTOMER_MESSAGE en haut de ce fichier.
+            const safeCustomerMessage = customerMessage || GENERIC_CUSTOMER_MESSAGE;
+
             sendKYCEmail(
                 updatedCustomer.email, 
                 status, 
                 updatedCustomer.customerName, 
-                rejectionReason
+                // 💡 Pour une approbation, ce paramètre est ignoré par le
+                // template (voir lib/mail.ts) : on le passe quand même, la
+                // fonction gère les deux statuts avec la même signature.
+                safeCustomerMessage
             ).catch((emailError) => {
                 console.error("Async Email Dispatch Failure:", emailError);
             });
