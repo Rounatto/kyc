@@ -6,7 +6,10 @@
     "dev": "node scripts/dev-safe.js",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
