@@ -1,0 +1,151 @@
+# ============================================================================
+# 🆕 [PHASE E] INTÉGRATION CONTINUE — TESTS AUTOMATISÉS
+# ============================================================================
+# Ce workflow s'exécute sur les serveurs de GitHub à chaque push. Il crée une
+# machine vierge, y clone le projet, l'installe, le compile et lance les 14
+# tests Playwright, puis se détruit.
+#
+# Pourquoi c'est indispensable : jusqu'ici, les tests ne tournaient que si on
+# pensait à taper `npm test`. En pleine refonte, personne n'y pense. Une
+# régression pouvait donc être poussée et déployée sans que rien ne l'arrête.
+#
+# 💡 Le résultat s'affiche directement sur le commit dans GitHub : ✅ ou ❌.
+
+name: Tests
+
+# Déclencheurs.
+# 💡 `pull_request` est inclus même si tu travailles seul aujourd'hui : le jour
+# où quelqu'un contribue, ses modifications seront vérifiées AVANT d'entrer
+# dans master — c'est là que la CI prend toute sa valeur.
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    # Machine virtuelle fournie par GitHub, détruite après le job.
+    runs-on: ubuntu-latest
+
+    # ⚠️ Garde-fou : sans limite, un serveur bloqué (attente d'une base
+    # injoignable, par exemple) tournerait jusqu'à épuiser le quota gratuit.
+    timeout-minutes: 15
+
+    # ========================================================================
+    # VARIABLES D'ENVIRONNEMENT
+    # ========================================================================
+    # Elles proviennent des "GitHub Secrets" — des valeurs chiffrées, stockées
+    # dans les réglages du dépôt, jamais visibles dans le code ni dans les logs.
+    # GitHub les masque automatiquement s'il les détecte dans une sortie.
+    #
+    # 💡 Déclarées au niveau du JOB (et non d'une étape) car elles sont
+    # nécessaires à la fois au BUILD et à l'EXÉCUTION des tests.
+    env:
+      # --- Base de données ---
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      # --- Redis (rate limiting) ---
+      # ⚠️ OBLIGATOIREMENT RÉELS. lib/ratelimit.ts établit sa connexion à
+      # l'import du module : des valeurs factices feraient échouer le build
+      # entier, avec un message très éloigné de la vraie cause.
+      UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+      UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+
+      # --- Supabase ---
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      # --- Authentification ---
+      # 💡 Valeurs de test volontairement en dur : les tests ne vérifient aucune
+      # session valide, seulement des refus. Un secret factice suffit, et ça
+      # évite d'exposer le vrai à la CI.
+      NEXTAUTH_SECRET: "ci-test-secret-not-used-for-real-sessions"
+      NEXTAUTH_URL: "http://localhost:3000"
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+
+      # --- WebAuthn ---
+      # Pointent vers localhost puisque les tests s'exécutent en local sur la
+      # machine CI. Aucune vraie cérémonie WebAuthn n'a lieu.
+      WEBAUTHN_RPID: "localhost"
+      WEBAUTHN_ORIGIN: "http://localhost:3000"
+
+      # --- Chiffrement ---
+      # 64 caractères hexadécimaux, comme l'exige lib/crypto.ts. Valeur factice :
+      # aucun test ne chiffre ni ne déchiffre quoi que ce soit.
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+
+      # --- Cron ---
+      # 💡 Cette valeur factice est DÉLIBÉRÉE et même utile : le test vérifie
+      # qu'un appel SANS le bon secret est refusé. Peu importe la valeur, du
+      # moment qu'elle existe et que le test ne la connaît pas.
+      CRON_SECRET: "ci-test-cron-secret"
+
+      # --- Services externes jamais appelés par les tests ---
+      # Valeurs factices assumées : ces clés doivent EXISTER pour que les
+      # modules s'initialisent au build, mais aucun test ne déclenche un
+      # paiement, un email ou une requête d'IA.
+      STRIPE_SECRET_KEY: "sk_test_ci_placeholder"
+      STRIPE_WEBHOOK_SECRET: "whsec_ci_placeholder"
+      GEMINI_API_KEY: "ci-placeholder"
+      OPENSANCTIONS_API_KEY: "ci-placeholder"
+      EMAIL_USER: "ci@example.com"
+      EMAIL_APP_PASSWORD: "ci-placeholder"
+
+      # Indique à Playwright qu'il tourne en CI : il utilisera alors `npm start`
+      # au lieu de `npm run dev`, activera une nouvelle tentative en cas d'échec,
+      # et interdira les `test.only` oubliés.
+      CI: true
+
+    steps:
+      # 1. Récupérer le code du dépôt sur la machine.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Installer Node.js.
+      # 💡 `cache: npm` conserve les dépendances entre exécutions : le premier
+      # passage prend ~2 minutes, les suivants une trentaine de secondes.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 3. Installer les dépendances.
+      # ⚠️ `npm ci` et non `npm install` : il installe EXACTEMENT les versions
+      # figées dans package-lock.json, sans jamais le modifier. C'est ce qui
+      # garantit que la CI teste les mêmes versions que ta machine — et c'est
+      # aussi pourquoi ce fichier doit toujours être commité.
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Télécharger le navigateur piloté par Playwright.
+      # `--with-deps` installe aussi les bibliothèques système Linux dont
+      # Chromium a besoin, absentes d'une machine vierge.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # 5. Compiler l'application.
+      # 💡 Cette étape a une double valeur : elle produit ce que `npm start`
+      # servira, ET elle vérifie que le projet compile. Une erreur TypeScript
+      # fait échouer la CI ici, avant même le premier test — exactement ce
+      # qu'on veut.
+      - name: Build
+        run: npm run build
+
+      # 6. Lancer les tests.
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      # 7. Conserver le rapport en cas d'échec.
+      # 💡 `if: failure()` — inutile d'archiver un rapport quand tout est vert.
+      # En cas d'échec, tu pourras télécharger ce fichier depuis GitHub et voir
+      # exactement ce qui s'est passé, captures d'écran comprises.
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

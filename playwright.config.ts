@@ -69,7 +69,20 @@ export default defineConfig({
     // réelles, et t'obligerait à déployer avant de pouvoir vérifier quoi que
     // ce soit.
     webServer: {
-        command: "npm run dev",
+        // 🆕 [CI] Commande différente selon l'environnement.
+        //
+        // En local : `npm run dev` (démarrage rapide, rechargement à chaud).
+        //
+        // En CI : `npm start`, qui sert la version COMPILÉE. Deux raisons —
+        //   1. On teste alors exactement ce qui partirait en production, pas une
+        //      version de développement plus permissive.
+        //   2. `npm run dev` passe par scripts/dev-safe.js, un script maison dont
+        //      le comportement sur un serveur vierge est incertain. En CI, on
+        //      veut le chemin le plus prévisible possible.
+        //
+        // ⚠️ Cela impose que le workflow lance `npm run build` AVANT les tests,
+        // sinon `npm start` ne trouverait rien à servir.
+        command: process.env.CI ? "npm start" : "npm run dev",
         url: "http://localhost:3000",
         reuseExistingServer: !process.env.CI,
         // Le démarrage d'un serveur Next.js à froid peut être long.
