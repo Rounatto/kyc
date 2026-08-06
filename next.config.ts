@@ -79,19 +79,22 @@ const securityHeaders = [
         // devient largement inoffensive si le code injecté ne peut ni se charger
         // ni communiquer avec l'extérieur.
         //
-        // ⚠️ VOLONTAIREMENT EN MODE "REPORT-ONLY" : le navigateur SIGNALE les
-        // violations dans la console sans RIEN bloquer. C'est délibéré — un CSP
-        // trop strict casse une application silencieusement (une image qui ne
-        // charge plus, face-api.js qui refuse de démarrer), et le lien avec ce
-        // fichier n'est pas évident quand ça arrive.
+        // 🆕 [ACTIVÉ EN MODE STRICT] Cette politique était en "Report-Only" : le
+        // navigateur signalait les violations dans la console sans rien bloquer.
+        // Après plusieurs jours d'utilisation sans aucune violation constatée,
+        // elle est désormais APPLIQUÉE — ce qui n'est pas déclaré ici est
+        // réellement refusé par le navigateur.
         //
-        // 📋 POUR L'ACTIVER RÉELLEMENT, une fois testé :
-        //    1. Utilise l'app quelques jours (créer un dossier, consulter,
-        //       facturation, chat) en gardant la console ouverte
-        //    2. Note chaque message "Content Security Policy" qui apparaît
-        //    3. Ajoute les domaines manquants ci-dessous
-        //    4. Renomme la clé en "Content-Security-Policy" (sans -Report-Only)
-        key: "Content-Security-Policy-Report-Only",
+        // ⚠️ CONSÉQUENCE À COMPRENDRE : à partir de maintenant, ajouter un
+        // service tiers côté navigateur (une police Google Fonts, un script
+        // d'analytics, un widget de paiement embarqué) ÉCHOUERA SILENCIEUSEMENT
+        // tant que son domaine n'aura pas été ajouté à la directive
+        // correspondante ci-dessous. C'est le prix — assumé — d'une protection
+        // réelle plutôt que d'une simple observation.
+        //
+        // 🔙 POUR REVENIR EN ARRIÈRE en cas de problème : remets simplement
+        // "-Report-Only" à la fin de la clé ci-dessous, et redéploie.
+        key: "Content-Security-Policy",
         value: [
             // Tout ce qui n'est pas explicitement autorisé plus bas est refusé.
             "default-src 'self'",
@@ -100,6 +103,12 @@ const securityHeaders = [
             // mais sont ici incontournables : Next.js injecte des scripts inline
             // pour l'hydratation, et face-api.js (TensorFlow.js) compile ses
             // modèles à la volée, ce qui passe par eval.
+            //
+            // 💡 Ce n'est pas une faiblesse propre à ce projet : la quasi-totalité
+            // des applications Next.js vit avec ces deux exceptions. Les
+            // supprimer exigerait un système de "nonce" régénéré à chaque
+            // requête — possible, mais incompatible avec les pages
+            // statiquement pré-rendues.
             "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
 
             // Tailwind injecte ses styles en ligne.
@@ -116,6 +125,12 @@ const securityHeaders = [
             // pour l'envoi direct des documents (PUT vers l'URL signée).
             // 💡 OpenSanctions, Gemini et Upstash sont absents à dessein : ils
             // sont appelés depuis le SERVEUR, jamais depuis le navigateur.
+            //
+            // 💡 Stripe et Google OAuth n'y figurent pas non plus, et c'est
+            // normal : le paiement et la connexion Google passent par une
+            // REDIRECTION complète de la page, pas par une requête réseau
+            // depuis le navigateur. `connect-src` ne régit que fetch(),
+            // XMLHttpRequest et WebSocket — une navigation n'est pas concernée.
             "connect-src 'self' https://*.supabase.co",
 
             // TensorFlow.js peut créer des workers via blob:.
@@ -129,6 +144,9 @@ const securityHeaders = [
             "base-uri 'self'",
 
             // Un formulaire ne peut soumettre que vers notre propre domaine.
+            // 💡 Sans conséquence sur Stripe : le checkout est déclenché par
+            // `window.location.href`, une navigation et non une soumission de
+            // formulaire.
             "form-action 'self'",
 
             // Bloque <object>/<embed> — vecteurs hérités, jamais utilisés ici.
