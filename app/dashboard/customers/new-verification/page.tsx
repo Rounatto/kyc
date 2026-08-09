@@ -35,7 +35,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X, Lock, Zap } from "lucide-react";
+import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X, Lock, Zap, Languages } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
@@ -71,6 +71,14 @@ export default function NewVerificationPage() {
     const router = useRouter();
 
     const [customerName, setCustomerName] = useState("");
+    // 🆕 [ARABE] Nom tel qu'il figure SUR LA CARTE, en écriture arabe.
+    //
+    // ⚠️ CE QUE ÇA CORRIGE : les CIN tunisiennes portent le nom en arabe, alors
+    // que `customerName` ci-dessus est saisi en alphabet latin. Le serveur
+    // cherchait donc "rayen" dans un texte arabe — introuvable par nature.
+    // `ocrNameMismatch` se déclenchait sur 100% des dossiers tunisiens, coûtant
+    // 40 points de pénalité à des clients parfaitement légitimes.
+    const [customerNameAr, setCustomerNameAr] = useState("");
     const [email, setEmail] = useState("");
     const [type, setType] = useState("Individual KYC (Standard)");
     const [cin, setCin] = useState("");
@@ -269,7 +277,18 @@ export default function NewVerificationPage() {
         
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) errors.email = "Invalid email format.";
-
+        // 🆕 [ARABE] Si le champ est rempli, il DOIT contenir de l'arabe.
+        //
+        // ⚠️ CE QUE ÇA ÉVITE : un agent pressé pourrait y retaper le nom latin
+        // par réflexe. Le serveur détecterait alors l'absence de caractères
+        // arabes et retomberait sur la comparaison latine — reproduisant
+        // exactement le bug d'origine, mais de façon invisible : le champ
+        // paraîtrait rempli alors qu'il ne sert à rien.
+        //
+        // 💡 U+0600–U+06FF est le bloc Unicode principal de l'écriture arabe.
+        if (customerNameAr.trim() && !/[\u0600-\u06FF]/.test(customerNameAr)) {
+            errors.customerNameAr = "This field must contain Arabic text, exactly as printed on the ID card.";
+        }
         if (documentType === "CIN") {
             if (nationality === "TN") {
                 const tnCinRegex = /^[0-9]{8}$/;
@@ -428,6 +447,11 @@ export default function NewVerificationPage() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         customerName,
+                        // 🆕 [ARABE] Envoyé même vide : le serveur gère les deux cas
+                        // et retombe sur la comparaison latine quand le champ est
+                        // absent. Une chaîne vide est plus prévisible qu'un champ
+                        // manquant côté validation Zod.
+                        customerNameAr,
                         email,
                         type,
                         cin,
@@ -562,6 +586,55 @@ export default function NewVerificationPage() {
                                         </div>
                                         {fieldErrors.email && <p className="text-xs text-red-600 font-medium">{fieldErrors.email}</p>}
                                     </div>
+                                </div>
+                                {/* 🆕 [ARABE] CHAMP OPTIONNEL — NOM EN ÉCRITURE ARABE
+                                    ================================================
+                                    💡 POURQUOI UN CHAMP SÉPARÉ, ET NON UNE CONVERSION
+                                    AUTOMATIQUE : il n'existe pas de translittération
+                                    unique. "Mhalla" peut légitimement s'écrire محلة,
+                                    المحلة ou محلا selon l'état civil. Et certaines
+                                    mentions sont des conventions administratives, pas
+                                    des translittérations : "dit" devient شهرة sur les
+                                    CIN tunisiennes — aucun outil ne le devinerait.
+                                    L'agent recopie ce qu'il voit, il n'y a donc rien
+                                    à deviner ni à maintenir.
+
+                                    💡 LES DEUX CHAMPS SERVENT À DES CHOSES DIFFÉRENTES :
+                                      • Nom latin → screening OpenSanctions (les listes
+                                        ONU/UE/US indexent en alphabet latin), emails
+                                      • Nom arabe → comparaison avec l'OCR, uniquement */}
+                                <div className="flex flex-col gap-2">
+                                    <label className="text-sm font-semibold text-gray-700">
+                                        Name in Arabic <span className="text-gray-400 font-normal">(as printed on the ID)</span>
+                                    </label>
+                                    <div className="relative">
+                                        <Languages className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                        <input
+                                            type="text"
+                                            // 💡 `dir="rtl"` fait démarrer le texte à DROITE, comme
+                                            // toute écriture arabe. Sans cet attribut, la saisie
+                                            // s'affiche de façon déroutante et la ponctuation se
+                                            // place du mauvais côté.
+                                            dir="rtl"
+                                            placeholder="مثال: ريان محلة شهرة عون الله"
+                                            value={customerNameAr}
+                                            onChange={(e) => { setCustomerNameAr(e.target.value); setFieldErrors({...fieldErrors, customerNameAr: ""}); }}
+                                            disabled={loading}
+                                            className={`w-full border rounded-lg py-2.5 pl-10 pr-4 text-sm outline-none transition-colors text-gray-800 disabled:bg-gray-50 ${fieldErrors.customerNameAr ? 'border-red-500 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`}
+                                        />
+                                    </div>
+                                    {fieldErrors.customerNameAr ? (
+                                        <p className="text-xs text-red-600 font-medium">{fieldErrors.customerNameAr}</p>
+                                    ) : (
+                                        /* 💡 Message explicatif permanent : sans lui, un agent
+                                           laisserait le champ vide par défaut, et la
+                                           vérification OCR resterait inopérante sans que
+                                           personne ne comprenne pourquoi les scores sont
+                                           systématiquement pénalisés. */
+                                        <p className="text-xs text-gray-500 leading-relaxed">
+                                            Optional, but strongly recommended for Tunisian IDs. Leaving it empty makes the document text check unreliable, since the card is written in Arabic.
+                                        </p>
+                                    )}
                                 </div>
                                 
                                 <div className="flex flex-col sm:flex-row gap-5">

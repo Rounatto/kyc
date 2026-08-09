@@ -135,6 +135,40 @@ model User {
 model VerificationRequest {
   id           String   @id @default(cuid())
   customerName String
+
+  // 🆕 [ARABE] Nom tel qu'il figure SUR LA CARTE, en écriture arabe.
+  //
+  // ⚠️ LE PROBLÈME QUE ÇA RÉSOUT : les CIN tunisiennes portent le nom en
+  // arabe, alors que `customerName` ci-dessus est saisi en alphabet latin.
+  // La vérification OCR cherchait donc la chaîne "rayen" dans un texte arabe
+  // — elle ne pouvait JAMAIS la trouver. Résultat : `ocrNameMismatch` se
+  // déclenchait sur 100% des dossiers tunisiens, coûtant 40 points de
+  // pénalité à chaque client, tous parfaitement légitimes.
+  //
+  // 💡 POURQUOI DEUX CHAMPS ET NON UNE CONVERSION AUTOMATIQUE : il n'existe
+  // pas de translittération unique. "Mhalla" peut s'écrire محلة, المحلة ou
+  // محلا selon l'état civil. Et certaines mentions sont des conventions
+  // administratives, pas des translittérations : "dit" devient شهرة sur les
+  // CIN tunisiennes — aucun outil ne le devinerait. L'agent recopie ce qu'il
+  // voit, il n'y a donc rien à deviner.
+  //
+  // 💡 LES DEUX CHAMPS SERVENT À DES CHOSES DIFFÉRENTES :
+  //   • `customerName`   → screening OpenSanctions (les listes ONU/UE/US
+  //                        indexent les noms en alphabet latin), emails au
+  //                        client, affichage dans le dashboard
+  //   • `customerNameAr` → comparaison avec le texte OCR, uniquement
+  //
+  // ⚠️ NULLABLE, ET C'EST DÉLIBÉRÉ. Trois raisons :
+  //   1. Les dossiers existants n'en ont pas — les rendre invalides d'un coup
+  //      serait absurde.
+  //   2. Tous les postes n'ont pas de clavier arabe installé. Un agent qui ne
+  //      peut pas le saisir ne doit pas être bloqué.
+  //   3. Un client non tunisien (passeport français, par exemple) n'a aucun
+  //      nom arabe à saisir.
+  // Quand le champ est vide, le système retombe simplement sur la comparaison
+  // latine — le comportement actuel.
+  customerNameAr String?
+
   email        String  
   type         String   
   status       String   @default("pending") // pending, verified, rejected
@@ -151,12 +185,7 @@ model VerificationRequest {
   // C'est précisément la faille qu'on corrige avec les deux champs ci-dessous.
   //
   // 💡 On ne les supprime PAS : les dossiers déjà créés n'ont que ces URLs, et
-  // les effacer les rendrait instantanément inconsultables. Elles disparaîtront
-  // une fois les anciens documents migrés vers le bucket privé.
-  //
-  // ⚠️ Tant que ces colonnes sont renseignées, les documents concernés restent
-  // exposés publiquement. La migration n'est donc pas optionnelle — elle fait
-  // partie du correctif, pas d'un nettoyage cosmétique ultérieur.
+  // les effacer les rendrait instantanément inconsultables.
   idCardUrl    String?
   selfieUrl    String?
 
@@ -172,13 +201,6 @@ model VerificationRequest {
   // quelle. Voir le document exige de demander au serveur une URL signée
   // temporaire (lib/storage.ts), ce qu'il n'accorde qu'après avoir vérifié la
   // session ET le companyId du demandeur.
-  //
-  // En clair : avant, la donnée en base ÉTAIT la clé d'accès. Maintenant, elle
-  // ne désigne plus que l'emplacement — la clé, c'est le serveur qui la fabrique
-  // à la demande, et elle expire au bout de quelques minutes.
-  //
-  // Nullables pour deux raisons : les anciens dossiers n'en ont pas, et un
-  // dossier peut légitimement être créé sans selfie.
   idCardPath   String?
   selfiePath   String?
 

@@ -44,6 +44,9 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
 import { createSignedDocumentUrl } from "@/lib/storage";
+// 🆕 [ARABE] Comparaison de noms tolérante aux erreurs d'OCR et aux variantes
+// d'écriture arabe (voir lib/arabic.ts).
+import { matchNameAgainstOcr, matchIdNumberAgainstOcr, containsArabic } from "@/lib/arabic";
 
 // 🆕 [FIX PROD] Durée max d'exécution de cette fonction sur Vercel.
 // Sans cette ligne, le plan Hobby coupe la fonction à 10 secondes — or l'OCR
@@ -57,6 +60,13 @@ export const maxDuration = 60;
 
 const customerRegistrationSchema = z.object({
     customerName: z.string().min(2, "Le nom doit contenir au moins 2 caractères"),
+    // 🆕 [ARABE] Nom tel qu'il figure SUR LA CARTE, en écriture arabe.
+    //
+    // ⚠️ OPTIONNEL, et c'est essentiel : tous les postes n'ont pas de clavier
+    // arabe installé, et un client étranger (passeport français) n'a aucun nom
+    // arabe à saisir. Quand le champ est vide, le système retombe simplement
+    // sur la comparaison latine — le comportement actuel.
+    customerNameAr: z.string().optional().or(z.literal('')),
     email: z.string().email("Format d'email invalide"),
     type: z.string().min(1, "Le type de procédure est requis"),
     cin: z.string().min(4, "Le numéro d'identification est trop court"),
@@ -377,8 +387,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: `Security Validation Failed: ${errorMessages}` }, { status: 400 });
         }
 
-        const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardPath, selfiePath, biometricScore } = validationResult.data;
-
+        const { customerName, customerNameAr, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardPath, selfiePath, biometricScore } = validationResult.data;
         // ====================================================================
         // 🔒 VÉRIFICATION D'APPARTENANCE DES CHEMINS
         // ====================================================================
@@ -461,6 +470,28 @@ export async function POST(req: Request) {
         let isNameOnDoc = false;
         let isCinOnDoc = false;
 
+        // 🆕 [ARABE] Détails de la correspondance, conservés pour le rationale.
+        // Un simple booléen ne suffit pas : quand un contrôle échoue, l'agent
+        // doit savoir QUELS mots n'ont pas été retrouvés, sinon le diagnostic
+        // est impossible.
+        let nameMatchDetails: ReturnType<typeof matchNameAgainstOcr> | null = null;
+
+        // 🆕 [ARABE] QUEL NOM COMPARER AU DOCUMENT ?
+        //
+        // ⚠️ LE BUG QUE ÇA CORRIGE : le code comparait `customerName` (latin) au
+        // texte OCR d'une carte rédigée en arabe. Chercher "rayen" dans
+        // "ريان محلة" ne peut JAMAIS aboutir — `ocrNameMismatch` se déclenchait
+        // donc sur 100% des dossiers tunisiens, coûtant 40 points de pénalité à
+        // des clients parfaitement légitimes.
+        //
+        // 💡 On privilégie le nom arabe dès qu'il est renseigné ET qu'il contient
+        // réellement des caractères arabes. Le second test compte : un agent
+        // pressé pourrait y retaper le nom latin par réflexe, ce qui
+        // reproduirait exactement le bug d'origine sans que personne ne s'en
+        // aperçoive.
+        const useArabicName = Boolean(customerNameAr && containsArabic(customerNameAr));
+        const nameForOcrComparison = useArabicName ? customerNameAr! : customerName;
+
         try {
             // 60 secondes de validité : largement au-delà du budget OCR de 35s
             // ci-dessous, pour qu'une lenteur réseau ne fasse jamais expirer le
@@ -479,11 +510,66 @@ export async function POST(req: Request) {
                     setTimeout(() => reject(new Error("OCR timeout")), OCR_TIMEOUT_MS)
                 ),
             ]);
-            ocrText = data.text.toLowerCase();
 
-            const nameParts = String(customerName).toLowerCase().split(" ");
-            isNameOnDoc = nameParts.every((part: string) => ocrText.includes(part));
-            isCinOnDoc = ocrText.includes(String(cin).toLowerCase());
+            // 🆕 [ARABE] On ne met PLUS le texte en minuscules ici.
+            //
+            // ⚠️ `toLowerCase()` n'a aucun effet sur l'arabe — cette écriture ne
+            // connaît pas la distinction majuscule/minuscule. Mais l'appliquer
+            // ici empêchait de conserver le texte brut pour le diagnostic. La
+            // normalisation, elle, est désormais gérée par lib/arabic.ts, qui
+            // applique la bonne selon l'écriture détectée.
+            ocrText = data.text;
+
+            // ================================================================
+            // 🆕 [ARABE] JOURNAL DE DIAGNOSTIC — DÉVELOPPEMENT UNIQUEMENT
+            // ================================================================
+            // Voir ce que Tesseract a RÉELLEMENT lu est indispensable : sans ça,
+            // un échec de correspondance est indiagnosticable. On ne sait pas si
+            // le problème vient de la photo, de l'OCR, ou de la saisie de l'agent.
+            //
+            // ⚠️ POURQUOI SEULEMENT EN DÉVELOPPEMENT : ce texte contient le nom
+            // complet et le numéro de CIN du client. L'écrire dans les journaux
+            // de production reviendrait à déverser des données personnelles dans
+            // les logs Vercel — consultables par quiconque a accès au tableau de
+            // bord, et conservés plusieurs jours. C'est exactement le type de
+            // fuite qu'un audit relève.
+            if (process.env.NODE_ENV !== "production") {
+                console.log("\n──────── OCR DIAGNOSTIC ────────");
+                console.log("Texte brut extrait du document :");
+                console.log(ocrText);
+                console.log("────────────────────────────────");
+                console.log(`Nom comparé (${useArabicName ? "ARABE" : "LATIN"}) :`, nameForOcrComparison);
+                console.log("────────────────────────────────\n");
+            }
+
+            // 🆕 [ARABE] COMPARAISON TOLÉRANTE, au lieu de `.every(includes())`.
+            //
+            // L'ancienne version exigeait que TOUS les mots soient retrouvés, au
+            // caractère près. Trois couches remplacent cette exigence :
+            //   • normalisation des variantes d'écriture (ة↔ه, أ↔ا, ى↔ي)
+            //   • tolérance de 1 à 2 caractères par mot (distance de Levenshtein)
+            //     — c'est ce qui rattrape شهرة lu شهر, lettre finale avalée
+            //   • seuil de 60% des mots retrouvés, pour encaisser un ou deux
+            //     mots totalement illisibles sur une carte usée
+            nameMatchDetails = matchNameAgainstOcr(nameForOcrComparison, ocrText);
+            isNameOnDoc = nameMatchDetails.matched;
+
+            // 🆕 [ARABE] Le numéro de CIN a le même problème, moins visible :
+            // certaines cartes portent des CHIFFRES ARABO-INDIENS (١٤٠٦٦٧١١).
+            // Pour un ordinateur, "٤" et "4" sont aussi différents que "A" et
+            // "Z" — ils occupent des plages Unicode distinctes. L'ancien
+            // `ocrText.includes(cin)` échouait donc sur ces cartes.
+            isCinOnDoc = matchIdNumberAgainstOcr(cin, ocrText);
+
+            if (process.env.NODE_ENV !== "production") {
+                console.log("Résultat nom :", {
+                    trouvés: `${nameMatchDetails.foundCount}/${nameMatchDetails.totalCount}`,
+                    ratio: `${Math.round(nameMatchDetails.ratio * 100)}%`,
+                    manquants: nameMatchDetails.missingWords,
+                    validé: isNameOnDoc,
+                });
+                console.log("Résultat CIN :", isCinOnDoc ? "trouvé" : "NON trouvé", "\n");
+            }
         } catch (error) {
             // Ce `catch` couvre DEUX familles d'échec : l'OCR lui-même (image
             // illisible, dépassement du délai) et la signature de l'URL. Dans
@@ -665,12 +751,43 @@ export async function POST(req: Request) {
             rationale.push(`✅ AML SCREENING SOURCE: ${amlScreening.source}. Applicant name was compared against global sanctions and PEP indexes.`);
         }
 
+        // 🆕 [ARABE] Rationale enrichi : l'agent doit savoir QUELLE écriture a
+        // servi à la comparaison et QUELS mots ont manqué. Sans ces deux
+        // informations, un échec reste impossible à diagnostiquer — il ne peut
+        // pas distinguer une photo floue d'une faute de frappe dans le champ.
         if (ocrFailed) {
             rationale.push("NOTICE: Image parsing skipped or image unreadable. Manual document verification required.");
-        } else if (facts.ocrNameMismatch || facts.ocrCinMismatch) {
-            rationale.push("⚠️ OCR COMPLETED: Structural inconsistencies found. Form metadata does not match document text extraction.");
-        } else {
-            rationale.push("✅ OCR COMPLETED: High correspondence. Form data matches document text extraction.");
+        } else if (nameMatchDetails) {
+            const scriptLabel = nameMatchDetails.script === "arabic" ? "Arabic" : "Latin";
+            const percent = Math.round(nameMatchDetails.ratio * 100);
+
+            if (!isNameOnDoc) {
+                // 💡 Les mots manquants sont listés tels quels : c'est
+                // l'information la plus utile pour l'agent, qui peut alors
+                // comparer visuellement avec le document.
+                rationale.push(
+                    `⚠️ OCR NAME CHECK (${scriptLabel}): only ${nameMatchDetails.foundCount}/${nameMatchDetails.totalCount} name parts (${percent}%) were found on the document. Not located: ${nameMatchDetails.missingWords.join(", ")}.`
+                );
+            } else {
+                rationale.push(
+                    `✅ OCR NAME CHECK (${scriptLabel}): ${nameMatchDetails.foundCount}/${nameMatchDetails.totalCount} name parts (${percent}%) matched the document text.`
+                );
+            }
+
+            if (!isCinOnDoc) {
+                rationale.push("⚠️ OCR ID CHECK: the identification number was not found in the extracted document text.");
+            } else {
+                rationale.push("✅ OCR ID CHECK: the identification number matches the document.");
+            }
+
+            // 🆕 Avertissement quand la comparaison s'est faite en latin alors
+            // que la nationalité laisse attendre un document arabe. Sans lui,
+            // l'agent verrait un échec sans en comprendre la cause.
+            if (!useArabicName && nationality === "Tunisia") {
+                rationale.push(
+                    "NOTICE: The Arabic name field was left empty. The name was compared in Latin script against a document that is likely written in Arabic — this check is unreliable for this file."
+                );
+            }
         }
 
         // Le score est borné [0, 100] puis formaté en chaîne de 3 chiffres
@@ -693,6 +810,9 @@ export async function POST(req: Request) {
         const newRequest = await prisma.verificationRequest.create({
             data: {
                 customerName,
+                // 🆕 [ARABE] Conservé pour l'affichage sur la fiche client et
+                // pour toute re-vérification ultérieure du dossier.
+                customerNameAr: customerNameAr || null,
                 email,
                 type,
                 cin,
@@ -710,7 +830,6 @@ export async function POST(req: Request) {
                 score: formattedScore,
                 riskLevel: riskLevel,
                 aiRationale: aiRationaleString,
-                
                 auditLogs: {
                     create: {
                         action: "CREATED",
