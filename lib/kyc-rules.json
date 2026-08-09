@@ -235,6 +235,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "documentExpired", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 50,
+        "message": "DOCUMENT EXPIRED: The identification document is past its expiry date and cannot be accepted as valid proof of identity."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "isPassport", "operator": "equal", "value": true }]
     },
     "event": {
