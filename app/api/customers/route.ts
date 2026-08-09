@@ -579,7 +579,7 @@ export async function POST(req: Request) {
         // pressé pourrait y retaper le nom latin par réflexe.
         const useArabicName = Boolean(customerNameAr && containsArabic(customerNameAr));
         const nameForOcrComparison = useArabicName ? customerNameAr! : customerName;
-
+        let dobMismatch = false;
         try {
             const signedIdCardUrl = await createSignedDocumentUrl(idCardPath, 60);
 
@@ -616,6 +616,17 @@ export async function POST(req: Request) {
                 // 🆕 [OCR] Contrôle d'expiration, impossible jusqu'ici faute de
                 // collecter cette date.
                 documentExpired = isDocumentExpired(extraction.expiryDate);
+                // 🆕 Comparaison de la date de naissance extraite du document
+                // avec celle saisie au formulaire.
+                // 💡 Les deux sont au format AAAA-MM-JJ (input type="date" côté
+                // formulaire, format imposé par le prompt côté Gemini), donc la
+                // comparaison est directe.
+                // ⚠️ On ne compare QUE si les deux existent : une date absente
+                // n'est pas une incohérence, c'est une information manquante.
+                if (extraction.dateOfBirth && dateOfBirth) {
+                    dobMismatch = extraction.dateOfBirth.trim() !== dateOfBirth.trim();
+                    console.log("DOB document :", extraction?.dateOfBirth, "| DOB saisie :", dateOfBirth);
+                }
             }
 
             // ================================================================
@@ -760,6 +771,10 @@ export async function POST(req: Request) {
             // une information manquante comme rassurante serait exactement le
             // travers qu'on a corrigé sur le screening AML.
             documentExpired: documentExpired === true,
+            // 🆕 La date de naissance du document ne correspond pas à celle
+            // déclarée. Signal de fraude classique : document emprunté à un
+            // proche portant le même nom de famille.
+            dobMismatch,
 
             // 🆕 Biométrie graduée.
             faceMismatch,

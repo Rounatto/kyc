@@ -247,6 +247,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "dobMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 45,
+        "message": "DATA MISMATCH: The date of birth on the document does not match the one declared in the application."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "isPassport", "operator": "equal", "value": true }]
     },
     "event": {
