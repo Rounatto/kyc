@@ -8,16 +8,18 @@
 //   3. Calcul de l'âge à partir de la date de naissance
 //   4. OCR du document d'identité (Tesseract.js, FR/EN/AR) pour cross-vérifier
 //      le nom/CIN saisis au formulaire contre le texte réellement présent sur l'image
-//   5. Screening AML/PEP (sanctions financières) via OpenSanctions + repli local
+//   5. Screening AML/PEP (sanctions financières) via OpenSanctions
 //   6. Vérification biométrique (⚠️ voir note critique sur `biometricScore` plus bas)
 //   7. Moteur de règles déclaratif (json-rules-engine + lib/kyc-rules.json) qui
 //      transforme tous ces "facts" en un score de risque 0-100 + un rationale humain
 //   8. Écriture du dossier + de sa première ligne d'audit + notification si High Risk
 //
-// ✅ [PHASE B — RÉSOLU] Les documents ne sont plus stockés derrière des URLs
-// publiques permanentes. Cette route reçoit désormais des CHEMINS vers un
-// bucket Supabase privé, et génère elle-même une URL signée temporaire quand
-// elle a besoin de lire un fichier (voir le module OCR plus bas).
+// 🆕 [AUDIT MOTEUR] Ce fichier a été revu en profondeur. Quatre corrections
+// structurelles, détaillées à leur emplacement :
+//   • FAIL-CLOSED sur le screening AML (la panne ne passe plus pour un succès)
+//   • Suppression de la fausse détection de "document volé"
+//   • Biométrie graduée + pénalité quand elle est absente
+//   • Le PEP et les juridictions à risque passent dans le moteur de règles
 //
 // ⚠️ FAILLE CONNUE (roadmap Phase C, non corrigée ici) : `biometricScore` est
 // calculé CÔTÉ CLIENT par face-api.js dans new-verification/page.tsx, puis
@@ -25,6 +27,13 @@
 // un nombre — rien n'empêche un client malveillant d'envoyer
 // `biometricScore: 99.9` sans aucune photo réelle. Le calcul devrait être refait
 // ici, côté serveur, en même temps que l'ajout du liveness.
+//
+// ⚠️ LIMITE CONNUE — COMPARAISON OCR EN ÉCRITURE ARABE : les CIN tunisiennes
+// portent le nom en arabe, alors que le formulaire le collecte en alphabet
+// latin. La comparaison `ocrText.includes("rayen")` sur un texte arabe échoue
+// donc SYSTÉMATIQUEMENT, et pénalise à tort tous les dossiers tunisiens de 40
+// points. Correction prévue : ajouter un champ "nom en arabe" au formulaire, et
+// comparer l'OCR à celui-là plutôt qu'à la graphie latine.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
@@ -34,7 +43,6 @@ import { z } from "zod";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { enforceRole } from "@/lib/rbac";
-// 🆕 [PHASE B] Génération d'URLs signées vers le bucket privé.
 import { createSignedDocumentUrl } from "@/lib/storage";
 
 // 🆕 [FIX PROD] Durée max d'exécution de cette fonction sur Vercel.
@@ -47,17 +55,6 @@ import { createSignedDocumentUrl } from "@/lib/storage";
 // screening du cycle requête/réponse (roadmap Phase C — pipeline asynchrone).
 export const maxDuration = 60;
 
-// Le body accepté à la création d'un dossier KYC.
-//
-// 🆕 [PHASE B] `idCardPath`/`selfiePath` remplacent `idCardUrl`/`selfieUrl`.
-// Ce sont des CHEMINS internes au bucket privé Supabase (ex:
-// "cmp_a1b2/9f8e7d-idcard.jpg"), obtenus par le formulaire auprès de
-// /api/kyc-documents/upload-url. Cette route ne reçoit toujours pas les
-// fichiers eux-mêmes — ils sont partis directement du navigateur vers Supabase.
-//
-// 💡 Noter le changement de validateur : `.url()` est devenu `.min(1)`. Un
-// chemin n'est PAS une URL — il n'a ni protocole ni domaine. Garder `.url()`
-// rejetterait systématiquement les chemins valides.
 const customerRegistrationSchema = z.object({
     customerName: z.string().min(2, "Le nom doit contenir au moins 2 caractères"),
     email: z.string().email("Format d'email invalide"),
@@ -72,30 +69,96 @@ const customerRegistrationSchema = z.object({
     biometricScore: z.number().nullable().optional() 
 });
 
+// ============================================================================
+// 🆕 [AUDIT MOTEUR] JURIDICTIONS À RISQUE — LISTES DU GAFI
+// ============================================================================
+// Le GAFI (Groupe d'Action Financière) publie deux listes officielles que TOUS
+// les acteurs KYC intègrent. Elles sont publiques et gratuites — leur absence
+// était un manque réel : le système traitait jusqu'ici l'Iran et la Suisse
+// exactement de la même façon.
+//
+// ⚠️ MAINTENANCE OBLIGATOIRE : le GAFI révise ces listes environ trois fois par
+// an (février, juin, octobre). Une liste périmée est pire qu'inutile — elle
+// donne l'illusion d'un contrôle à jour. Source officielle : fatf-gafi.org
+//
+// 💡 Les noms sont en anglais car c'est ce que le formulaire transmet : il
+// convertit le code pays en libellé via la locale `en` de
+// react-phone-number-input (voir new-verification/page.tsx).
+
+// LISTE NOIRE — "appel à l'action". Aucune institution financière ne peut
+// légalement entrer en relation d'affaires avec ces juridictions sans
+// autorisation spécifique. D'où le `hard_kill` dans kyc-rules.json.
+const FATF_BLACKLIST = ["Iran", "North Korea", "Korea, North", "Myanmar", "Burma"];
+
+// LISTE GRISE — "surveillance renforcée". La relation reste possible, mais elle
+// impose une vigilance accrue. D'où une pénalité forte sans rejet automatique.
+const FATF_GREYLIST = [
+    "Algeria", "Angola", "Bulgaria", "Burkina Faso", "Cameroon", "Côte d'Ivoire",
+    "Croatia", "Democratic Republic of the Congo", "Haiti", "Kenya", "Laos",
+    "Lebanon", "Mali", "Monaco", "Mozambique", "Namibia", "Nepal", "Nigeria",
+    "South Africa", "South Sudan", "Syria", "Tanzania", "Venezuela", "Vietnam", "Yemen",
+];
+
+// ============================================================================
+// 🆕 [AUDIT MOTEUR] FORMATS D'IDENTIFIANT PAR PAYS
+// ============================================================================
+// Avant, seule la Tunisie était vérifiée. Pour tous les autres pays, un numéro
+// totalement inventé passait sans le moindre signal — un contrôle de format
+// n'existant que pour un pays sur deux cents ne protège pas grand-chose.
+//
+// 💡 Volontairement limité aux pays réalistes de ce marché. Couvrir 200 pays
+// demanderait une bibliothèque dédiée, et des règles approximatives
+// produiraient surtout des faux positifs sur des clients légitimes.
+//
+// ⚠️ Un format valide ne prouve RIEN sur l'existence réelle du document : il
+// détecte les saisies manifestement erronées, pas la fraude.
+const ID_FORMATS: Record<string, RegExp> = {
+    Tunisia: /^[0-9]{8}$/,
+    Morocco: /^[A-Z]{1,2}[0-9]{5,6}$/i,
+    Algeria: /^[0-9]{18}$/,
+    France: /^[0-9A-Z]{12}$/i,
+    Egypt: /^[0-9]{14}$/,
+};
+
 // Vérifie si un nom apparaît sur des listes de sanctions financières (AML) ou
 // est une "Personne Politiquement Exposée" (PEP) — obligation légale en KYC.
-// Stratégie à deux niveaux :
-//   - Niveau 1 (préféré) : appel à l'API OpenSanctions, la vraie base de
-//     référence utilisée par l'industrie (sanctions ONU/UE/US + PEP mondiaux).
-//   - Niveau 2 (repli) : si l'API échoue/timeout/clé absente, on retombe sur
-//     une liste de mots-clés codée en dur ci-dessous — un filet de sécurité
-//     TRÈS approximatif (matching par sous-chaîne), à ne pas confondre avec un
-//     vrai screening. ⚠️ Un "Vladimir Ben Salah" innocent serait par exemple
-//     faussement flaggé PEP à cause du mot "vladimir". Un vrai produit
-//     international ferait "fail-closed" ici (forcer une revue manuelle)
-//     plutôt que de faire confiance à cette liste.
+//
+// 🆕 [AUDIT MOTEUR] LA LISTE DE REPLI LOCALE A ÉTÉ SUPPRIMÉE, et le
+// comportement en cas de panne est inversé. Voici pourquoi.
+//
+// ❌ CE QUI EXISTAIT : une liste de neuf mots codés en dur
+// (["malicious", "fraud", "vladimir", "putin", ...]) comparés par SOUS-CHAÎNE.
+// Elle produisait exactement l'inverse de ce qu'on attend d'un filet de
+// sécurité :
+//   • Des FAUX POSITIFS sur des clients innocents — un "Vladimir Ben Salah"
+//     tunisien était signalé à la fois comme correspondance sanctions ET comme
+//     personne politiquement exposée, à cause de son prénom.
+//   • AUCUN vrai positif — aucun nom réellement sanctionné ne figure dans ces
+//     neuf mots.
+//
+// ❌ PIRE ENCORE — LE "FAIL-OPEN" : quand l'API ne répondait pas (panne,
+// timeout de 8s, clé absente) et que la liste locale ne trouvait rien, la
+// fonction renvoyait `sanctioned: false`. Le moteur de règles ne voyait donc
+// AUCUNE différence entre "vérifié, rien trouvé" et "pas vérifié du tout".
+// Concrètement : OpenSanctions tombe deux heures, vingt dossiers passent en
+// Low Risk sans qu'un seul nom n'ait été comparé à la moindre liste — et
+// l'audit trail affirme que le screening a eu lieu.
+//
+// ✅ CE QUI LE REMPLACE : un drapeau `screeningFailed` explicite. Quand le
+// contrôle n'a pas pu s'exécuter, on le DIT, et le moteur de règles impose une
+// revue manuelle (+45 points). C'est le principe du FAIL-CLOSED : en cas de
+// doute, on ne laisse pas passer silencieusement.
 async function performGlobalSanctionsLookup(name: string, country: string) {
     let apiSanctioned = false;
     let apiPep = false;
-    let lookupSource = "Local Heuristic Engine";
     let topScore = 0.0;
 
-    const normalized = name.toLowerCase().trim();
-    const localSanctionList = ["malicious", "scam", "fraud", "hacker", "fake", "darknet", "vladimir", "putin", "al capone"];
-    const localPepList = ["politician", "minister", "president", "gouverneur", "putin", "vladimir"];
-
-    const localSanctionMatch = localSanctionList.some(badWord => normalized.includes(badWord));
-    const localPepMatch = localPepList.some(pepWord => normalized.includes(pepWord));
+    // 🆕 Part du principe que le screening a ÉCHOUÉ, et ne repasse à `false`
+    // qu'après une réponse valide de l'API. C'est l'inverse de l'ancienne
+    // logique optimiste — et c'est délibéré : un oubli dans le code produira
+    // désormais une alerte, pas un silence.
+    let screeningFailed = true;
+    let lookupSource = "Screening unavailable";
 
     try {
         const apiKey = process.env.OPENSANCTIONS_API_KEY;
@@ -104,8 +167,7 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
             method: "POST",
             // 🆕 [FIX PROD] Abandon au bout de 8 secondes. Sans ce garde-fou, une
             // API OpenSanctions lente bloquait toute la création du dossier
-            // jusqu'à la mort de la fonction serverless. Le `catch` en dessous
-            // bascule automatiquement sur la liste locale de repli.
+            // jusqu'à la mort de la fonction serverless.
             signal: AbortSignal.timeout(8000),
             headers: {
                 "Content-Type": "application/json",
@@ -127,12 +189,23 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
         if (response.ok) {
             const data = await response.json();
             const results = data.queries?.q1?.results || [];
-            
+
+            // 🆕 LE SEUL ENDROIT OÙ LE SCREENING EST DÉCLARÉ RÉUSSI.
+            // Une réponse HTTP 200 signifie que l'API a bel et bien comparé le
+            // nom à ses index — qu'elle ait trouvé quelque chose ou non. C'est
+            // exactement l'information qui manquait : "zéro résultat" et
+            // "aucune recherche effectuée" sont deux situations radicalement
+            // différentes, indiscernables jusqu'ici.
+            screeningFailed = false;
+            lookupSource = "OpenSanctions API (Live Production Index)";
+
             if (results.length > 0) {
                 const sortedCandidates = results.sort((a: any, b: any) => b.score - a.score);
                 const candidate = sortedCandidates[0];
                 topScore = candidate.score;
 
+                // Seuil de 0.50 : en dessous, la correspondance de nom est trop
+                // lâche pour être exploitable (homonymies fréquentes).
                 if (topScore > 0.50) {
                     const topics = [
                         ...(candidate.topics || []),
@@ -141,21 +214,26 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
 
                     apiSanctioned = topics.includes("sanction") || topics.includes("sanctions");
                     apiPep = topics.includes("role.pep") || topics.includes("pep");
-                    lookupSource = "OpenSanctions API (Live Production Index)";
                 }
             }
         } else {
-            console.warn("OpenSanctions API HTTP Error:", response.status);
+            // 🆕 Une réponse non-200 (401 clé invalide, 429 quota dépassé, 500
+            // panne serveur) laisse `screeningFailed` à `true`. L'ancien code se
+            // contentait d'un console.warn et poursuivait comme si de rien n'était.
+            console.warn("[AML] OpenSanctions HTTP error:", response.status);
         }
     } catch (error) {
-        console.error("OpenSanctions connection timeout or failure:", error);
+        // Timeout, DNS, réseau coupé : `screeningFailed` reste à `true`.
+        console.error("[AML] OpenSanctions unreachable:", error);
     }
 
     return {
-        sanctioned: apiSanctioned || localSanctionMatch,
-        isPep: apiPep || localPepMatch,
-        source: (apiSanctioned || apiPep) ? lookupSource : (localSanctionMatch || localPepMatch ? "Local Hardcoded Match" : lookupSource),
-        confidenceScore: topScore > 0 ? topScore : (localSanctionMatch || localPepMatch ? 1.0 : 0.0)
+        sanctioned: apiSanctioned,
+        isPep: apiPep,
+        // 🆕 Le drapeau qui alimente la règle `amlScreeningFailed`.
+        screeningFailed,
+        source: lookupSource,
+        confidenceScore: topScore,
     };
 }
 
@@ -177,8 +255,6 @@ export async function GET(req: Request) {
 
         const { companyId } = guard;
 
-        // Paramètres de recherche/pagination/tri, tous optionnels avec valeurs
-        // par défaut raisonnables (page 1, 5 par page, tri par ancienneté).
         const { searchParams } = new URL(req.url);
         const search = searchParams.get("search") || "";
         const page = parseInt(searchParams.get("page") || "1");
@@ -304,7 +380,7 @@ export async function POST(req: Request) {
         const { customerName, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardPath, selfiePath, biometricScore } = validationResult.data;
 
         // ====================================================================
-        // 🆕 [PHASE B] 🔒 VÉRIFICATION D'APPARTENANCE DES CHEMINS
+        // 🔒 VÉRIFICATION D'APPARTENANCE DES CHEMINS
         // ====================================================================
         // Les chemins arrivent du CLIENT (le formulaire les a reçus de
         // /api/kyc-documents/upload-url et les renvoie ici). On ne peut donc
@@ -319,12 +395,6 @@ export async function POST(req: Request) {
         // La parade est directe : tous nos chemins commencent par le companyId
         // (voir buildDocumentPath dans lib/storage.ts). Un chemin qui ne
         // commence pas par CELUI DE LA SESSION est forcément illégitime.
-        //
-        // 💡 En pratique cette attaque est déjà très difficile (les chemins
-        // contiennent 32 caractères aléatoires, impossibles à deviner), mais
-        // c'est exactement le principe de défense en profondeur : on ne fait
-        // pas reposer la sécurité sur le seul fait qu'une valeur soit dure à
-        // deviner.
         const pathPrefix = `${companyId}/`;
         if (!idCardPath.startsWith(pathPrefix) || !selfiePath.startsWith(pathPrefix)) {
             console.error(
@@ -378,39 +448,30 @@ export async function POST(req: Request) {
         }
 
         // --- MODULE 2 : OCR (Reconnaissance de texte sur le document) ---
-        // Tesseract.js lit l'image de la pièce d'identité en 3 langues (EN/FR/AR,
-        // pertinent pour le marché tunisien) et on vérifie que le nom et le CIN
-        // SAISIS AU FORMULAIRE apparaissent bien DANS le texte extrait de l'image
-        // — ça détecte un formulaire rempli avec un nom qui ne correspond pas
-        // au document uploadé. Si l'OCR échoue (image illisible, etc.), on ne
-        // bloque pas le dossier : on le marque pour revue manuelle (`ocrFailed`).
+        // Tesseract.js lit l'image de la pièce d'identité en 3 langues (EN/FR/AR)
+        // et on vérifie que le nom et le CIN SAISIS AU FORMULAIRE apparaissent
+        // bien DANS le texte extrait de l'image — ça détecte un formulaire rempli
+        // avec un nom qui ne correspond pas au document uploadé.
         //
-        // 🆕 [PHASE B] Tesseract a besoin d'une URL téléchargeable — or on ne
-        // dispose plus que d'un chemin vers un bucket PRIVÉ. On fabrique donc
-        // ici, côté serveur, une URL signée de courte durée juste pour cette
-        // lecture. Elle ne quitte jamais le serveur et expire d'elle-même.
+        // 🆕 Tesseract a besoin d'une URL téléchargeable — or on ne dispose plus
+        // que d'un chemin vers un bucket PRIVÉ. On fabrique donc ici, côté
+        // serveur, une URL signée de courte durée juste pour cette lecture.
         let ocrText = "";
         let ocrFailed = false;
         let isNameOnDoc = false;
         let isCinOnDoc = false;
 
         try {
-            // 🆕 60 secondes de validité : largement au-delà du budget OCR de
-            // 35s ci-dessous, pour qu'une lenteur réseau ne fasse jamais
-            // expirer le lien EN COURS de téléchargement — ce qui produirait un
-            // échec impossible à diagnostiquer.
+            // 60 secondes de validité : largement au-delà du budget OCR de 35s
+            // ci-dessous, pour qu'une lenteur réseau ne fasse jamais expirer le
+            // lien EN COURS de téléchargement.
             const signedIdCardUrl = await createSignedDocumentUrl(idCardPath, 60);
 
             // 🆕 [FIX PROD] Course entre l'OCR et un chronomètre de 35 secondes.
             // Sur Vercel, Tesseract doit télécharger ses modèles de langue à
             // froid (l'arabe est volumineux) puis analyser sur 2 cœurs — ça
             // pouvait dépasser la limite de la fonction et laisser l'utilisateur
-            // bloqué à l'infini. Si le délai est dépassé, la promesse est
-            // rejetée, le `catch` juste en dessous passe `ocrFailed = true`,
-            // et le dossier est créé normalement mais marqué pour revue
-            // manuelle. Mieux vaut un dossier créé et signalé qu'un formulaire
-            // figé. Le budget de 35s laisse ~25s pour le reste du pipeline
-            // (AML, moteur de règles, écritures Prisma) sous le plafond de 60s.
+            // bloqué à l'infini.
             const OCR_TIMEOUT_MS = 35000;
             const { data } = await Promise.race([
                 Tesseract.recognize(signedIdCardUrl, 'eng+fra+ara'),
@@ -424,12 +485,10 @@ export async function POST(req: Request) {
             isNameOnDoc = nameParts.every((part: string) => ocrText.includes(part));
             isCinOnDoc = ocrText.includes(String(cin).toLowerCase());
         } catch (error) {
-            // 💡 Ce `catch` couvre désormais DEUX familles d'échec : l'OCR
-            // lui-même (image illisible, dépassement du délai) et la signature
-            // de l'URL (variables d'environnement Supabase manquantes, fichier
-            // absent du bucket). Dans les deux cas, la conséquence métier est
-            // identique — on ne peut pas lire le document — donc le traitement
-            // est le même : revue manuelle, sans bloquer la création du dossier.
+            // Ce `catch` couvre DEUX familles d'échec : l'OCR lui-même (image
+            // illisible, dépassement du délai) et la signature de l'URL. Dans
+            // les deux cas, la conséquence métier est identique — on ne peut pas
+            // lire le document.
             console.error("Critical OCR Extraction failed. Falling back to manual review:", error);
             ocrFailed = true;
         }
@@ -437,29 +496,110 @@ export async function POST(req: Request) {
         // --- MODULE 3 : AML/PEP (sanctions financières) ---
         const amlScreening = await performGlobalSanctionsLookup(customerName, nationality || "");
         const normalizedEmail = String(email).toLowerCase();
-        // Seuil arbitraire : en dessous de 60% de similarité faciale, on
-        // considère que le selfie et la photo du document ne correspondent
-        // pas. Rappel : `biometricScore` vient du client (voir note critique
-        // en tête de fichier) — ce seuil est donc contournable pour l'instant.
-        const faceMismatchDetected = biometricScore !== null && biometricScore !== undefined && biometricScore < 60;
+
+        // ====================================================================
+        // 🆕 [AUDIT MOTEUR] BIOMÉTRIE GRADUÉE, ET ABSENCE PÉNALISÉE
+        // ====================================================================
+        // ❌ CE QUI EXISTAIT : un seul booléen, `biometricScore < 60`. Deux
+        // défauts majeurs.
+        //
+        //   1. BINAIRE : un score de 59% et un score de 5% produisaient
+        //      exactement la même pénalité. Or 59% est un doute qui mérite un
+        //      œil humain ; 5% est une fraude évidente.
+        //
+        //   2. PIRE — L'ABSENCE NE COÛTAIT RIEN : quand aucun visage n'était
+        //      détectable (`biometricScore === null`), la condition
+        //      `score !== null && score < 60` valait `false`, donc AUCUNE
+        //      pénalité. Un dossier SANS AUCUNE vérification biométrique
+        //      obtenait donc un meilleur score qu'un dossier avec une
+        //      correspondance faible. L'absence de preuve devenait plus
+        //      avantageuse qu'une preuve douteuse — exactement l'inverse de ce
+        //      qu'un moteur de risque doit produire.
+        //
+        // ✅ QUATRE ÉTATS DISTINCTS, dont un pour l'indisponibilité. Les seuils
+        // (40/60/75) reflètent le comportement réel de face-api.js : au-delà de
+        // 75% la correspondance est solide, en dessous de 40% il s'agit
+        // quasi-certainement de deux personnes différentes.
+        //
+        // 💡 Ces quatre facts resteront valides quand la biométrie deviendra un
+        // vrai liveness (Phase C) : seule la façon de CALCULER le score
+        // changera, pas la façon de l'interpréter.
+        const hasBiometricScore = biometricScore !== null && biometricScore !== undefined;
+
+        const biometricUnavailable = !hasBiometricScore;
+        const faceMatchFailed = hasBiometricScore && biometricScore < 40;
+        const faceMatchWeak = hasBiometricScore && biometricScore >= 40 && biometricScore < 60;
+        const faceMatchBorderline = hasBiometricScore && biometricScore >= 60 && biometricScore < 75;
+
+        // Conservé pour les règles COMBINÉES du moteur (nom + visage), qui
+        // raisonnent sur "le visage ne correspond pas" sans distinguer le degré.
+        const faceMismatch = faceMatchFailed || faceMatchWeak;
+
+        // ====================================================================
+        // 🆕 [AUDIT MOTEUR] VALIDATION DU FORMAT D'IDENTIFIANT — MULTI-PAYS
+        // ====================================================================
+        // ❌ AVANT : `(nationality === "Tunisia" || nationality === "TN") && !/^[0-9]{8}$/`
+        // Un seul pays vérifié. Pour tous les autres, un numéro totalement
+        // inventé passait sans le moindre signal.
+        //
+        // 💡 On ne pénalise QUE si un format est connu pour le pays déclaré.
+        // Signaler un pays absent de la table reviendrait à sanctionner un
+        // client parce que NOUS n'avons pas encodé sa règle — un faux positif
+        // dont il n'est en rien responsable.
+        const idFormat = ID_FORMATS[nationality];
+        const invalidIdFormat = idFormat ? !idFormat.test(cin) : false;
+
+        // 🆕 [AUDIT MOTEUR] Juridictions à risque (voir les listes en haut).
+        const isBlacklistedJurisdiction = FATF_BLACKLIST.includes(nationality);
+        const isGreylistedJurisdiction = FATF_GREYLIST.includes(nationality);
 
         // --- MODULE 4 : MOTEUR DE RÈGLES ---
         // Tous les signaux calculés ci-dessus sont regroupés en un seul objet
         // "facts", passé au moteur déclaratif (json-rules-engine + kyc-rules.json)
         // qui décide des pénalités à appliquer. Ce découplage permet de modifier
         // les règles métier (points, seuils, messages) sans toucher au code.
+        //
+        // 🆕 [AUDIT MOTEUR] `isStolenDocument` A ÉTÉ SUPPRIMÉ.
+        // Son calcul était : `cin.endsWith("999") || cin.endsWith("000")`.
+        // Aucune base de documents volés n'était consultée — mais le message
+        // associé affirmait "matched stolen/lost databases". C'était une
+        // DÉCLARATION FAUSSE inscrite dans la piste d'audit, ce qui est bien
+        // plus grave qu'une règle manquante : un auditeur vérifiant cette
+        // allégation n'aurait trouvé aucune source derrière. Et le déclenchement
+        // touchait ~1% des CIN choisies au hasard.
+        // 📋 Une vraie détection exigerait un accès à la base Interpol SLTD,
+        // réservée aux forces de l'ordre.
         const facts = {
             isSanctionedName: amlScreening.sanctioned,
-            isStolenDocument: String(cin).endsWith("999") || String(cin).endsWith("000"),
+            // 🆕 Le PEP entre dans le moteur (il était codé en dur à +15 points).
+            isPep: amlScreening.isPep,
+            // 🆕 Le fail-closed du screening AML.
+            amlScreeningFailed: amlScreening.screeningFailed,
+
             isDisposableEmail: ["yopmail.com", "mailinator.com", "trashmail.com"].some(d => normalizedEmail.endsWith(d)),
-            invalidCinFormat: (nationality === "Tunisia" || nationality === "TN") && !/^[0-9]{8}$/.test(cin),
+            invalidIdFormat,
             missingPhone: !phoneNumber || phoneNumber === "Not specified" || phoneNumber.trim() === "",
             isPassport: documentType === "Passport",
-            isUnderage: isUnderage,
-            isYoungAdult: isYoungAdult,
+            isUnderage,
+            isYoungAdult,
+
+            // 🆕 Juridictions GAFI.
+            isBlacklistedJurisdiction,
+            isGreylistedJurisdiction,
+
             ocrNameMismatch: !ocrFailed && !isNameOnDoc,
             ocrCinMismatch: !ocrFailed && !isCinOnDoc,
-            faceMismatch: faceMismatchDetected 
+            // 🆕 Même principe que pour l'AML : une lecture impossible n'est pas
+            // une lecture réussie. L'ancien code se contentait d'un message dans
+            // le rationale, sans aucun impact sur le score.
+            ocrUnavailable: ocrFailed,
+
+            // 🆕 Biométrie graduée.
+            faceMismatch,
+            faceMatchFailed,
+            faceMatchWeak,
+            faceMatchBorderline,
+            biometricUnavailable,
         };
 
         const engine = new Engine(kycRules);
@@ -491,19 +631,38 @@ export async function POST(req: Request) {
             riskScore = 100;
         }
 
-        if (amlScreening.isPep) {
-            riskScore += 15;
-            rationale.push(`NOTICE: Applicant verified as a Politically Exposed Person (PEP). Detection Source: ${amlScreening.source}.`);
+        // 🆕 [AUDIT MOTEUR] LE BLOC PEP CODÉ EN DUR A ÉTÉ RETIRÉ D'ICI.
+        // Il faisait `riskScore += 15` directement dans le code, contournant
+        // entièrement le moteur de règles. Deux problèmes : c'était une entorse
+        // au principe même de l'architecture (les règles métier doivent être
+        // modifiables sans développeur), et 15 points était très en dessous de
+        // la pratique du secteur — un PEP impose une vigilance renforcée
+        // systématique. La règle vaut désormais 60 points dans kyc-rules.json,
+        // ce qui bascule seule le dossier en High Risk.
+
+        // 🆕 [AUDIT MOTEUR] Rationale biométrique aligné sur les quatre états.
+        // `unshift` place ce message en TÊTE du rationale : c'est le premier
+        // élément que l'agent lit dans le panneau d'analyse.
+        if (!hasBiometricScore) {
+            rationale.unshift(`⚠️ BIOMETRIC UNAVAILABLE: No face could be extracted from the document or the selfie. Identity was NOT biometrically verified.`);
+        } else if (faceMatchFailed) {
+            rationale.unshift(`⛔ BIOMETRIC FAILURE: Face match score is ${biometricScore.toFixed(1)}%. The person in the selfie is almost certainly not the document holder.`);
+        } else if (faceMatchWeak) {
+            rationale.unshift(`⚠️ BIOMETRIC INCONCLUSIVE: Face match score is ${biometricScore.toFixed(1)}%. Manual visual comparison required.`);
+        } else if (faceMatchBorderline) {
+            rationale.unshift(`🟡 BIOMETRIC BORDERLINE: Face match score is ${biometricScore.toFixed(1)}%. Accepted, but below the high-confidence threshold.`);
+        } else {
+            rationale.unshift(`✅ BIOMETRIC SUCCESS: Face match verified with ${biometricScore.toFixed(1)}% similarity.`);
         }
 
-        if (biometricScore !== null && biometricScore !== undefined) {
-            if (faceMismatchDetected) {
-                rationale.unshift(`⛔ BIOMETRIC FAILURE: Face match score is ${biometricScore.toFixed(1)}%. The face on the Live Selfie does NOT match the ID Document photo.`);
-            } else {
-                rationale.unshift(`✅ BIOMETRIC SUCCESS: Face match verified with ${biometricScore.toFixed(1)}% similarity.`);
-            }
+        // 🆕 [AUDIT MOTEUR] Traçabilité de la SOURCE du screening AML.
+        // L'agent doit pouvoir distinguer "vérifié contre l'index OpenSanctions"
+        // de "non vérifié" — c'est précisément l'information qui manquait, et
+        // qui rendait les deux situations indiscernables dans l'audit trail.
+        if (amlScreening.screeningFailed) {
+            rationale.push(`⚠️ AML SCREENING SOURCE: ${amlScreening.source}. No watchlist comparison was performed for this applicant.`);
         } else {
-            rationale.unshift(`⚠️ BIOMETRIC WARNING: Face detection skipped or failed to extract geometric landmarks.`);
+            rationale.push(`✅ AML SCREENING SOURCE: ${amlScreening.source}. Applicant name was compared against global sanctions and PEP indexes.`);
         }
 
         if (ocrFailed) {
@@ -543,12 +702,8 @@ export async function POST(req: Request) {
                 phoneNumber,
                 userId: serverAgentId!, 
                 companyId: companyId!,  
-                // 🆕 [PHASE B] On enregistre les CHEMINS. Les colonnes
-                // idCardUrl/selfieUrl restent volontairement nulles pour tout
-                // nouveau dossier : elles n'existent plus que pour les dossiers
-                // antérieurs à cette migration, qui n'ont pas de chemin.
-                // C'est ce qui permet à l'affichage de trancher simplement :
-                // chemin présent → URL signée, sinon → ancien lien public.
+                // On enregistre les CHEMINS. Les colonnes idCardUrl/selfieUrl
+                // restent volontairement nulles pour tout nouveau dossier.
                 idCardPath,
                 selfiePath,
                 status: "pending", 
@@ -567,7 +722,7 @@ export async function POST(req: Request) {
             },
         });
 
-        // 💡 NOUVEAU : ALERTE HIGH RISK
+        // 💡 ALERTE HIGH RISK
         if (riskLevel === "High") {
             await prisma.notification.create({
                 data: {

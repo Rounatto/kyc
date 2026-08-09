@@ -25,25 +25,115 @@
   },
   {
     "conditions": {
-      "all": [{ "fact": "isStolenDocument", "operator": "equal", "value": true }]
+      "all": [{ "fact": "isBlacklistedJurisdiction", "operator": "equal", "value": true }]
     },
     "event": {
-      "type": "risk_penalty",
+      "type": "hard_kill",
       "params": {
-        "points": 50,
-        "message": "SECURITY ALERT: Document serial flag matched stolen/lost databases."
+        "points": 100,
+        "message": "REGULATORY REJECTION: Applicant jurisdiction is subject to a FATF call for action (high-risk blacklist)."
       }
     }
   },
   {
     "conditions": {
-      "all": [{ "fact": "faceMismatch", "operator": "equal", "value": true }]
+      "all": [{ "fact": "isPep", "operator": "equal", "value": true }]
     },
     "event": {
       "type": "risk_penalty",
       "params": {
-        "points": 50,
-        "message": "BIOMETRIC CRITICAL ALERT: The face on the Live Selfie does NOT match the ID Document photo."
+        "points": 60,
+        "message": "COMPLIANCE ALERT: Applicant identified as a Politically Exposed Person. Enhanced due diligence is mandatory before approval."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "amlScreeningFailed", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 45,
+        "message": "SCREENING UNAVAILABLE: The sanctions and PEP watchlist check could NOT be performed (provider unreachable). This profile has NOT been screened. Manual re-screening is required before any approval."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [
+        { "fact": "ocrNameMismatch", "operator": "equal", "value": true },
+        { "fact": "faceMismatch", "operator": "equal", "value": true }
+      ]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "FRAUD PATTERN: Both the name and the face fail to match the submitted document. This combination is characteristic of a stolen or borrowed identity document."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [
+        { "fact": "ocrNameMismatch", "operator": "equal", "value": true },
+        { "fact": "ocrCinMismatch", "operator": "equal", "value": true }
+      ]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 30,
+        "message": "FRAUD PATTERN: Neither the name nor the ID number could be located on the document image. The document may not correspond to the application at all."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "faceMatchFailed", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 55,
+        "message": "BIOMETRIC CRITICAL ALERT: Face similarity below 40%. The person in the selfie is almost certainly not the document holder."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "faceMatchWeak", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 35,
+        "message": "BIOMETRIC WARNING: Face similarity between 40% and 60%. Inconclusive match — manual visual comparison required."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "faceMatchBorderline", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 15,
+        "message": "BIOMETRIC NOTICE: Face similarity between 60% and 75%. Match accepted but below the high-confidence threshold."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "biometricUnavailable", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "BIOMETRIC MISSING: No usable face could be extracted from the document or the selfie. Identity was NOT biometrically verified. Manual visual comparison is mandatory."
       }
     }
   },
@@ -73,6 +163,30 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "ocrUnavailable", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 25,
+        "message": "OCR UNAVAILABLE: The document image could not be read (unreadable, timed out, or processing failed). Document data was NOT cross-verified. Manual review required."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isGreylistedJurisdiction", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 35,
+        "message": "JURISDICTION RISK: Applicant country is under increased FATF monitoring (grey list). Enhanced due diligence recommended."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "isDisposableEmail", "operator": "equal", "value": true }]
     },
     "event": {
@@ -85,13 +199,13 @@
   },
   {
     "conditions": {
-      "all": [{ "fact": "invalidCinFormat", "operator": "equal", "value": true }]
+      "all": [{ "fact": "invalidIdFormat", "operator": "equal", "value": true }]
     },
     "event": {
       "type": "risk_penalty",
       "params": {
         "points": 25,
-        "message": "Structure Failure: National ID structure is out of compliance."
+        "message": "Structure Failure: The identification number does not match the expected format for the declared country."
       }
     }
   },
