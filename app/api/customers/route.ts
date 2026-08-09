@@ -38,7 +38,6 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
 import kycRules from "@/lib/kyc-rules.json";
-import Tesseract from "tesseract.js";
 import { z } from "zod";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
@@ -47,6 +46,9 @@ import { createSignedDocumentUrl } from "@/lib/storage";
 // 🆕 [ARABE] Comparaison de noms tolérante aux erreurs d'OCR et aux variantes
 // d'écriture arabe (voir lib/arabic.ts).
 import { matchNameAgainstOcr, matchIdNumberAgainstOcr, containsArabic } from "@/lib/arabic";
+// 🆕 [OCR] Tesseract n'est plus appelé directement : il est encapsulé dans
+// lib/document-ocr.ts comme repli derrière Gemini Vision.
+import { extractDocumentData, isDocumentExpired } from "@/lib/document-ocr";
 
 // 🆕 [FIX PROD] Durée max d'exécution de cette fonction sur Vercel.
 // Sans cette ligne, le plan Hobby coupe la fonction à 10 secondes — or l'OCR
@@ -565,112 +567,90 @@ export async function POST(req: Request) {
         let ocrFailed = false;
         let isNameOnDoc = false;
         let isCinOnDoc = false;
-
-        // 🆕 [ARABE] Détails de la correspondance, conservés pour le rationale.
-        // Un simple booléen ne suffit pas : quand un contrôle échoue, l'agent
-        // doit savoir QUELS mots n'ont pas été retrouvés, sinon le diagnostic
-        // est impossible.
         let nameMatchDetails: ReturnType<typeof matchNameAgainstOcr> | null = null;
 
+        // 🆕 [OCR] Résultat de l'extraction, conservé pour le rationale.
+        let extraction: Awaited<ReturnType<typeof extractDocumentData>> | null = null;
+        let documentExpired: boolean | null = null;
+
         // 🆕 [ARABE] QUEL NOM COMPARER AU DOCUMENT ?
-        //
-        // ⚠️ LE BUG QUE ÇA CORRIGE : le code comparait `customerName` (latin) au
-        // texte OCR d'une carte rédigée en arabe. Chercher "rayen" dans
-        // "ريان محلة" ne peut JAMAIS aboutir — `ocrNameMismatch` se déclenchait
-        // donc sur 100% des dossiers tunisiens, coûtant 40 points de pénalité à
-        // des clients parfaitement légitimes.
-        //
-        // 💡 On privilégie le nom arabe dès qu'il est renseigné ET qu'il contient
-        // réellement des caractères arabes. Le second test compte : un agent
-        // pressé pourrait y retaper le nom latin par réflexe, ce qui
-        // reproduirait exactement le bug d'origine sans que personne ne s'en
-        // aperçoive.
+        // On privilégie le nom arabe saisi par l'agent dès qu'il contient
+        // réellement des caractères arabes — le second test compte, un agent
+        // pressé pourrait y retaper le nom latin par réflexe.
         const useArabicName = Boolean(customerNameAr && containsArabic(customerNameAr));
         const nameForOcrComparison = useArabicName ? customerNameAr! : customerName;
 
         try {
-            // 60 secondes de validité : largement au-delà du budget OCR de 35s
-            // ci-dessous, pour qu'une lenteur réseau ne fasse jamais expirer le
-            // lien EN COURS de téléchargement.
             const signedIdCardUrl = await createSignedDocumentUrl(idCardPath, 60);
 
-            // 🆕 [FIX PROD] Course entre l'OCR et un chronomètre de 35 secondes.
-            // Sur Vercel, Tesseract doit télécharger ses modèles de langue à
-            // froid (l'arabe est volumineux) puis analyser sur 2 cœurs — ça
-            // pouvait dépasser la limite de la fonction et laisser l'utilisateur
-            // bloqué à l'infini.
-            const OCR_TIMEOUT_MS = 35000;
-            const { data } = await Promise.race([
-                Tesseract.recognize(signedIdCardUrl, 'eng+fra+ara'),
-                new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error("OCR timeout")), OCR_TIMEOUT_MS)
-                ),
-            ]);
+            // 🆕 [OCR] Gemini Vision d'abord, Tesseract en repli — voir
+            // lib/document-ocr.ts pour le détail de la stratégie.
+            extraction = await extractDocumentData(signedIdCardUrl);
 
-            // 🆕 [ARABE] On ne met PLUS le texte en minuscules ici.
-            //
-            // ⚠️ `toLowerCase()` n'a aucun effet sur l'arabe — cette écriture ne
-            // connaît pas la distinction majuscule/minuscule. Mais l'appliquer
-            // ici empêchait de conserver le texte brut pour le diagnostic. La
-            // normalisation, elle, est désormais gérée par lib/arabic.ts, qui
-            // applique la bonne selon l'écriture détectée.
-            ocrText = data.text;
+            if (!extraction.success) {
+                ocrFailed = true;
+            } else {
+                ocrText = extraction.rawText;
+
+                // 🆕 [OCR] SI GEMINI A FOURNI LE NOM ARABE, ON L'UTILISE EN
+                // PRIORITÉ — même quand l'agent n'a pas rempli le champ.
+                //
+                // 💡 C'est un gain inattendu : la vérification du nom devient
+                // possible sur un document arabe SANS aucune saisie manuelle.
+                // Le champ reste utile comme référence croisée, mais il n'est
+                // plus indispensable au fonctionnement du contrôle.
+                const documentText = extraction.source === "gemini"
+                    ? [extraction.nameArabic, extraction.nameLatin].filter(Boolean).join(" ")
+                    : extraction.rawText;
+
+                nameMatchDetails = matchNameAgainstOcr(nameForOcrComparison, documentText);
+                isNameOnDoc = nameMatchDetails.matched;
+
+                // 🆕 [OCR] Gemini renvoie le numéro déjà isolé et converti en
+                // chiffres latins : la comparaison est directe. Avec Tesseract,
+                // on repasse par le nettoyage de lib/arabic.ts.
+                isCinOnDoc = extraction.idNumber
+                    ? matchIdNumberAgainstOcr(cin, extraction.idNumber)
+                    : matchIdNumberAgainstOcr(cin, extraction.rawText);
+
+                // 🆕 [OCR] Contrôle d'expiration, impossible jusqu'ici faute de
+                // collecter cette date.
+                documentExpired = isDocumentExpired(extraction.expiryDate);
+            }
 
             // ================================================================
-            // 🆕 [ARABE] JOURNAL DE DIAGNOSTIC — DÉVELOPPEMENT UNIQUEMENT
+            // 🆕 JOURNAL DE DIAGNOSTIC — DÉVELOPPEMENT UNIQUEMENT
             // ================================================================
-            // Voir ce que Tesseract a RÉELLEMENT lu est indispensable : sans ça,
-            // un échec de correspondance est indiagnosticable. On ne sait pas si
-            // le problème vient de la photo, de l'OCR, ou de la saisie de l'agent.
-            //
-            // ⚠️ POURQUOI SEULEMENT EN DÉVELOPPEMENT : ce texte contient le nom
-            // complet et le numéro de CIN du client. L'écrire dans les journaux
-            // de production reviendrait à déverser des données personnelles dans
-            // les logs Vercel — consultables par quiconque a accès au tableau de
-            // bord, et conservés plusieurs jours. C'est exactement le type de
-            // fuite qu'un audit relève.
+            // ⚠️ Ce contenu comprend le nom complet et le numéro de CIN du
+            // client. L'écrire dans les journaux de production reviendrait à
+            // déverser des données personnelles dans les logs Vercel.
             if (process.env.NODE_ENV !== "production") {
                 console.log("\n──────── OCR DIAGNOSTIC ────────");
-                console.log("Texte brut extrait du document :");
-                console.log(ocrText);
+                console.log("Méthode :", extraction?.source ?? "none");
+                if (extraction?.source === "gemini") {
+                    console.log("Nom arabe extrait :", extraction.nameArabic);
+                    console.log("Nom latin extrait :", extraction.nameLatin);
+                    console.log("Numéro extrait    :", extraction.idNumber);
+                    console.log("Date de naissance :", extraction.dateOfBirth);
+                    console.log("Date d'expiration :", extraction.expiryDate);
+                } else {
+                    console.log("Texte brut :", extraction?.rawText?.slice(0, 500));
+                }
                 console.log("────────────────────────────────");
                 console.log(`Nom comparé (${useArabicName ? "ARABE" : "LATIN"}) :`, nameForOcrComparison);
+                if (nameMatchDetails) {
+                    console.log("Résultat nom :", {
+                        trouvés: `${nameMatchDetails.foundCount}/${nameMatchDetails.totalCount}`,
+                        ratio: `${Math.round(nameMatchDetails.ratio * 100)}%`,
+                        manquants: nameMatchDetails.missingWords,
+                        validé: isNameOnDoc,
+                    });
+                }
+                console.log("Résultat CIN :", isCinOnDoc ? "trouvé" : "NON trouvé");
+                console.log("Document expiré :", documentExpired);
                 console.log("────────────────────────────────\n");
             }
-
-            // 🆕 [ARABE] COMPARAISON TOLÉRANTE, au lieu de `.every(includes())`.
-            //
-            // L'ancienne version exigeait que TOUS les mots soient retrouvés, au
-            // caractère près. Trois couches remplacent cette exigence :
-            //   • normalisation des variantes d'écriture (ة↔ه, أ↔ا, ى↔ي)
-            //   • tolérance de 1 à 2 caractères par mot (distance de Levenshtein)
-            //     — c'est ce qui rattrape شهرة lu شهر, lettre finale avalée
-            //   • seuil de 60% des mots retrouvés, pour encaisser un ou deux
-            //     mots totalement illisibles sur une carte usée
-            nameMatchDetails = matchNameAgainstOcr(nameForOcrComparison, ocrText);
-            isNameOnDoc = nameMatchDetails.matched;
-
-            // 🆕 [ARABE] Le numéro de CIN a le même problème, moins visible :
-            // certaines cartes portent des CHIFFRES ARABO-INDIENS (١٤٠٦٦٧١١).
-            // Pour un ordinateur, "٤" et "4" sont aussi différents que "A" et
-            // "Z" — ils occupent des plages Unicode distinctes. L'ancien
-            // `ocrText.includes(cin)` échouait donc sur ces cartes.
-            isCinOnDoc = matchIdNumberAgainstOcr(cin, ocrText);
-
-            if (process.env.NODE_ENV !== "production") {
-                console.log("Résultat nom :", {
-                    trouvés: `${nameMatchDetails.foundCount}/${nameMatchDetails.totalCount}`,
-                    ratio: `${Math.round(nameMatchDetails.ratio * 100)}%`,
-                    manquants: nameMatchDetails.missingWords,
-                    validé: isNameOnDoc,
-                });
-                console.log("Résultat CIN :", isCinOnDoc ? "trouvé" : "NON trouvé", "\n");
-            }
         } catch (error) {
-            // Ce `catch` couvre DEUX familles d'échec : l'OCR lui-même (image
-            // illisible, dépassement du délai) et la signature de l'URL. Dans
-            // les deux cas, la conséquence métier est identique — on ne peut pas
-            // lire le document.
             console.error("Critical OCR Extraction failed. Falling back to manual review:", error);
             ocrFailed = true;
         }
@@ -775,6 +755,11 @@ export async function POST(req: Request) {
             // une lecture réussie. L'ancien code se contentait d'un message dans
             // le rationale, sans aucun impact sur le score.
             ocrUnavailable: ocrFailed,
+            // 🆕 [OCR] Document expiré. `documentExpired === true` uniquement :
+            // `null` signifie "date illisible", pas "document valide". Traiter
+            // une information manquante comme rassurante serait exactement le
+            // travers qu'on a corrigé sur le screening AML.
+            documentExpired: documentExpired === true,
 
             // 🆕 Biométrie graduée.
             faceMismatch,
