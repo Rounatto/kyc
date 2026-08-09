@@ -47,6 +47,79 @@ function getRedis(): Redis {
 }
 
 // ----------------------------------------------------------------------------
+// 🆕 [PHASE B — correctif] LE CLIENT PARESSEUX, POUR DE VRAI          ← NOUVEAU
+// ----------------------------------------------------------------------------
+// ⚠️ LE BUG QUE CECI CORRIGE. L'intention décrite juste au-dessus n'était pas
+// respectée : chaque limiteur plus bas était construit avec `redis: getRedis()`,
+// écrit au niveau du module. Or le corps d'un module s'exécute intégralement à
+// l'IMPORT. `getRedis()` était donc appelé au chargement, pas au premier usage
+// — exactement ce qu'on voulait éviter.
+//
+// Conséquence concrète : sans les variables d'environnement Upstash,
+// `Redis.fromEnv()` lève une exception PENDANT l'évaluation du module. À ce
+// stade, aucune route n'a commencé à s'exécuter : le `try/catch` de
+// `enforceRateLimit` plus bas n'existe pas encore dans la pile d'appel. Le
+// "fail-open" soigneusement documenté ne pouvait donc jamais se déclencher, et
+// toute route important ce fichier répondait 500. C'est ce qui casserait les
+// tests Playwright dans GitHub Actions et le développement local sans .env
+// complet.
+//
+// 💡 LA SOLUTION : un Proxy. C'est un objet qui n'existe pas vraiment — il
+// intercepte chaque lecture de propriété et décide quoi renvoyer sur le moment.
+// Tant que personne ne lit `.eval`, `.get` ou une autre méthode Redis, AUCUNE
+// connexion n'est créée. Le premier accès réel survient à l'intérieur de
+// `limiter.limit()`, donc à l'intérieur du `try/catch` — le fail-open reprend
+// enfin son rôle.
+//
+// 💡 POURQUOI CETTE APPROCHE PLUTÔT QUE DE TRANSFORMER LES LIMITEURS EN
+// FONCTIONS (`getOtpVerifyByIpLimiter()`) : ça marcherait aussi, mais il
+// faudrait modifier les onze exports ET les cinq routes qui les consomment,
+// plus la config NextAuth. Ici, la signature publique du module ne change pas
+// d'un caractère : aucun autre fichier du projet n'est touché.
+let redisInitFailureLogged = false;
+
+const lazyRedis = new Proxy({} as Redis, {
+    get(_target, property) {
+        let client: Redis;
+
+        try {
+            client = getRedis();
+        } catch (error) {
+            // Variables manquantes ou mal formées. On ne relance pas ici : on
+            // renverrait l'erreur au constructeur de Ratelimit, donc de nouveau
+            // au chargement du module — le bug qu'on est en train de corriger.
+            if (!redisInitFailureLogged) {
+                redisInitFailureLogged = true;
+                console.error(
+                    "[RATE-LIMIT] Redis non configuré (UPSTASH_REDIS_REST_URL / _TOKEN) — le rate limiting est DÉSACTIVÉ :",
+                    error
+                );
+            }
+
+            // Les symboles et `then` doivent renvoyer undefined : si on leur
+            // rendait une fonction, JavaScript prendrait cet objet pour une
+            // promesse (« thenable ») et tenterait de l'attendre, ce qui
+            // produirait un blocage très difficile à diagnostiquer.
+            if (typeof property !== "string" || property === "then") {
+                return undefined;
+            }
+
+            // Toute méthode Redis appelée lèvera — et sera rattrapée par le
+            // try/catch de enforceRateLimit, qui laissera passer la requête.
+            return () => {
+                throw new Error("REDIS_UNAVAILABLE");
+            };
+        }
+
+        const value = (client as any)[property];
+        // `.bind(client)` est indispensable : sans lui, la méthode serait
+        // appelée avec le Proxy comme `this` et perdrait l'accès à l'état
+        // interne du vrai client (URL, token, pipeline).
+        return typeof value === "function" ? value.bind(client) : value;
+    },
+});
+
+// ----------------------------------------------------------------------------
 // LES LIMITEURS — un par usage, avec des seuils adaptés à la sensibilité
 // ----------------------------------------------------------------------------
 // Algorithme retenu : "sliding window" (fenêtre glissante).
@@ -64,11 +137,32 @@ function getRedis(): Redis {
 // `analytics: false` — Upstash peut enregistrer des statistiques d'usage, mais
 // chaque enregistrement consomme des commandes Redis supplémentaires. Sur le
 // plan gratuit, autant les réserver au rate limiting lui-même.
+//
+// 🆕 [PHASE B — correctif] Tous les limiteurs reçoivent désormais `lazyRedis`
+// au lieu de `getRedis()`. Voir le bloc Proxy ci-dessus.
 
-// Vérification d'un code OTP, par IP : le plus critique (brute-force direct).
+// Vérification d'un code OTP, par IP.
+//
+// 🆕 [PHASE B — correctif] SEUIL RELEVÉ DE 5 À 15.                    ← MODIFIÉ
+//
+// ⚠️ POURQUOI C'ÉTAIT UN PROBLÈME À 5 : cette valeur était calée exactement sur
+// MAX_OTP_ATTEMPTS (5, dans verify-register). Les deux protections épuisaient
+// donc leur quota au même rythme, et celle-ci n'apportait plus rien — elle
+// dupliquait le compteur par code, en moins précis.
+//
+// ⚠️ ET SURTOUT, ELLE PÉNALISAIT LES BONS UTILISATEURS. Une grande partie du
+// trafic mobile et résidentiel passe par du CGNAT : des centaines d'abonnés
+// partagent une seule IP publique. À 5 essais par quart d'heure, deux personnes
+// s'inscrivant depuis le même réseau se marchent dessus, et la seconde voit un
+// 429 sans avoir rien fait de mal.
+//
+// 💡 CE QUI REND CE RELÈVEMENT SÛR : le compteur lié au code (OtpCode.attempts)
+// détruit le secret au 5e échec, quelle que soit l'origine des requêtes. Il n'y
+// a plus rien à deviner, donc plus besoin que la limite IP fasse ce travail.
+// Elle redevient ce qu'elle doit être : un garde-fou contre les abus grossiers.
 export const otpVerifyByIpLimiter = new Ratelimit({
-    redis: getRedis(),
-    limiter: Ratelimit.slidingWindow(5, "15 m"),
+    redis: lazyRedis,
+    limiter: Ratelimit.slidingWindow(15, "15 m"),
     prefix: "rl:otp-verify:ip",
     analytics: false,
 });
@@ -82,7 +176,7 @@ export const otpVerifyByIpLimiter = new Ratelimit({
 // confortable pour un utilisateur réel (le code n'est valable que 10 minutes),
 // tout en rendant les 1 000 000 de combinaisons totalement hors de portée.
 export const otpVerifyByEmailLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(10, "15 m"),
     prefix: "rl:otp-verify:email",
     analytics: false,
@@ -92,7 +186,7 @@ export const otpVerifyByEmailLimiter = new Ratelimit({
 // ENVOI D'EMAIL réel. Limite volontairement basse — c'est ce qui empêche
 // d'utiliser TrustVerify comme outil de harcèlement par email.
 export const otpRequestLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(3, "1 h"),
     prefix: "rl:otp-request",
     analytics: false,
@@ -100,7 +194,7 @@ export const otpRequestLimiter = new Ratelimit({
 
 // Tentatives de connexion : contre le brute-force de mot de passe.
 export const loginLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(10, "15 m"),
     prefix: "rl:login",
     analytics: false,
@@ -109,7 +203,7 @@ export const loginLimiter = new Ratelimit({
 // Chat IA : chaque message a un coût réel facturé par Google. Limite plus
 // permissive (c'est un usage légitime et interactif), mais bornée.
 export const chatLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(20, "1 m"),
     prefix: "rl:chat",
     analytics: false,
@@ -118,7 +212,7 @@ export const chatLimiter = new Ratelimit({
 // Démarrage d'une connexion par passkey : cette route révèle si un email existe
 // (404 si inconnu), elle est donc utilisable pour cartographier les comptes.
 export const passkeyLoginLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(10, "1 m"),
     prefix: "rl:passkey-login",
     analytics: false,
@@ -130,7 +224,7 @@ export const passkeyLoginLimiter = new Ratelimit({
 // réclamant des réinitialisations en boucle — du harcèlement, aux frais de ton
 // quota Gmail et de la réputation de ton domaine expéditeur.
 export const passwordResetLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(3, "1 h"),
     prefix: "rl:password-reset",
     analytics: false,
@@ -145,7 +239,7 @@ export const passwordResetLimiter = new Ratelimit({
 // impossible à deviner : cette limite ne sert qu'à borner les abus, pas à
 // protéger le secret lui-même.
 export const passwordResetSubmitLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(10, "15 m"),
     prefix: "rl:password-reset-submit",
     analytics: false,
@@ -160,7 +254,7 @@ export const passwordResetSubmitLimiter = new Ratelimit({
 // selfie) sur ce laps de temps. Très large pour un usage réel, très étroit pour
 // un script.
 export const documentUploadLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(30, "10 m"),
     prefix: "rl:doc-upload",
     analytics: false,
@@ -175,7 +269,7 @@ export const documentUploadLimiter = new Ratelimit({
 // 💡 5 tentatives / 15 min : très large pour quelqu'un qui hésite sur son
 // propre mot de passe, très étroit pour un script.
 export const passwordChangeLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(5, "15 m"),
     prefix: "rl:password-change",
     analytics: false,
@@ -189,7 +283,7 @@ export const passwordChangeLimiter = new Ratelimit({
 // 💡 10 par heure : très large pour constituer une équipe en une session,
 // très étroit pour un usage abusif.
 export const teamInviteLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(10, "1 h"),
     prefix: "rl:team-invite",
     analytics: false,
@@ -204,7 +298,7 @@ export const teamInviteLimiter = new Ratelimit({
 // une saisie de mot de passe : partager le quota permettrait de contourner la
 // limite en alternant les deux formulaires.
 export const twoFactorManageLimiter = new Ratelimit({
-    redis: getRedis(),
+    redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(5, "15 m"),
     prefix: "rl:2fa-manage",
     analytics: false,
@@ -251,6 +345,19 @@ export function getClientIp(req: Request): string {
 // journalisée bruyamment pour être détectée.
 // Pour inverser ce choix (refuser plutôt que laisser passer), il suffit de
 // renvoyer une réponse 503 dans le bloc `catch` ci-dessous.
+//
+// 🆕 [PHASE B — correctif] Ce fail-open FONCTIONNE ENFIN dans le cas "Redis mal
+// configuré". Avant le Proxy plus haut, ce cas ne parvenait jamais jusqu'ici :
+// il faisait échouer l'import du module, donc la route entière, en 500.
+// Le cas "Redis configuré mais injoignable" (panne réseau, quota Upstash
+// dépassé), lui, était déjà correctement rattrapé.
+//
+// 💡 ET POUR L'OTP PRÉCISÉMENT, LA CONSÉQUENCE EST MAINTENANT MINEURE : même
+// avec le rate limiting entièrement hors service, le compteur OtpCode.attempts
+// vit en PostgreSQL et continue de détruire le code au 5e échec. C'est
+// exactement le bénéfice de la défense en profondeur — les deux couches ne
+// tombent pas en même temps parce qu'elles ne reposent pas sur la même
+// infrastructure.
 export async function enforceRateLimit(
     limiter: Ratelimit,
     identifier: string
