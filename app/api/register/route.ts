@@ -137,9 +137,28 @@ export async function POST(req: Request) {
 
         // 7. Sauvegarde dans la base de données
         // On utilise "upsert" pour écraser l'ancien code si l'utilisateur a cliqué sur "Renvoyer le code"
+        //
+        // 🆕 [PHASE B — item 4] `attempts: 0` DANS LE BLOC `update` — indispensable.
+        //
+        // Sans cette remise à zéro, le compteur de tentatives serait CUMULATIF
+        // d'un code à l'autre : quelqu'un qui se trompe 4 fois, demande un
+        // nouveau code, puis se trompe une fois de plus verrait ce code tout
+        // neuf désactivé immédiatement. Le champ compte les essais contre UN
+        // secret donné — un nouveau secret repart forcément de zéro.
+        //
+        // ⚠️ Et non, ça n'ouvre pas de porte au brute-force : « demander un
+        // nouveau code » remplace la cible par une valeur aléatoire fraîche.
+        // L'attaquant ne récupère pas 5 essais sur le code qu'il attaquait, il
+        // recommence à zéro sur un autre — et ce renvoi est lui-même plafonné à
+        // 3 par heure par les deux barrages en haut de cette route.
+        //
+        // 💡 `createdAt: new Date()` était déjà là et reste utile : ce champ
+        // documente l'âge du code courant, pas celui de la première demande.
+        // (Rien ne le remet à jour tout seul — @default(now()) ne s'applique qu'à
+        // la création de la ligne, jamais aux mises à jour.)
         await prisma.otpCode.upsert({
             where: { email },
-            update: { code: otpCode, expiresAt, createdAt: new Date() },
+            update: { code: otpCode, expiresAt, createdAt: new Date(), attempts: 0 },
             create: { email, code: otpCode, expiresAt }
         });
 

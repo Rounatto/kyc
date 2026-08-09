@@ -286,6 +286,41 @@ model OtpCode {
   code      String   // Le code à 6 chiffres
   expiresAt DateTime // Date d'expiration (ex: dans 10 minutes)
   createdAt DateTime @default(now())
+
+  // 🆕 [PHASE B — item 4] Nombre de tentatives de vérification déjà consommées
+  // par CE code précis.
+  //
+  // ⚠️ POURQUOI CE CHAMP ALORS QU'UN RATE LIMITING EXISTE DÉJÀ (lib/ratelimit.ts) :
+  // les deux protections ne mesurent pas la même chose, et la première laisse un
+  // trou que la seconde ferme.
+  //   • Le rate limiting compte les requêtes d'un ÉMETTEUR (une IP, une adresse
+  //     email) sur une fenêtre de temps glissante. Passé cette fenêtre, son
+  //     compteur repart de zéro.
+  //   • Ce champ-ci compte les tentatives contre un SECRET. Il ne se réinitialise
+  //     jamais tout seul.
+  //
+  // Le scénario concret que ça bloque : le code est valable 10 minutes, la
+  // fenêtre de rate limiting par email est de 15 minutes pour 10 tentatives.
+  // Un attaquant épuise ses 10 essais, prend un 429... mais le code, lui, est
+  // TOUJOURS vivant pendant les minutes restantes, et son compteur de rate
+  // limiting redeviendra disponible. En multipliant les IP il enchaîne les
+  // salves. Avec ce champ, le code lui-même meurt au 5e échec : peu importe
+  // combien d'IP, de proxies ou de patience l'attaquant a, il n'y a plus rien
+  // à deviner. Il doit repasser par /api/register, lui-même plafonné à 3 envois
+  // par heure — ce qui ramène le débit d'attaque à 15 essais par heure, contre
+  // 1 000 000 de combinaisons possibles.
+  //
+  // 💡 POURQUOI EN BASE ET PAS DANS REDIS : le compteur doit vivre et mourir
+  // EXACTEMENT avec le code qu'il protège. Le stocker sur la même ligne garantit
+  // qu'un nouveau code repart à zéro et qu'un code consommé emporte son compteur
+  // avec lui, sans aucune synchronisation à écrire. Dans Redis, les deux durées
+  // de vie seraient indépendantes — donc désynchronisables.
+  //
+  // 💡 POURQUOI PAS DE `lockedUntil` : le blocage n'a pas besoin d'être temporaire.
+  // Au 5e échec, on SUPPRIME le code. Un verrou à durée déterminée laisserait le
+  // secret en vie pendant le blocage, ce qui est précisément ce qu'on cherche à
+  // éviter — et obligerait à gérer une date de plus.
+  attempts  Int      @default(0)
 }
 
 // =====================================================================

@@ -92,8 +92,10 @@ Le selfie est un **upload de fichier** (`selfieInputRef`, `handleFileChange`), p
 
 ### 🟠 HAUTE — à régler avant tout usage réel
 
-#### H1. Brute-force possible sur l'OTP *(TOUJOURS OUVERT)*
+#### H1. Brute-force possible sur l'OTP *(✅ RÉSOLU — Phase B, items 3 et 4)*
 `verify-register/route.ts` : `if (otpRecord.code !== otpCode)` — **aucun compteur de tentatives**. Code à 6 chiffres = 1 000 000 combinaisons, brute-forçable tant que le code n'a pas expiré (10 min). Il faut : compteur de tentatives (blocage après 5 échecs) + rate limiting sur cette route.
+
+**Correction livrée :** rate limiting par IP et par email (item 3) **+** `OtpCode.attempts` (item 4). Les deux étaient nécessaires, et pour des raisons différentes — le rate limiting borne un *émetteur* sur une fenêtre glissante, il se réinitialise donc tout seul alors que le code, lui, reste vivant. Le compteur borne le nombre de fois qu'un *secret donné* peut être deviné, sans notion de temps ni d'origine : au 5e échec le code est détruit, pas seulement refusé. Débit d'attaque résiduel : 5 essais par code × 3 codes par heure = **15 essais/heure contre 1 000 000 de combinaisons**.
 
 #### H2. L'OTP est généré avec `Math.random()` *(NOUVELLE DÉCOUVERTE)*
 `register/route.ts` : `Math.floor(100000 + Math.random() * 900000)`. `Math.random()` n'est **pas cryptographiquement sûr** — son générateur (V8) est prédictible : à partir de quelques sorties observées, on peut prédire les suivantes. Pour un code de sécurité, c'est une faiblesse réelle. **Fix :** `crypto.randomInt(100000, 1000000)`.
@@ -248,7 +250,7 @@ Notes acquises pendant le déploiement, pour ne pas refaire les mêmes erreurs :
 - [x] **3. Rate limiting global** (`lib/ratelimit.ts` + Upstash Redis) appliqué sur les 5 routes sensibles : `verify-register` (IP + email), `register` (IP + email), login (IP seule — voir note), `chat` (par utilisateur), `passkey/generate-login` (IP)
 - [x] **6. OTP via `crypto.randomInt`** (fait en même temps que le rate limiting, même fichier)
 - [ ] **3bis. Récupération de mot de passe** (faille H8) — 🆕 *omission de la roadmap, priorité rehaussée.* Fonctionnalité de base absente, lien mort menant à une 404 en démo. Plus visible et plus impactant que plusieurs items ci-dessous.
-- [ ] **4. Compteur de tentatives OTP** (blocage après 5 échecs) — *partiellement couvert par le rate limiting de l'item 3, mais un compteur lié au code lui-même reste plus précis*
+- [x] **4. Compteur de tentatives OTP** (`OtpCode.attempts`, blocage et **destruction du code** après 5 échecs) — incrément atomique côté Postgres *avant* la comparaison, remise à zéro à chaque nouveau code envoyé. Trois corrections annexes sont venues avec : comparaison en temps constant (`crypto.timingSafeEqual`), test d'expiration déplacé **avant** la comparaison (l'ordre inverse constituait un oracle : un code expiré mais correct renvoyait un message différent d'un code expiré et faux), et passage des suppressions en `deleteMany` pour ne plus transformer un double-clic en 500.
 - [ ] **5. Générer + hasher les `backupCodes`** à l'activation 2FA — champ présent au schéma mais **jamais utilisé** dans le code ; lock-out vécu en conditions réelles le 22/07
 - [ ] 7. Headers de sécurité dans `next.config.ts` (CSP, HSTS, X-Frame-Options, etc.)
 - [x] **8. Anti-énumération** — `forgot-password` (réponse générique systématique) et `passkey/generate-login` (réponse leurre avec identifiant fictif dérivé par HMAC, donc stable comme un vrai compte). ⚠️ *Ferme l'énumération automatisée par script ; une observation fine dans un vrai navigateur reste théoriquement possible — voir Phase G, flux usernameless.*

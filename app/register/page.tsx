@@ -109,8 +109,27 @@ export default function Register() {
                 setSuccess(true);
                 setTimeout(() => router.push("/login"), 2000);
             } else {
+                // 🆕 [PHASE B — item 4] Le serveur renvoie désormais un message
+                // qui inclut le nombre de tentatives restantes ("il vous reste 3
+                // tentative(s)…"). On le réaffiche tel quel : le décompte est
+                // calculé côté serveur, le dupliquer ici créerait deux sources de
+                // vérité qui divergeraient (l'utilisateur peut avoir un second
+                // onglet ouvert, ou le compteur peut avoir été remis à zéro par
+                // un renvoi de code).
                 setError(data.error || "Code de vérification invalide.");
                 setOtpCode("");
+
+                // 🆕 Code désactivé après 5 échecs : le seul recours est d'en
+                // demander un nouveau. On libère donc le cooldown de renvoi
+                // immédiatement — laisser l'utilisateur patienter 30 s devant un
+                // champ devenu inutile serait absurde.
+                //
+                // 💡 Aucun risque d'abus : ce cooldown n'est qu'un confort côté
+                // client, la vraie limite (3 envois par heure) est appliquée par
+                // le serveur dans /api/register et ne dépend pas de ce state.
+                if (data.code === "OTP_LOCKED") {
+                    setResendCooldown(0);
+                }
             }
         } catch (err) {
             setError("Impossible de se connecter au serveur.");
