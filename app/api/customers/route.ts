@@ -158,6 +158,33 @@ const ID_FORMATS: Record<string, RegExp> = {
 // contrôle n'a pas pu s'exécuter, on le DIT, et le moteur de règles impose une
 // revue manuelle (+45 points). C'est le principe du FAIL-CLOSED : en cas de
 // doute, on ne laisse pas passer silencieusement.
+// Vérifie si un nom apparaît sur des listes de sanctions financières (AML) ou
+// est une "Personne Politiquement Exposée" (PEP) — obligation légale en KYC.
+//
+// 🆕 [AUDIT MOTEUR] LA LISTE DE REPLI LOCALE A ÉTÉ SUPPRIMÉE, et le
+// comportement en cas de panne est inversé. Voici pourquoi.
+//
+// ❌ CE QUI EXISTAIT : une liste de neuf mots codés en dur
+// (["malicious", "fraud", "vladimir", "putin", ...]) comparés par SOUS-CHAÎNE.
+// Elle produisait exactement l'inverse de ce qu'on attend d'un filet de
+// sécurité : des FAUX POSITIFS sur des clients innocents (un "Vladimir Ben
+// Salah" tunisien était signalé comme correspondance sanctions ET comme PEP,
+// à cause de son prénom) et AUCUN vrai positif.
+//
+// ❌ PIRE ENCORE — LE "FAIL-OPEN" : quand l'API ne répondait pas et que la
+// liste locale ne trouvait rien, la fonction renvoyait `sanctioned: false`. Le
+// moteur de règles ne voyait donc AUCUNE différence entre "vérifié, rien
+// trouvé" et "pas vérifié du tout".
+//
+// ✅ CE QUI LE REMPLACE : un drapeau `screeningFailed` explicite. Quand le
+// contrôle n'a pas pu s'exécuter, on le DIT, et le moteur de règles impose une
+// revue manuelle (+45 points).
+//
+// 🆕 [FIX API] DEUX BUGS CORRIGÉS QUI EMPÊCHAIENT TOUT APPEL D'ABOUTIR DEPUIS
+// LE PREMIER JOUR — détails à leur emplacement plus bas. Conséquence : aucun
+// nom n'avait jamais été comparé à une liste de sanctions. L'ancien code
+// retombait silencieusement sur la liste de neuf mots, ce qui masquait
+// complètement le problème.
 async function performGlobalSanctionsLookup(name: string, country: string) {
     let apiSanctioned = false;
     let apiPep = false;
@@ -170,9 +197,29 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
     let screeningFailed = true;
     let lookupSource = "Screening unavailable";
 
-    try {
-        const apiKey = process.env.OPENSANCTIONS_API_KEY;
+    const apiKey = process.env.OPENSANCTIONS_API_KEY;
 
+    // 🆕 [FIX API] COURT-CIRCUIT SI LA CLÉ EST ABSENTE.
+    //
+    // Sans ce garde-fou, on partait quand même en appel réseau — avec un
+    // en-tête d'autorisation vide — pour récolter un 401 après plusieurs
+    // secondes d'attente. C'est du temps perdu sur un budget d'exécution déjà
+    // tendu (60s au total sur Vercel, dont 35 réservées à l'OCR).
+    //
+    // 💡 Le résultat métier est identique : screening non effectué, revue
+    // manuelle imposée. On l'obtient simplement sans gaspiller de temps.
+    if (!apiKey) {
+        console.warn("[AML] OPENSANCTIONS_API_KEY is missing — screening skipped entirely.");
+        return {
+            sanctioned: false,
+            isPep: false,
+            screeningFailed: true,
+            source: "Screening unavailable (no API key configured)",
+            confidenceScore: 0,
+        };
+    }
+
+    try {
         const response = await fetch("https://api.opensanctions.org/match/default", {
             method: "POST",
             // 🆕 [FIX PROD] Abandon au bout de 8 secondes. Sans ce garde-fou, une
@@ -181,7 +228,18 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
             signal: AbortSignal.timeout(8000),
             headers: {
                 "Content-Type": "application/json",
-                ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
+                // 🆕 [FIX API — BUG 1/2] Le préfixe était `Bearer`, or
+                // OpenSanctions attend `ApiKey`.
+                //
+                // ⚠️ C'ÉTAIT LA CAUSE DU 401. Le schéma "Bearer" est celui
+                // d'OAuth 2.0, tellement répandu qu'on l'écrit par réflexe —
+                // mais chaque API choisit son propre mot-clé, et celui-ci fait
+                // partie de la valeur envoyée : le serveur compare la chaîne
+                // entière. `Bearer abc123` et `ApiKey abc123` sont donc deux
+                // valeurs différentes, même avec une clé parfaitement valide.
+                //
+                // Source : opensanctions.org/docs/api/authentication/
+                "Authorization": `ApiKey ${apiKey}`,
             },
             body: JSON.stringify({
                 queries: {
@@ -198,7 +256,21 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
 
         if (response.ok) {
             const data = await response.json();
-            const results = data.queries?.q1?.results || [];
+
+            // 🆕 [FIX API — BUG 2/2] La réponse se lit dans `responses`, pas
+            // dans `queries`.
+            //
+            // ⚠️ L'API est ASYMÉTRIQUE, et c'est le piège : on ENVOIE un objet
+            // `queries`, mais elle RÉPOND dans un objet `responses`. Les clés
+            // internes (`q1` ici) sont conservées, ce qui permet d'envoyer
+            // plusieurs recherches d'un coup et de retrouver chaque résultat.
+            //
+            // L'ancien code lisait `data.queries?.q1?.results` — une clé qui
+            // n'existe tout simplement pas dans la réponse. Le `|| []` faisait
+            // le reste : jamais d'erreur, jamais de résultat, aucun signe
+            // extérieur de dysfonctionnement. Même avec une clé valide, le
+            // screening n'aurait rien trouvé.
+            const results = data.responses?.q1?.results || [];
 
             // 🆕 LE SEUL ENDROIT OÙ LE SCREENING EST DÉCLARÉ RÉUSSI.
             // Une réponse HTTP 200 signifie que l'API a bel et bien comparé le
@@ -208,6 +280,23 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
             // différentes, indiscernables jusqu'ici.
             screeningFailed = false;
             lookupSource = "OpenSanctions API (Live Production Index)";
+
+            // 🆕 [FIX API] Journal de diagnostic — développement uniquement.
+            //
+            // ⚠️ Ce texte contient le nom du client. L'écrire dans les journaux
+            // de production reviendrait à déverser des données personnelles
+            // dans les logs Vercel, consultables par quiconque a accès au
+            // tableau de bord. Même précaution que pour le journal OCR.
+            if (process.env.NODE_ENV !== "production") {
+                console.log("\n──────── AML DIAGNOSTIC ────────");
+                console.log("Nom recherché :", name);
+                console.log("Correspondances trouvées :", results.length);
+                if (results.length > 0) {
+                    console.log("Meilleur score :", results[0].score);
+                    console.log("Sujets associés :", results[0].topics ?? results[0].properties?.topics);
+                }
+                console.log("────────────────────────────────\n");
+            }
 
             if (results.length > 0) {
                 const sortedCandidates = results.sort((a: any, b: any) => b.score - a.score);
@@ -227,10 +316,17 @@ async function performGlobalSanctionsLookup(name: string, country: string) {
                 }
             }
         } else {
-            // 🆕 Une réponse non-200 (401 clé invalide, 429 quota dépassé, 500
-            // panne serveur) laisse `screeningFailed` à `true`. L'ancien code se
-            // contentait d'un console.warn et poursuivait comme si de rien n'était.
-            console.warn("[AML] OpenSanctions HTTP error:", response.status);
+            // 🆕 [FIX API] On lit le corps de la réponse d'erreur.
+            //
+            // 💡 Sans ce détail, un 401 pouvait signifier trois choses très
+            // différentes — clé expirée, mauvais format d'en-tête, compte
+            // suspendu — sans aucun moyen de trancher. C'est précisément ce qui
+            // a rendu le diagnostic de ces deux bugs si long.
+            //
+            // 💡 Rappel des codes attendus : 401 = clé refusée,
+            // 429 = quota mensuel épuisé (il se réinitialise au 1er du mois).
+            const errorBody = await response.text().catch(() => "");
+            console.warn("[AML] OpenSanctions HTTP error:", response.status, errorBody.slice(0, 300));
         }
     } catch (error) {
         // Timeout, DNS, réseau coupé : `screeningFailed` reste à `true`.
