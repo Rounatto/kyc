@@ -4,10 +4,9 @@
 // 🆕 FORMULAIRE DE NOUVELLE VÉRIFICATION KYC — LE CŒUR DU PRODUIT
 // ============================================================================
 // Flux complet : formulaire d'identité → upload pièce d'identité + selfie
-// (Supabase Storage, bucket PRIVÉ) → comparaison biométrique locale
-// (face-api.js, dans le navigateur) → POST /api/customers qui relance TOUT le
-// pipeline serveur (OCR, AML, moteur de règles — voir Lot 4) avec le score
-// biométrique déjà calculé ici comme simple donnée d'entrée.
+// (Supabase Storage, bucket PRIVÉ) → POST /api/customers qui exécute TOUT le
+// pipeline de vérification côté serveur (OCR, AML, comparaison faciale, moteur
+// de règles).
 //
 // ✅ [PHASE B — RÉSOLU] Les documents ne partent plus sur uploadthing derrière
 // des URLs publiques et permanentes. Ils vont dans un bucket Supabase privé, et
@@ -15,23 +14,46 @@
 // des coordonnées internes non adressables, inutilisables sans une URL signée
 // délivrée par le serveur après contrôle du companyId.
 //
-// 🚨 FAILLE LIVENESS TOUJOURS PRÉSENTE (Phase C, non traitée ici) :
+// ✅ [PHASE C — RÉSOLU] LA BIOMÉTRIE A QUITTÉ CE FICHIER.
+//
+// ❌ CE QUI EXISTAIT ICI : face-api.js chargeait trois réseaux de neurones dans
+// le navigateur, comparait les deux images en mémoire, et le score obtenu était
+// envoyé au serveur dans le corps de la requête. Le serveur le recopiait tel
+// quel dans son moteur de règles.
+//
+// ⚠️ POURQUOI C'ÉTAIT UNE FAILLE ET PAS UN DÉTAIL : il suffisait d'ouvrir les
+// outils de développement, d'intercepter l'appel à /api/customers et de
+// remplacer `biometricScore: 12.4` par `biometricScore: 99.9`. Deux photos de
+// personnes totalement différentes passaient alors sans la moindre pénalité.
+//
+// 💡 LA RÈGLE GÉNÉRALE : un contrôle de sécurité exécuté sur une machine que
+// l'utilisateur contrôle n'est pas un contrôle, c'est un affichage.
+//
+// ✅ MAINTENANT : le serveur télécharge lui-même les deux images depuis le
+// bucket privé et fait réaliser la comparaison par Gemini Vision
+// (lib/face-match.ts). Le navigateur n'a plus aucune influence sur le résultat.
+//
+// 💡 BÉNÉFICE SECONDAIRE, LOIN D'ÊTRE NÉGLIGEABLE : les trois modèles pesaient
+// plusieurs mégaoctets, téléchargés à CHAQUE ouverture de cette page. Sur une
+// connexion mobile — le cas courant pour un agent en agence — c'était plusieurs
+// secondes d'attente pour un calcul que le serveur ignore désormais.
+//
+// 🚨 FAILLE LIVENESS TOUJOURS PRÉSENTE (Phase C — point 4, non traité) :
 // aucune trace de `getUserMedia`, de `<video>` ou de capture caméra en direct
 // dans ce fichier. Le "selfie" reste un `<input type="file">` classique —
 // EXACTEMENT le même mécanisme que l'upload de la pièce d'identité.
 // Concrètement : n'importe qui peut uploader une photo trouvée en ligne de la
-// personne à la place d'un vrai selfie, et `compareFaces` comparera gentiment
-// deux fichiers statiques sans jamais savoir si un humain était devant un
-// appareil photo. Il n'y a ni challenge-response (tourner la tête, cligner des
-// yeux), ni détection d'écran/photo-d'une-photo (anti-spoofing). C'est le plus
-// gros écart restant avec un vrai acteur KYC (Sumsub, Onfido, Veriff).
+// personne à la place d'un vrai selfie. Le serveur comparera deux images fixes
+// sans jamais savoir si un humain était devant un appareil photo. Il n'y a ni
+// challenge-response (tourner la tête, cligner des yeux), ni détection
+// d'écran/photo-d'une-photo. C'est le plus gros écart restant avec un vrai
+// acteur KYC (Sumsub, Onfido, Veriff).
 //
 // Autre détail : le sélecteur "Procedure Type" propose "Individual KYC
 // (Enhanced - Biometrics)" comme option distincte de "Standard", mais AUCUNE
 // branche du code ne change de comportement selon cette valeur — la
-// comparaison faciale (`compareFaces`) s'exécute de toute façon dans tous les
-// cas où un selfie est fourni. Le champ est cosmétique, envoyé tel quel au
-// serveur (`type`) sans influencer la logique de vérification.
+// comparaison faciale s'exécute côté serveur dans tous les cas. Le champ est
+// cosmétique, envoyé tel quel au serveur (`type`).
 import { useState, useRef, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -42,7 +64,9 @@ import { toast } from "sonner";
 import { getCountries, getCountryCallingCode } from 'react-phone-number-input/input';
 import en from 'react-phone-number-input/locale/en';
 
-import * as faceapi from 'face-api.js';
+// 🆕 [PHASE C] `import * as faceapi from 'face-api.js'` SUPPRIMÉ.
+// ⚠️ Pense à faire `npm uninstall face-api.js` et à supprimer le dossier
+// /public/models : ils ne servent plus à rien et alourdissent le dépôt.
 
 // ============================================================================
 // 🆕 [PHASE B] CONTRAINTES DE FICHIER — ALIGNÉES SUR LE BUCKET SUPABASE
@@ -107,44 +131,40 @@ export default function NewVerificationPage() {
 
     const callingCode = nationality ? getCountryCallingCode(nationality as any) : "";
 
-    // Au montage : vérifie d'abord le quota (paywall) — si l'entreprise a
-    // atteint sa limite, on affiche le mur de paiement SANS charger les
-    // modèles d'IA (inutile de télécharger plusieurs Mo de réseaux de
-    // neurones si l'utilisateur ne pourra de toute façon rien soumettre).
+    // ========================================================================
+    // 🆕 [PHASE C] CE useEffect NE FAIT PLUS QU'UNE SEULE CHOSE
+    // ========================================================================
+    // Il vérifiait le quota PUIS téléchargeait trois réseaux de neurones
+    // (SSD MobileNet, landmarks 68 points, encodeur de visages) depuis
+    // /public/models. Ce second temps a disparu avec le passage de la biométrie
+    // côté serveur.
+    //
+    // 💡 L'ancien enchaînement avait une logique — ne pas charger plusieurs Mo
+    // de modèles si le paywall allait de toute façon bloquer la soumission.
+    // Cette optimisation n'a plus d'objet : il n'y a plus rien à charger.
     useEffect(() => {
-        const initializePage = async () => {
+        const checkQuota = async () => {
             try {
-                // 1. Vérification du Billing (Paywall Check)
                 const quotaRes = await fetch("/api/billing/quota");
                 if (quotaRes.ok) {
                     const quotaData = await quotaRes.json();
                     setUsageStats({ current: quotaData.current, limit: quotaData.limit });
                     if (quotaData.isLocked) {
                         setQuotaReached(true);
-                        setIsCheckingQuota(false);
-                        return; // On stoppe ici, inutile de charger l'IA si c'est bloqué
                     }
                 }
-                
-                setIsCheckingQuota(false);
-
-                // 2. Chargement de l'IA (Seulement si le quota le permet) : 3 réseaux
-                // de neurones pré-entraînés servis en fichiers statiques depuis
-                // /public/models — détection de visage (SSD MobileNet), 68 points
-                // de repère du visage (landmarks), et l'encodeur qui transforme un
-                // visage en vecteur numérique (descriptor) comparable mathématiquement.
-                await Promise.all([
-                    faceapi.nets.ssdMobilenetv1.loadFromUri('/models'),
-                    faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
-                    faceapi.nets.faceRecognitionNet.loadFromUri('/models')
-                ]);
-                console.log("✅ Deep Learning Vision Models loaded successfully.");
             } catch (err) {
-                console.error("⚠️ System initialization error", err);
+                // 💡 Échec NON bloquant, et c'est délibéré : si l'appel au quota
+                // échoue, on laisse l'agent remplir le formulaire. Le serveur
+                // revérifie de toute façon le quota à la soumission et répond 402
+                // le cas échéant — un incident réseau ne doit pas condamner une
+                // page entière alors que la vraie barrière est ailleurs.
+                console.error("⚠️ Quota check failed:", err);
+            } finally {
                 setIsCheckingQuota(false);
             }
         };
-        initializePage();
+        checkQuota();
     }, []);
 
     // ========================================================================
@@ -215,66 +235,30 @@ export default function NewVerificationPage() {
         return path;
     };
 
-    // Compare le visage détecté sur la pièce d'identité et celui du "selfie"
-    // (rappel : n'importe quelle image uploadée, pas forcément une vraie
-    // capture live — voir la note en tête de fichier).
+    // 🆕 [PHASE C] LA FONCTION `compareFaces` A ÉTÉ SUPPRIMÉE.
     //
-    // 💡 Les deux paramètres sont des URLs `blob:` LOCALES, créées par
-    // URL.createObjectURL() dans handleFileChange — jamais des adresses
-    // distantes. La comparaison se fait donc entièrement en mémoire, sans le
-    // moindre téléchargement. C'est aussi ce qui la rend compatible avec le
-    // stockage privé : le navigateur n'a jamais besoin de relire le fichier
-    // depuis Supabase.
+    // Elle chargeait les deux images en mémoire, extrayait un "descriptor" de
+    // 128 nombres par visage, calculait la distance euclidienne entre les deux
+    // vecteurs et la convertissait en pourcentage via `(1 - distance/1.2) * 100`.
     //
-    // Les images sont chargées comme de simples <img> DOM (pas de flux vidéo),
-    // passées au détecteur, puis chaque visage est réduit à un "descriptor"
-    // (vecteur de 128 nombres qui encode les traits du visage). La distance
-    // euclidienne entre les deux vecteurs mesure la dissemblance ; elle est
-    // ensuite transformée en un score de similarité 0-100% via une formule
-    // linéaire calibrée empiriquement (distance de 1.2 ≈ 0% de similarité).
-    // Retourne `null` si un visage n'est détecté sur aucune des deux images
-    // (traité côté serveur comme "vérification biométrique ignorée").
-    const compareFaces = async (idUrl: string, selfieUrl: string): Promise<number | null> => {
-        try {
-            // 💡 `crossOrigin` n'a plus d'utilité avec des URLs blob: locales
-            // (aucune requête réseau, donc aucune politique CORS en jeu). On le
-            // conserve : inoffensif, et utile si un jour on repasse par une URL
-            // distante signée.
-            const idImg = new Image(); idImg.src = idUrl; idImg.crossOrigin = "anonymous";
-            const selfieImg = new Image(); selfieImg.src = selfieUrl; selfieImg.crossOrigin = "anonymous";
-
-            await Promise.all([
-                new Promise((resolve, reject) => { idImg.onload = resolve; idImg.onerror = reject; }),
-                new Promise((resolve, reject) => { selfieImg.onload = resolve; selfieImg.onerror = reject; })
-            ]);
-
-            const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
-
-            const idFace = await faceapi.detectSingleFace(idImg, options).withFaceLandmarks().withFaceDescriptor();
-            const selfieFace = await faceapi.detectSingleFace(selfieImg, options).withFaceLandmarks().withFaceDescriptor();
-
-            if (!idFace || !selfieFace) return null;
-
-            const distance = faceapi.euclideanDistance(idFace.descriptor, selfieFace.descriptor);
-            let similarity = Math.max(0, Math.min(100, (1 - (distance / 1.2)) * 100));
-
-            return similarity;
-        } catch (err) {
-            console.error("❌ Erreur critique dans le moteur biométrique :", err);
-            return null;
-        }
-    };
+    // 💡 Le calcul était mathématiquement correct — ce n'est pas ce qui posait
+    // problème. Le défaut était son EMPLACEMENT : produit sur la machine de
+    // l'utilisateur, le résultat était modifiable par l'utilisateur. Un contrôle
+    // dont on peut choisir le résultat n'est pas un contrôle.
+    //
+    // Son remplaçant vit dans lib/face-match.ts, exécuté côté serveur sur des
+    // images téléchargées directement depuis le bucket privé.
 
     // Validation client seulement — un attaquant appelant /api/customers
     // directement (sans passer par ce formulaire) contournerait tout ceci,
-    // mais le serveur revalide indépendamment via Zod (voir customers/route.ts,
-    // Lot 4), donc cette couche n'est là que pour le confort/feedback utilisateur.
+    // mais le serveur revalide indépendamment via Zod (voir customers/route.ts),
+    // donc cette couche n'est là que pour le confort/feedback utilisateur.
     // Les règles de format (CIN/passeport/téléphone) sont spécifiques par pays
     // (ex: CIN tunisienne = exactement 8 chiffres) avec un repli générique
     // pour les nationalités non explicitement gérées.
     const validateForm = () => {
         const errors: { [key: string]: string } = {};
-        
+
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) errors.email = "Invalid email format.";
         // 🆕 [ARABE] Si le champ est rempli, il DOIT contenir de l'arabe.
@@ -352,9 +336,10 @@ export default function NewVerificationPage() {
 
         setGlobalError("");
 
-        // 💡 Cette URL `blob:` sert à DEUX choses : l'aperçu affiché dans le
-        // formulaire, et l'analyse biométrique (compareFaces). Elle pointe vers
-        // la mémoire du navigateur, jamais vers le réseau.
+        // 🆕 [PHASE C] Cette URL `blob:` ne sert PLUS QU'À L'APERÇU affiché dans
+        // le formulaire. Elle alimentait aussi `compareFaces` — c'est terminé,
+        // le serveur relit les images depuis le bucket. Elle pointe vers la
+        // mémoire du navigateur, jamais vers le réseau.
         const previewUrl = URL.createObjectURL(file);
 
         if (type === "idCard") {
@@ -369,7 +354,7 @@ export default function NewVerificationPage() {
     };
 
     const removeFile = (type: "idCard" | "selfie", e: React.MouseEvent) => {
-        e.stopPropagation(); 
+        e.stopPropagation();
         if (type === "idCard") {
             setIdCardFile(null);
             setIdCardPreview(null);
@@ -383,14 +368,14 @@ export default function NewVerificationPage() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        
+
         if (!validateForm()) {
             setGlobalError("Please fix the errors in the form before submitting.");
             return;
         }
 
         setLoading(true);
-        setGlobalError(""); 
+        setGlobalError("");
 
         let finalPhoneNumber = "Not specified";
         if (nationality && localPhone) {
@@ -400,7 +385,7 @@ export default function NewVerificationPage() {
         const registrationPromise = new Promise(async (resolve, reject) => {
             try {
                 setLoadingText("Uploading secure documents...");
-                
+
                 // 🆕 [PHASE B] On récupère des CHEMINS, plus des URLs.
                 // La différence est fondamentale : une URL est directement
                 // adressable (la coller dans un navigateur affiche le fichier),
@@ -409,9 +394,9 @@ export default function NewVerificationPage() {
                 let uploadedSelfiePath = "";
 
                 // 💡 Les deux envois sont lancés EN PARALLÈLE (Promise.all) au
-                // lieu de l'un après l'autre comme avant. Deux transferts de
-                // 4 Mo en série sur une connexion mobile, c'est une attente
-                // deux fois plus longue pour rien : ils sont indépendants.
+                // lieu de l'un après l'autre. Deux transferts de 4 Mo en série
+                // sur une connexion mobile, c'est une attente deux fois plus
+                // longue pour rien : ils sont indépendants.
                 if (idCardFile && selfieFile) {
                     const [idPath, selfiePath] = await Promise.all([
                         uploadDocument(idCardFile, "idcard"),
@@ -425,23 +410,19 @@ export default function NewVerificationPage() {
                     throw new Error("Document upload failed. Please try again.");
                 }
 
-                // Le score biométrique est calculé ICI, entièrement dans le
-                // navigateur, à partir des fichiers LOCAUX, puis envoyé au
-                // serveur dans le body JSON juste en dessous. Le serveur
-                // (customers/route.ts) fait confiance à ce chiffre tel quel —
-                // c'est le point d'origine exact de la faille "biometricScore
-                // contournable" : rien n'empêche d'intercepter cette requête et
-                // de remplacer la valeur calculée par 99.9 avant l'envoi.
-                // ⚠️ Correction prévue en Phase C (recalcul côté serveur), en
-                // même temps que le liveness.
-                setLoadingText("Executing Deep Learning Biometrics...");
-                let biometricScore: number | null = null;
-                if (idCardPreview && selfiePreview) {
-                    biometricScore = await compareFaces(idCardPreview, selfiePreview);
-                }
+                // 🆕 [PHASE C] L'ÉTAPE BIOMÉTRIQUE A DISPARU D'ICI.
+                //
+                // Il y avait à cet endroit un appel à `compareFaces` qui produisait
+                // un score, transmis ensuite dans le corps de la requête. Le
+                // serveur le prenait pour argent comptant — d'où la faille.
+                //
+                // 💡 Le texte de chargement mentionne désormais la comparaison
+                // faciale parce qu'elle a bien lieu, simplement ailleurs : c'est
+                // le serveur qui la réalise pendant cette requête. L'utilisateur
+                // n'a pas à savoir OÙ tourne le calcul, mais il doit comprendre
+                // pourquoi il attend.
+                setLoadingText("Running identity checks (OCR, biometrics, AML)...");
 
-                setLoadingText("Analyzing AI Risk & Creating Profile...");
-                
                 const response = await fetch("/api/customers", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -459,16 +440,15 @@ export default function NewVerificationPage() {
                         nationality: nationality ? en[nationality as keyof typeof en] : "Not specified",
                         dateOfBirth,
                         phoneNumber: finalPhoneNumber,
-                        // 🆕 [PHASE B] `userId` retiré du corps de la requête.
-                        // Le serveur dérive de toute façon l'identité de l'agent
-                        // de la session (`guard.userId`) et ignorait déjà cette
-                        // valeur. La laisser laissait croire que le client peut
-                        // désigner l'auteur d'un dossier — exactement ce qu'on a
-                        // corrigé côté serveur pour l'intégrité de la piste
-                        // d'audit. Autant que le code dise la vérité.
                         idCardPath: uploadedIdCardPath,
                         selfiePath: uploadedSelfiePath,
-                        biometricScore: biometricScore 
+                        // 🆕 [PHASE C] `biometricScore` RETIRÉ du corps de la requête.
+                        //
+                        // Le schéma Zod du serveur l'accepte toujours (pour ne pas
+                        // casser une version du frontend restée en cache) mais ne le
+                        // lit nulle part. L'envoyer quand même laisserait croire
+                        // qu'il compte encore — autant que le code dise la vérité,
+                        // exactement comme pour `userId` retiré en Phase B.
                     }),
                 });
 
@@ -514,14 +494,14 @@ export default function NewVerificationPage() {
     return (
         <div className="w-full min-h-screen bg-gray-50 pb-12">
             <Header />
-            
+
             <div className="max-w-4xl mx-auto px-4 py-8">
                 <Link href="/dashboard/customers" className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-blue-700 font-medium mb-6 transition-colors">
                     <ArrowLeft className="w-4 h-4" /> Back to Directory
                 </Link>
 
                 <div className="relative bg-white border border-gray-200 shadow-sm rounded-xl p-6 md:p-8 overflow-hidden">
-                    
+
                     {/* 💡 LE FAMEUX PAYWALL */}
                     {quotaReached && (
                         <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center p-6">
@@ -556,19 +536,19 @@ export default function NewVerificationPage() {
                                 </div>
                             )}
                         </div>
-                        
+
                         {globalError && (
                             <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg flex items-start gap-3 text-sm font-medium">
-                                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" /> 
+                                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
                                 <span>{globalError}</span>
                             </div>
                         )}
 
                         <form onSubmit={handleSubmit} className="flex flex-col gap-8">
-                            
+
                             <div className="flex flex-col gap-5">
                                 <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">1. Personal Information</h3>
-                                
+
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     <div className="flex-1 flex flex-col gap-2">
                                         <label className="text-sm font-semibold text-gray-700">Full Name <span className="text-red-500">*</span></label>
@@ -636,7 +616,7 @@ export default function NewVerificationPage() {
                                         </p>
                                     )}
                                 </div>
-                                
+
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     <div className="flex-1 flex flex-col gap-2">
                                         <label className="text-sm font-semibold text-gray-700">Nationality <span className="text-red-500">*</span></label>
@@ -667,7 +647,7 @@ export default function NewVerificationPage() {
                                         {fieldErrors.localPhone && <p className="text-xs text-red-600 font-medium">{fieldErrors.localPhone}</p>}
                                     </div>
                                 </div>
-                                
+
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     <div className="flex-1 flex flex-col gap-2">
                                         <label className="text-sm font-semibold text-gray-700">Date of Birth</label>
@@ -683,7 +663,7 @@ export default function NewVerificationPage() {
 
                             <div className="flex flex-col gap-5">
                                 <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">2. Official Identification</h3>
-                                
+
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     <div className="w-full sm:w-1/3 flex flex-col gap-2">
                                         <label className="text-sm font-semibold text-gray-700">Document Type <span className="text-red-500">*</span></label>
@@ -707,7 +687,7 @@ export default function NewVerificationPage() {
 
                             <div className="flex flex-col gap-5">
                                 <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">3. Document Vault</h3>
-                                
+
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     {/* Upload ID Card */}
                                     <div className="flex-1 flex flex-col gap-1">
@@ -715,7 +695,7 @@ export default function NewVerificationPage() {
                                             `image/*` : le sélecteur de fichiers du système filtre directement,
                                             l'utilisateur ne peut plus choisir un format qui sera refusé ensuite. */}
                                         <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} disabled={loading} />
-                                        <div 
+                                        <div
                                             onClick={() => !loading && idCardInputRef.current?.click()}
                                             className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
                                         >
@@ -750,7 +730,7 @@ export default function NewVerificationPage() {
                                     {/* Upload Selfie */}
                                     <div className="flex-1 flex flex-col gap-1">
                                         <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} disabled={loading} />
-                                        <div 
+                                        <div
                                             onClick={() => !loading && selfieInputRef.current?.click()}
                                             className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.selfieFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
                                         >
@@ -785,7 +765,7 @@ export default function NewVerificationPage() {
 
                             <div className="flex flex-col gap-4 bg-gray-50 p-5 rounded-xl border border-gray-200 mt-2">
                                 <h3 className="text-xs uppercase tracking-wider font-bold text-gray-500 mb-1">System Processing Settings</h3>
-                                
+
                                 <div className="flex flex-col sm:flex-row gap-5">
                                     <div className="flex-1 flex flex-col gap-2">
                                         <label className="text-xs font-semibold text-gray-700">Procedure Type</label>
