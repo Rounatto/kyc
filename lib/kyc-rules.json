@@ -61,6 +61,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "dobMissing", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "AGE VERIFICATION IMPOSSIBLE: No date of birth was provided in the application, and none could be read from the identity document. The mandatory minor check could NOT be performed for this applicant. A date of birth must be obtained and the file re-assessed before any approval."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [
         { "fact": "ocrNameMismatch", "operator": "equal", "value": true },
         { "fact": "faceMismatch", "operator": "equal", "value": true }
@@ -91,13 +103,28 @@
   },
   {
     "conditions": {
+      "all": [
+        { "fact": "isYoungAdult", "operator": "equal", "value": true },
+        { "fact": "isDisposableEmail", "operator": "equal", "value": true }
+      ]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 30,
+        "message": "MULE ACCOUNT PATTERN: A young-adult profile combined with a disposable email address matches the documented recruitment pattern for money-mule accounts. Neither signal is conclusive alone; together they warrant enhanced due diligence."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "faceMatchFailed", "operator": "equal", "value": true }]
     },
     "event": {
       "type": "risk_penalty",
       "params": {
         "points": 55,
-        "message": "BIOMETRIC CRITICAL ALERT: Face similarity below 40%. The person in the selfie is almost certainly not the document holder."
+        "message": "BIOMETRIC CRITICAL ALERT: Server-side facial comparison concluded that the person in the selfie is not the document holder."
       }
     }
   },
@@ -109,7 +136,7 @@
       "type": "risk_penalty",
       "params": {
         "points": 35,
-        "message": "BIOMETRIC WARNING: Face similarity between 40% and 60%. Inconclusive match — manual visual comparison required."
+        "message": "BIOMETRIC WARNING: The facial comparison could not be settled automatically. Manual visual comparison required."
       }
     }
   },
@@ -121,7 +148,7 @@
       "type": "risk_penalty",
       "params": {
         "points": 15,
-        "message": "BIOMETRIC NOTICE: Face similarity between 60% and 75%. Match accepted but below the high-confidence threshold."
+        "message": "BIOMETRIC NOTICE: Likely the same person, but below the high-confidence threshold. Match accepted with reservation."
       }
     }
   },
@@ -211,18 +238,6 @@
   },
   {
     "conditions": {
-      "all": [{ "fact": "isYoungAdult", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 20,
-        "message": "Risk Warning: Young adult profile (< 25 years old). Statistical volatility threshold applied."
-      }
-    }
-  },
-  {
-    "conditions": {
       "all": [{ "fact": "missingPhone", "operator": "equal", "value": true }]
     },
     "event": {
@@ -254,6 +269,18 @@
       "params": {
         "points": 45,
         "message": "DATA MISMATCH: The date of birth on the document does not match the one declared in the application."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isYoungAdult", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "informational",
+      "params": {
+        "points": 0,
+        "message": "PROFILE NOTE (informational, no score impact): Applicant is under 25. Recorded for audit purposes only. Age alone is not treated as a risk factor; it is scored only in combination with other indicators."
       }
     }
   },
