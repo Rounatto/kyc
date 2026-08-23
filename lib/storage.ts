@@ -123,7 +123,25 @@ function getStorageClient(): SupabaseClient {
 // le client : un nom de fichier est une donnée utilisateur, potentiellement
 // piégée ("../../autre-dossier/fichier.jpg"). En le reconstruisant nous-mêmes,
 // aucune traversée de répertoire n'est possible.
-export type KycDocumentKind = "idcard" | "selfie";
+// 🆕 [PHASE C — LIVENESS, ÉTAPE 3] Trois natures de documents ajoutées.
+//
+// 💡 Ce type ne sert qu'à composer un suffixe LISIBLE dans le nom du fichier
+// stocké ("cmp_a1b2/9f8e-liveness-action1.jpg"). Aucun enjeu de sécurité — le
+// cloisonnement repose entièrement sur le préfixe companyId — mais un nom
+// parlant vaut de l'or le jour où il faut inspecter le bucket à la main pour
+// comprendre un incident.
+//
+// ⚠️ "selfie" est CONSERVÉ alors que le formulaire ne l'utilisera plus une fois
+// le liveness branché : les dossiers déjà créés référencent des chemins qui
+// contiennent ce suffixe. Retirer la valeur du type n'invaliderait pas ces
+// fichiers, mais rendrait le code incapable d'exprimer ce qu'il y a en base —
+// et c'est le genre d'incohérence qui trompe le prochain lecteur.
+export type KycDocumentKind =
+    | "idcard"
+    | "selfie"
+    | "liveness-reference"
+    | "liveness-action1"
+    | "liveness-action2";
 
 const MIME_TO_EXTENSION: Record<string, string> = {
     "image/jpeg": "jpg",

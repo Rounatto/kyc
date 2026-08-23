@@ -250,12 +250,25 @@ export const passwordResetSubmitLimiter = new Ratelimit({
 // limite, un agent authentifié pourrait en réclamer des milliers et saturer le
 // stockage (le plan gratuit Supabase plafonne à 1 Go).
 //
-// 💡 30 par 10 minutes = environ 15 dossiers KYC complets (pièce d'identité +
-// selfie) sur ce laps de temps. Très large pour un usage réel, très étroit pour
-// un script.
+// 🆕 [PHASE C — LIVENESS, ÉTAPE 3] SEUIL RELEVÉ DE 30 À 60 PAR 10 MINUTES.
+//
+// ⚠️ CE N'EST PAS UN ASSOUPLISSEMENT, C'EST UN RÉÉQUILIBRAGE. Un dossier KYC
+// consommait 2 uploads (pièce d'identité + selfie) ; avec la séquence de
+// liveness il en consomme 5 (pièce d'identité + image neutre + deux poses…
+// et le selfie disparaît, remplacé par ces trois-là). À seuil constant, un
+// agent passait de 15 dossiers par 10 minutes à 6 — il aurait heurté le
+// plafond en pleine journée de travail, sur un usage parfaitement légitime.
+//
+// 💡 60 uploads = 12 dossiers complets par tranche de 10 minutes. Très large
+// pour un agent qui reçoit des clients un par un, très étroit pour un script.
+//
+// 💡 Et le vrai garde-fou contre la saturation du stockage n'est pas ici : c'est
+// la limite de taille configurée au niveau du bucket Supabase, plus le quota de
+// vérifications du plan (paywall). Ce limiteur borne le RYTHME, pas le volume
+// total.
 export const documentUploadLimiter = new Ratelimit({
     redis: lazyRedis,
-    limiter: Ratelimit.slidingWindow(30, "10 m"),
+    limiter: Ratelimit.slidingWindow(60, "10 m"),
     prefix: "rl:doc-upload",
     analytics: false,
 });
@@ -301,6 +314,28 @@ export const twoFactorManageLimiter = new Ratelimit({
     redis: lazyRedis,
     limiter: Ratelimit.slidingWindow(5, "15 m"),
     prefix: "rl:2fa-manage",
+    analytics: false,
+});
+
+// 🆕 [PHASE C — LIVENESS] Émission d'un challenge de détection de présence.
+//
+// Route authentifiée et peu coûteuse (un tirage aléatoire + une signature), mais
+// une limite reste nécessaire : sans elle, un script pourrait réclamer des
+// milliers de challenges pour observer la distribution du tirage, ou simplement
+// jusqu'à obtenir l'action qu'il sait imiter.
+//
+// 💡 LIMITEUR DISTINCT de documentUploadLimiter, alors que les deux servent le
+// même formulaire : partager le quota ferait qu'une reprise de capture (qui
+// demande un nouveau challenge) grignoterait le budget d'upload des documents.
+// Deux opérations différentes, deux compteurs.
+//
+// 💡 20 par 10 minutes : un agent consciencieux reprend la capture deux ou trois
+// fois par dossier, ça laisse largement de la marge pour plusieurs clients
+// d'affilée. Très étroit pour un script.
+export const livenessChallengeLimiter = new Ratelimit({
+    redis: lazyRedis,
+    limiter: Ratelimit.slidingWindow(20, "10 m"),
+    prefix: "rl:liveness-challenge",
     analytics: false,
 });
 // ----------------------------------------------------------------------------

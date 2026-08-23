@@ -29,6 +29,11 @@
 // stockage lui-même qui refusera un fichier trop lourd. Une vérification
 // côté navigateur reste utile pour le confort (message immédiat), mais elle
 // ne protège rien — un appel direct la contournerait.
+//
+// 🆕 [PHASE C — LIVENESS, ÉTAPE 3] La route accepte désormais les trois images
+// de la séquence de détection de présence, en plus de la pièce d'identité et du
+// selfie. Aucune autre logique n'a changé : le mécanisme d'autorisation est
+// exactement le même, seule la liste des natures acceptées s'élargit.
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getServerSession } from "next-auth/next";
@@ -46,10 +51,29 @@ import {
 // type de fichier. Ni chemin, ni nom, ni identifiant d'entreprise — tout ce
 // qui touche à l'emplacement est décidé côté serveur.
 const uploadUrlSchema = z.object({
-    // "idcard" ou "selfie" : sert uniquement de suffixe lisible dans le nom du
-    // fichier stocké. Aucun enjeu de sécurité, mais un enum plutôt qu'une
-    // chaîne libre évite qu'une valeur farfelue ne se retrouve dans un chemin.
-    kind: z.enum(["idcard", "selfie"]),
+    // 🆕 [PHASE C] Cinq natures acceptées au lieu de deux.
+    //
+    // 💡 Cette valeur sert uniquement de suffixe lisible dans le nom du fichier
+    // stocké. Aucun enjeu de sécurité — mais un enum plutôt qu'une chaîne libre
+    // évite qu'une valeur farfelue ne se retrouve dans un chemin, et surtout il
+    // documente ce que le système sait recevoir.
+    //
+    // ⚠️ CETTE LISTE DOIT RESTER SYNCHRONISÉE avec le type `KycDocumentKind` de
+    // lib/storage.ts. Ce sont deux déclarations distinctes du même ensemble :
+    // TypeScript ne peut pas dériver automatiquement un enum Zod d'un type, et
+    // l'inverse rendrait le schéma illisible. Si tu ajoutes une nature un jour,
+    // les deux endroits sont à modifier.
+    //
+    // 💡 "selfie" est conservé alors que le formulaire ne l'utilisera plus une
+    // fois le liveness branché : un onglet resté ouvert avec l'ancienne version
+    // de la page continuerait sinon de recevoir des 400 incompréhensibles.
+    kind: z.enum([
+        "idcard",
+        "selfie",
+        "liveness-reference",
+        "liveness-action1",
+        "liveness-action2",
+    ]),
 
     // Le type MIME déclaré par le navigateur. Revalidé juste après contre la
     // liste blanche de lib/storage.ts.
@@ -88,6 +112,10 @@ export async function POST(req: Request) {
         // on connaît donc exactement qui appelle. Une limite par IP pénaliserait
         // toute une entreprise dont les agents partagent la même connexion —
         // même raisonnement que pour la route /api/chat.
+        //
+        // 🆕 [PHASE C] Le seuil de ce limiteur a été relevé de 30 à 60 par
+        // tranche de 10 minutes : un dossier consomme désormais 5 uploads au
+        // lieu de 2 (voir le commentaire dans lib/ratelimit.ts).
         const rateLimited = await enforceRateLimit(documentUploadLimiter, userId!);
         if (rateLimited) return rateLimited;
 
@@ -112,6 +140,10 @@ export async function POST(req: Request) {
         // qui peut embarquer du JavaScript. Servi un jour depuis notre domaine,
         // il deviendrait un vecteur d'attaque XSS. Un JPEG, lui, ne peut pas
         // porter de code exécutable.
+        //
+        // 💡 Les images de liveness sont produites par `canvas.toBlob(...,
+        // "image/jpeg")`, elles passent donc toujours ce contrôle. Il reste
+        // nécessaire : rien n'oblige un appelant à passer par notre formulaire.
         if (!isAllowedDocumentMimeType(contentType)) {
             return NextResponse.json(
                 { error: "Format non autorisé. Utilisez une image JPEG, PNG ou WebP." },
@@ -149,9 +181,14 @@ export async function POST(req: Request) {
         // le fichier reste dans le bucket sans aucun dossier KYC qui le
         // référence. Il n'est pas accessible (bucket privé, chemin
         // imprévisible), mais il occupe de l'espace.
-        // Le nettoyage se fera via deleteDocuments() de lib/storage.ts, branché
-        // sur le cron hebdomadaire existant — à traiter en même temps que la
-        // politique de rétention RGPD (Phase G).
+        //
+        // 🆕 [PHASE C] CE PROBLÈME S'AGGRAVE MÉCANIQUEMENT AVEC LE LIVENESS :
+        // une séquence relancée trois fois par un agent perfectionniste laisse
+        // neuf images orphelines au lieu de zéro. Rien de dangereux, mais le
+        // nettoyage devient nettement plus utile qu'avant.
+        // Il se fera via deleteDocuments() de lib/storage.ts, branché sur le
+        // cron hebdomadaire existant — à traiter en même temps que la politique
+        // de rétention RGPD (Phase G).
 
         return NextResponse.json({
             // L'URL vers laquelle le navigateur enverra le fichier (PUT direct).
@@ -161,7 +198,7 @@ export async function POST(req: Request) {
             token: upload.token,
             // 💡 Le chemin doit être RENVOYÉ AU CLIENT, qui le joindra ensuite au
             // formulaire de création du dossier. C'est ce qui permettra à
-            // /api/customers de le stocker dans idCardPath / selfiePath.
+            // /api/customers de le stocker.
             //
             // ⚠️ Ce n'est PAS une faille : un chemin n'est pas adressable. Il
             // n'a ni domaine ni protocole, le bucket est privé, et toute lecture
