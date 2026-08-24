@@ -3,91 +3,83 @@
 // ============================================================================
 // 🆕 FORMULAIRE DE NOUVELLE VÉRIFICATION KYC — LE CŒUR DU PRODUIT
 // ============================================================================
-// Flux complet : formulaire d'identité → upload pièce d'identité + selfie
-// (Supabase Storage, bucket PRIVÉ) → POST /api/customers qui exécute TOUT le
-// pipeline de vérification côté serveur (OCR, AML, comparaison faciale, moteur
-// de règles).
+// Flux complet : formulaire d'identité → upload de la pièce d'identité + capture
+// de la séquence de liveness (Supabase Storage, bucket PRIVÉ) → POST
+// /api/customers qui exécute TOUT le pipeline de vérification côté serveur (OCR,
+// AML, comparaison faciale, liveness, moteur de règles).
 //
 // ✅ [PHASE B — RÉSOLU] Les documents ne partent plus sur uploadthing derrière
 // des URLs publiques et permanentes. Ils vont dans un bucket Supabase privé, et
-// ce formulaire ne manipule plus que des CHEMINS (`idCardPath`/`selfiePath`) —
-// des coordonnées internes non adressables, inutilisables sans une URL signée
-// délivrée par le serveur après contrôle du companyId.
+// ce formulaire ne manipule plus que des CHEMINS — des coordonnées internes non
+// adressables, inutilisables sans une URL signée délivrée par le serveur après
+// contrôle du companyId.
 //
 // ✅ [PHASE C — RÉSOLU] LA BIOMÉTRIE A QUITTÉ CE FICHIER.
-//
-// ❌ CE QUI EXISTAIT ICI : face-api.js chargeait trois réseaux de neurones dans
-// le navigateur, comparait les deux images en mémoire, et le score obtenu était
-// envoyé au serveur dans le corps de la requête. Le serveur le recopiait tel
-// quel dans son moteur de règles.
-//
-// ⚠️ POURQUOI C'ÉTAIT UNE FAILLE ET PAS UN DÉTAIL : il suffisait d'ouvrir les
-// outils de développement, d'intercepter l'appel à /api/customers et de
-// remplacer `biometricScore: 12.4` par `biometricScore: 99.9`. Deux photos de
-// personnes totalement différentes passaient alors sans la moindre pénalité.
+// face-api.js chargeait trois réseaux de neurones dans le navigateur et le score
+// obtenu partait dans le corps de la requête. Il suffisait d'intercepter l'appel
+// et de remplacer `biometricScore: 12.4` par `99.9` pour que deux photos de
+// personnes différentes passent sans la moindre pénalité.
 //
 // 💡 LA RÈGLE GÉNÉRALE : un contrôle de sécurité exécuté sur une machine que
 // l'utilisateur contrôle n'est pas un contrôle, c'est un affichage.
 //
-// ✅ MAINTENANT : le serveur télécharge lui-même les deux images depuis le
-// bucket privé et fait réaliser la comparaison par Gemini Vision
-// (lib/face-match.ts). Le navigateur n'a plus aucune influence sur le résultat.
+// ✅ [PHASE C — RÉSOLU] LE SELFIE N'EST PLUS UN FICHIER UPLOADÉ.
 //
-// 💡 BÉNÉFICE SECONDAIRE, LOIN D'ÊTRE NÉGLIGEABLE : les trois modèles pesaient
-// plusieurs mégaoctets, téléchargés à CHAQUE ouverture de cette page. Sur une
-// connexion mobile — le cas courant pour un agent en agence — c'était plusieurs
-// secondes d'attente pour un calcul que le serveur ignore désormais.
+// ❌ CE QUI EXISTAIT ICI : un `<input type="file">` classique, exactement le même
+// mécanisme que pour la pièce d'identité. N'importe qui pouvait envoyer une photo
+// de sa victime trouvée sur Facebook ou LinkedIn — et la comparaison faciale
+// serveur confirmait consciencieusement que c'était bien elle. Le contrôle
+// biométrique fonctionnait parfaitement et VALIDAIT UNE USURPATION.
 //
-// 🚨 FAILLE LIVENESS TOUJOURS PRÉSENTE (Phase C — point 4, non traité) :
-// aucune trace de `getUserMedia`, de `<video>` ou de capture caméra en direct
-// dans ce fichier. Le "selfie" reste un `<input type="file">` classique —
-// EXACTEMENT le même mécanisme que l'upload de la pièce d'identité.
-// Concrètement : n'importe qui peut uploader une photo trouvée en ligne de la
-// personne à la place d'un vrai selfie. Le serveur comparera deux images fixes
-// sans jamais savoir si un humain était devant un appareil photo. Il n'y a ni
-// challenge-response (tourner la tête, cligner des yeux), ni détection
-// d'écran/photo-d'une-photo. C'est le plus gros écart restant avec un vrai
-// acteur KYC (Sumsub, Onfido, Veriff).
+// ✅ MAINTENANT : `<LivenessCapture />` impose une capture caméra en direct et
+// demande DEUX actions tirées au hasard par le serveur. Une photo imprimée ne
+// tourne pas la tête. L'image neutre de la séquence devient le selfie du dossier
+// — même usage qu'avant, mais capturée en direct au lieu d'être choisie dans une
+// galerie.
+//
+// ⚠️ LIMITE DOCUMENTÉE : une VIDÉO pré-enregistrée de la vraie personne pourrait
+// passer. Ce n'est pas une faiblesse du modèle mais de l'information disponible —
+// une image 2D ne contient pas la profondeur. Voir lib/liveness-verify.ts.
 //
 // Autre détail : le sélecteur "Procedure Type" propose "Individual KYC
 // (Enhanced - Biometrics)" comme option distincte de "Standard", mais AUCUNE
-// branche du code ne change de comportement selon cette valeur — la
-// comparaison faciale s'exécute côté serveur dans tous les cas. Le champ est
-// cosmétique, envoyé tel quel au serveur (`type`).
+// branche du code ne change de comportement selon cette valeur — la comparaison
+// faciale et le liveness s'exécutent dans tous les cas. Le champ est cosmétique.
 import { useState, useRef, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, Camera, X, Lock, Zap, Languages } from "lucide-react";
+import { User, Mail, Shield, ArrowLeft, PlusCircle, CreditCard, Calendar, Globe, AlertTriangle, FileText, X, Lock, Zap, Languages } from "lucide-react";
 import Link from "next/link";
 import Header from "@/components/header";
 import { toast } from "sonner";
 import { getCountries, getCountryCallingCode } from 'react-phone-number-input/input';
 import en from 'react-phone-number-input/locale/en';
-
-// 🆕 [PHASE C] `import * as faceapi from 'face-api.js'` SUPPRIMÉ.
-// ⚠️ Pense à faire `npm uninstall face-api.js` et à supprimer le dossier
-// /public/models : ils ne servent plus à rien et alourdissent le dépôt.
+// 🆕 [PHASE C — LIVENESS] Le composant remplace la zone "Upload Selfie".
+import LivenessCapture, { type LivenessResult } from "@/components/liveness-capture";
 
 // ============================================================================
 // 🆕 [PHASE B] CONTRAINTES DE FICHIER — ALIGNÉES SUR LE BUCKET SUPABASE
 // ============================================================================
 // ⚠️ Ces deux constantes doivent rester COHÉRENTES avec la configuration du
-// bucket `kyc-documents` dans le dashboard Supabase (taille max + types MIME
-// autorisés). L'ancienne version validait 5 Mo côté client alors qu'uploadthing
-// plafonnait à 4 Mo : un fichier entre les deux passait la vérification visuelle
-// puis échouait au transfert, avec un message d'erreur incompréhensible.
+// bucket `kyc-documents` dans le dashboard Supabase. L'ancienne version validait
+// 5 Mo côté client alors que le stockage plafonnait à 4 Mo : un fichier entre les
+// deux passait la vérification visuelle puis échouait au transfert, avec un
+// message d'erreur incompréhensible.
 //
 // 💡 Ces vérifications ne PROTÈGENT rien — un appel direct à l'API les
-// contournerait. Elles servent uniquement au confort : donner un retour
-// immédiat plutôt que de laisser l'utilisateur attendre le rejet du serveur.
-// La vraie barrière est configurée au niveau du bucket, côté Supabase.
+// contournerait. Elles servent uniquement au confort : donner un retour immédiat
+// plutôt que de laisser l'utilisateur attendre le rejet du serveur. La vraie
+// barrière est configurée au niveau du bucket.
+//
+// 💡 Elles ne concernent plus que la PIÈCE D'IDENTITÉ : les images de liveness
+// sont produites par `canvas.toBlob()` dans le composant, à une résolution et un
+// format que nous contrôlons entièrement.
 const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024; // 4 Mo
 
 // ⚠️ image/svg+xml est délibérément ABSENT. Un SVG est un document XML qui peut
-// embarquer du JavaScript : servi un jour depuis notre domaine, il deviendrait
-// un vecteur d'attaque XSS. L'ancienne vérification `file.type.startsWith('image/')`
-// l'acceptait sans broncher. Seuls des formats raster sont autorisés — ils sont
-// incapables de porter du code exécutable.
+// embarquer du JavaScript : servi un jour depuis notre domaine, il deviendrait un
+// vecteur d'attaque XSS. L'ancienne vérification `file.type.startsWith('image/')`
+// l'acceptait sans broncher.
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 export default function NewVerificationPage() {
@@ -113,18 +105,24 @@ export default function NewVerificationPage() {
 
     const [idCardFile, setIdCardFile] = useState<File | null>(null);
     const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
-    const [selfieFile, setSelfieFile] = useState<File | null>(null);
-    const [selfiePreview, setSelfiePreview] = useState<string | null>(null);
+
+    // 🆕 [PHASE C — LIVENESS] Le résultat de la séquence remplace `selfieFile`.
+    //
+    // 💡 CE STATE NE CONTIENT PAS D'IMAGES, MAIS DES CHEMINS. Le composant a déjà
+    // envoyé les trois images dans le bucket au moment où il appelle `onResult` —
+    // ce formulaire n'a plus qu'à transmettre les coordonnées au serveur. C'est
+    // une différence importante avec l'ancien `selfieFile`, qui était un vrai
+    // fichier restant à téléverser au moment de la soumission.
+    const [livenessResult, setLivenessResult] = useState<LivenessResult | null>(null);
 
     const idCardInputRef = useRef<HTMLInputElement>(null);
-    const selfieInputRef = useRef<HTMLInputElement>(null);
 
     const [loading, setLoading] = useState(false);
     const [loadingText, setLoadingText] = useState("");
     const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
     const [globalError, setGlobalError] = useState("");
 
-    // 💡 NOUVEAU : ETATS DU PAYWALL (BILLING)
+    // 💡 ETATS DU PAYWALL (BILLING)
     const [isCheckingQuota, setIsCheckingQuota] = useState(true);
     const [quotaReached, setQuotaReached] = useState(false);
     const [usageStats, setUsageStats] = useState({ current: 0, limit: 5 });
@@ -134,14 +132,9 @@ export default function NewVerificationPage() {
     // ========================================================================
     // 🆕 [PHASE C] CE useEffect NE FAIT PLUS QU'UNE SEULE CHOSE
     // ========================================================================
-    // Il vérifiait le quota PUIS téléchargeait trois réseaux de neurones
-    // (SSD MobileNet, landmarks 68 points, encodeur de visages) depuis
+    // Il vérifiait le quota PUIS téléchargeait trois réseaux de neurones depuis
     // /public/models. Ce second temps a disparu avec le passage de la biométrie
-    // côté serveur.
-    //
-    // 💡 L'ancien enchaînement avait une logique — ne pas charger plusieurs Mo
-    // de modèles si le paywall allait de toute façon bloquer la soumission.
-    // Cette optimisation n'a plus d'objet : il n'y a plus rien à charger.
+    // côté serveur — plusieurs mégaoctets en moins à chaque ouverture de page.
     useEffect(() => {
         const checkQuota = async () => {
             try {
@@ -170,29 +163,23 @@ export default function NewVerificationPage() {
     // ========================================================================
     // 🆕 [PHASE B] ENVOI D'UN DOCUMENT VERS LE BUCKET PRIVÉ — EN 2 TEMPS
     // ========================================================================
-    // Remplace `startUpload` d'uploadthing. Le mécanisme est différent et vaut
-    // la peine d'être compris :
-    //
     //   TEMPS 1 — On demande une AUTORISATION à notre serveur. Il vérifie la
-    //   session, calcule lui-même le chemin de destination à partir du
-    //   companyId, et renvoie une URL d'écriture signée valable 15 minutes.
-    //   Le navigateur ne choisit JAMAIS où le fichier atterrit : il est donc
-    //   structurellement incapable d'écrire dans le dossier d'une autre
-    //   entreprise, même en manipulant la requête.
+    //   session, calcule lui-même le chemin de destination à partir du companyId,
+    //   et renvoie une URL d'écriture signée valable 15 minutes. Le navigateur ne
+    //   choisit JAMAIS où le fichier atterrit : il est donc structurellement
+    //   incapable d'écrire dans le dossier d'une autre entreprise.
     //
-    //   TEMPS 2 — Le fichier part DIRECTEMENT du navigateur vers Supabase.
-    //   Il ne transite jamais par notre application.
+    //   TEMPS 2 — Le fichier part DIRECTEMENT du navigateur vers Supabase, sans
+    //   jamais transiter par notre application.
     //
-    // 💡 POURQUOI CE DÉTOUR : Vercel plafonne le corps d'une requête serverless
-    // à 4,5 Mo. Nos fichiers montent à 4 Mo, et l'encodage multipart réduit
-    // encore la marge — on frôlerait l'échec en permanence. Faire transiter le
-    // fichier par une fonction serverless imposerait aussi de le charger
-    // entièrement en mémoire et de payer le temps d'exécution du transfert.
+    // 💡 POURQUOI CE DÉTOUR : Vercel plafonne le corps d'une requête serverless à
+    // 4,5 Mo. Nos fichiers montent à 4 Mo, et l'encodage multipart réduit encore
+    // la marge — on frôlerait l'échec en permanence.
     //
-    // Retourne le CHEMIN du fichier (ex: "cmp_a1b2/9f8e-idcard.jpg"), à joindre
-    // au formulaire. Ce n'est pas une URL : sans domaine ni protocole, et avec
-    // un bucket privé, il n'est pas adressable.
-    const uploadDocument = async (file: File, kind: "idcard" | "selfie"): Promise<string> => {
+    // 🆕 [PHASE C] Cette fonction ne sert plus QUE pour la pièce d'identité : le
+    // composant de liveness envoie ses trois images lui-même, avec exactement le
+    // même mécanisme.
+    const uploadDocument = async (file: File, kind: "idcard"): Promise<string> => {
         // --- TEMPS 1 : obtenir l'autorisation ---
         const authRes = await fetch("/api/kyc-documents/upload-url", {
             method: "POST",
@@ -203,18 +190,17 @@ export default function NewVerificationPage() {
         if (!authRes.ok) {
             const data = await authRes.json().catch(() => ({} as any));
             // 💡 On remonte le message du serveur tel quel : il est déjà précis
-            // (type non autorisé, quota de demandes dépassé, session expirée...).
-            // En inventer un ici masquerait la vraie cause à l'utilisateur.
+            // (type non autorisé, quota dépassé, session expirée...). En inventer
+            // un ici masquerait la vraie cause à l'utilisateur.
             throw new Error(data.error || "Impossible de préparer l'envoi du document.");
         }
 
         const { signedUrl, path } = await authRes.json();
 
         // --- TEMPS 2 : envoyer le fichier directement à Supabase ---
-        // Un simple PUT sur l'URL signée, avec le fichier brut en corps de
-        // requête. Aucune clé Supabase n'est nécessaire côté navigateur : la
-        // signature contenue dans l'URL fait office d'autorisation, et elle ne
-        // vaut que pour CE chemin précis, pendant 15 minutes.
+        // Aucune clé Supabase n'est nécessaire côté navigateur : la signature
+        // contenue dans l'URL fait office d'autorisation, et elle ne vaut que pour
+        // CE chemin précis, pendant 15 minutes.
         const uploadRes = await fetch(signedUrl, {
             method: "PUT",
             headers: { "Content-Type": file.type },
@@ -222,8 +208,6 @@ export default function NewVerificationPage() {
         });
 
         if (!uploadRes.ok) {
-            // On journalise le détail technique en console pour le débogage,
-            // mais l'utilisateur reçoit un message actionnable.
             console.error(
                 "[UPLOAD] Échec du transfert :",
                 uploadRes.status,
@@ -235,44 +219,28 @@ export default function NewVerificationPage() {
         return path;
     };
 
-    // 🆕 [PHASE C] LA FONCTION `compareFaces` A ÉTÉ SUPPRIMÉE.
-    //
-    // Elle chargeait les deux images en mémoire, extrayait un "descriptor" de
-    // 128 nombres par visage, calculait la distance euclidienne entre les deux
-    // vecteurs et la convertissait en pourcentage via `(1 - distance/1.2) * 100`.
-    //
-    // 💡 Le calcul était mathématiquement correct — ce n'est pas ce qui posait
-    // problème. Le défaut était son EMPLACEMENT : produit sur la machine de
-    // l'utilisateur, le résultat était modifiable par l'utilisateur. Un contrôle
-    // dont on peut choisir le résultat n'est pas un contrôle.
-    //
-    // Son remplaçant vit dans lib/face-match.ts, exécuté côté serveur sur des
-    // images téléchargées directement depuis le bucket privé.
-
     // Validation client seulement — un attaquant appelant /api/customers
-    // directement (sans passer par ce formulaire) contournerait tout ceci,
-    // mais le serveur revalide indépendamment via Zod (voir customers/route.ts),
-    // donc cette couche n'est là que pour le confort/feedback utilisateur.
-    // Les règles de format (CIN/passeport/téléphone) sont spécifiques par pays
-    // (ex: CIN tunisienne = exactement 8 chiffres) avec un repli générique
-    // pour les nationalités non explicitement gérées.
+    // directement contournerait tout ceci, mais le serveur revalide
+    // indépendamment via Zod. Cette couche n'est là que pour le confort.
     const validateForm = () => {
         const errors: { [key: string]: string } = {};
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) errors.email = "Invalid email format.";
+
         // 🆕 [ARABE] Si le champ est rempli, il DOIT contenir de l'arabe.
         //
-        // ⚠️ CE QUE ÇA ÉVITE : un agent pressé pourrait y retaper le nom latin
-        // par réflexe. Le serveur détecterait alors l'absence de caractères
-        // arabes et retomberait sur la comparaison latine — reproduisant
-        // exactement le bug d'origine, mais de façon invisible : le champ
-        // paraîtrait rempli alors qu'il ne sert à rien.
+        // ⚠️ CE QUE ÇA ÉVITE : un agent pressé pourrait y retaper le nom latin par
+        // réflexe. Le serveur détecterait alors l'absence de caractères arabes et
+        // retomberait sur la comparaison latine — reproduisant exactement le bug
+        // d'origine, mais de façon invisible : le champ paraîtrait rempli alors
+        // qu'il ne sert à rien.
         //
         // 💡 U+0600–U+06FF est le bloc Unicode principal de l'écriture arabe.
         if (customerNameAr.trim() && !/[\u0600-\u06FF]/.test(customerNameAr)) {
             errors.customerNameAr = "This field must contain Arabic text, exactly as printed on the ID card.";
         }
+
         if (documentType === "CIN") {
             if (nationality === "TN") {
                 const tnCinRegex = /^[0-9]{8}$/;
@@ -305,30 +273,40 @@ export default function NewVerificationPage() {
         }
 
         if (!idCardFile) errors.idCardFile = "Front ID Document is required.";
-        if (!selfieFile) errors.selfieFile = "Selfie verification is required.";
+
+        // 🆕 [PHASE C — LIVENESS] REMPLACE LA VÉRIFICATION `selfieFile`.
+        //
+        // ⚠️ UN CONTOURNEMENT DOCUMENTÉ EST UN RÉSULTAT VALIDE : l'agent qui a
+        // écrit une justification peut soumettre. Ce qui est refusé, c'est
+        // l'ABSENCE de résultat — ni capture, ni justification.
+        //
+        // 💡 Le serveur applique de toute façon sa propre règle : un dossier sans
+        // séquence est traité comme un contournement et coûte 45 points. Cette
+        // vérification n'est là que pour éviter à l'agent de découvrir la
+        // pénalité après coup.
+        if (!livenessResult) {
+            errors.liveness = "Live capture is required. Complete the liveness check, or document why it is not possible.";
+        }
 
         setFieldErrors(errors);
         return Object.keys(errors).length === 0;
     };
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: "idCard" | "selfie") => {
+    // 🆕 [PHASE C] Ne gère plus que la pièce d'identité — le paramètre `type` a
+    // disparu, il n'y a plus qu'un seul fichier à choisir dans ce formulaire.
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
         // 🆕 [PHASE B] LISTE BLANCHE STRICTE au lieu de `startsWith('image/')`.
         // L'ancienne vérification acceptait image/svg+xml, image/gif, et tout
-        // autre format exotique. On n'autorise plus que trois formats raster,
-        // exactement ceux acceptés par la route d'autorisation d'upload et par
-        // le bucket lui-même.
+        // autre format exotique.
         if (!ALLOWED_MIME_TYPES.includes(file.type)) {
             setGlobalError("Unsupported format. Please upload a JPEG, PNG or WebP image.");
             return;
         }
 
         // 🆕 [PHASE B] 4 Mo — aligné sur la limite du bucket Supabase.
-        // Avant : 5 Mo ici contre 4 Mo côté serveur, donc un fichier de 4,5 Mo
-        // passait cette vérification puis échouait au transfert avec un message
-        // opaque. Les deux valeurs sont désormais cohérentes.
         if (file.size > MAX_FILE_SIZE_BYTES) {
             setGlobalError("File size must be under 4MB.");
             return;
@@ -336,34 +314,30 @@ export default function NewVerificationPage() {
 
         setGlobalError("");
 
-        // 🆕 [PHASE C] Cette URL `blob:` ne sert PLUS QU'À L'APERÇU affiché dans
-        // le formulaire. Elle alimentait aussi `compareFaces` — c'est terminé,
-        // le serveur relit les images depuis le bucket. Elle pointe vers la
-        // mémoire du navigateur, jamais vers le réseau.
+        // Cette URL `blob:` ne sert QU'À L'APERÇU affiché dans le formulaire. Elle
+        // pointe vers la mémoire du navigateur, jamais vers le réseau.
         const previewUrl = URL.createObjectURL(file);
 
-        if (type === "idCard") {
-            setIdCardFile(file);
-            setIdCardPreview(previewUrl);
-            setFieldErrors(prev => ({ ...prev, idCardFile: "" }));
-        } else {
-            setSelfieFile(file);
-            setSelfiePreview(previewUrl);
-            setFieldErrors(prev => ({ ...prev, selfieFile: "" }));
-        }
+        setIdCardFile(file);
+        setIdCardPreview(previewUrl);
+        setFieldErrors(prev => ({ ...prev, idCardFile: "" }));
     };
 
-    const removeFile = (type: "idCard" | "selfie", e: React.MouseEvent) => {
+    const removeFile = (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (type === "idCard") {
-            setIdCardFile(null);
-            setIdCardPreview(null);
-            if (idCardInputRef.current) idCardInputRef.current.value = "";
-        } else {
-            setSelfieFile(null);
-            setSelfiePreview(null);
-            if (selfieInputRef.current) selfieInputRef.current.value = "";
-        }
+        setIdCardFile(null);
+        setIdCardPreview(null);
+        if (idCardInputRef.current) idCardInputRef.current.value = "";
+    };
+
+    // 🆕 [PHASE C — LIVENESS] Réception du résultat de la séquence.
+    //
+    // 💡 Le composant appelle `onResult(null)` chaque fois qu'il repart de zéro
+    // (relance, annulation d'un contournement). On efface donc aussi l'erreur de
+    // champ : elle ne correspondrait plus à l'état affiché.
+    const handleLivenessResult = (result: LivenessResult | null) => {
+        setLivenessResult(result);
+        if (result) setFieldErrors(prev => ({ ...prev, liveness: "" }));
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -386,42 +360,73 @@ export default function NewVerificationPage() {
             try {
                 setLoadingText("Uploading secure documents...");
 
-                // 🆕 [PHASE B] On récupère des CHEMINS, plus des URLs.
-                // La différence est fondamentale : une URL est directement
-                // adressable (la coller dans un navigateur affiche le fichier),
-                // un chemin ne l'est pas. C'est tout l'objet du correctif.
-                let uploadedIdCardPath = "";
-                let uploadedSelfiePath = "";
-
-                // 💡 Les deux envois sont lancés EN PARALLÈLE (Promise.all) au
-                // lieu de l'un après l'autre. Deux transferts de 4 Mo en série
-                // sur une connexion mobile, c'est une attente deux fois plus
-                // longue pour rien : ils sont indépendants.
-                if (idCardFile && selfieFile) {
-                    const [idPath, selfiePath] = await Promise.all([
-                        uploadDocument(idCardFile, "idcard"),
-                        uploadDocument(selfieFile, "selfie"),
-                    ]);
-                    uploadedIdCardPath = idPath;
-                    uploadedSelfiePath = selfiePath;
+                // 🆕 [PHASE C] UN SEUL FICHIER À ENVOYER ICI.
+                //
+                // 💡 Le `Promise.all` sur deux uploads a disparu : les trois images
+                // de liveness sont DÉJÀ dans le bucket au moment où on arrive ici.
+                // Le composant les a envoyées dès la fin de la séquence, pendant
+                // que l'agent finissait de remplir le formulaire — du temps gagné
+                // qui n'apparaît nulle part.
+                if (!idCardFile) {
+                    throw new Error("Front ID document is missing.");
                 }
 
-                if (!uploadedIdCardPath || !uploadedSelfiePath) {
+                const uploadedIdCardPath = await uploadDocument(idCardFile, "idcard");
+
+                if (!uploadedIdCardPath) {
                     throw new Error("Document upload failed. Please try again.");
                 }
 
-                // 🆕 [PHASE C] L'ÉTAPE BIOMÉTRIQUE A DISPARU D'ICI.
+                // ============================================================
+                // 🆕 [PHASE C — LIVENESS] CONSTRUCTION DU PAYLOAD DE PRÉSENCE
+                // ============================================================
+                // Deux formes possibles, mutuellement exclusives :
                 //
-                // Il y avait à cet endroit un appel à `compareFaces` qui produisait
-                // un score, transmis ensuite dans le corps de la requête. Le
-                // serveur le prenait pour argent comptant — d'où la faille.
+                //   • SÉQUENCE CAPTURÉE → on transmet le jeton signé, les trois
+                //     chemins et le compteur de tentatives. Le serveur rejouera la
+                //     vérification lui-même : rien de ce qu'on envoie ici n'est
+                //     cru sur parole.
                 //
-                // 💡 Le texte de chargement mentionne désormais la comparaison
-                // faciale parce qu'elle a bien lieu, simplement ailleurs : c'est
-                // le serveur qui la réalise pendant cette requête. L'utilisateur
-                // n'a pas à savoir OÙ tourne le calcul, mais il doit comprendre
-                // pourquoi il attend.
-                setLoadingText("Running identity checks (OCR, biometrics, AML)...");
+                //   • CONTOURNEMENT → on transmet la justification écrite. Le
+                //     serveur la stockera et pénalisera le dossier de 45 points.
+                //
+                // ⚠️ ON N'ENVOIE AUCUN VERDICT. Le composant ne sait pas si la
+                // séquence est valide et n'a pas à le savoir — il produit une
+                // preuve, le serveur la juge. Transmettre un verdict calculé côté
+                // client reproduirait exactement la faille du `biometricScore`
+                // qu'on vient de corriger.
+                const livenessPayload: Record<string, unknown> = {};
+
+                if (livenessResult?.status === "captured") {
+                    const byKind = (kind: string) =>
+                        livenessResult.frames.find((f) => f.kind === kind)?.path;
+
+                    const referencePath = byKind("reference");
+                    const action1Path = byKind("action1");
+                    const action2Path = byKind("action2");
+
+                    // Garde-fou : le composant ne remonte un résultat "captured"
+                    // que si les trois images sont là, mais on ne construit pas un
+                    // objet à moitié vide sur la foi de cette promesse.
+                    if (referencePath && action1Path && action2Path) {
+                        livenessPayload.liveness = {
+                            token: livenessResult.token,
+                            referencePath,
+                            action1Path,
+                            action2Path,
+                            attempts: livenessResult.attempts,
+                        };
+                    }
+                } else if (livenessResult?.status === "skipped") {
+                    livenessPayload.livenessSkipReason = livenessResult.reason;
+                }
+
+                // 💡 Le texte de chargement mentionne le liveness parce qu'il a
+                // bien lieu, simplement ailleurs : c'est le serveur qui l'analyse
+                // pendant cette requête. L'agent n'a pas à savoir OÙ tourne le
+                // calcul, mais il doit comprendre pourquoi il attend — le pipeline
+                // complet peut prendre une quarantaine de secondes.
+                setLoadingText("Running identity checks (OCR, liveness, biometrics, AML)...");
 
                 const response = await fetch("/api/customers", {
                     method: "POST",
@@ -441,14 +446,15 @@ export default function NewVerificationPage() {
                         dateOfBirth,
                         phoneNumber: finalPhoneNumber,
                         idCardPath: uploadedIdCardPath,
-                        selfiePath: uploadedSelfiePath,
-                        // 🆕 [PHASE C] `biometricScore` RETIRÉ du corps de la requête.
+                        // 🆕 [PHASE C] `selfiePath` N'EST PLUS ENVOYÉ.
                         //
-                        // Le schéma Zod du serveur l'accepte toujours (pour ne pas
-                        // casser une version du frontend restée en cache) mais ne le
-                        // lit nulle part. L'envoyer quand même laisserait croire
-                        // qu'il compte encore — autant que le code dise la vérité,
-                        // exactement comme pour `userId` retiré en Phase B.
+                        // Le serveur le dérive de l'image de RÉFÉRENCE de la
+                        // séquence : elle EST un selfie — un visage de face, en
+                        // pose neutre — à ceci près qu'elle a été capturée en
+                        // direct au lieu d'être choisie dans une galerie. Toute la
+                        // comparaison faciale continue de fonctionner, sur une
+                        // source strictement meilleure.
+                        ...livenessPayload,
                     }),
                 });
 
@@ -567,6 +573,7 @@ export default function NewVerificationPage() {
                                         {fieldErrors.email && <p className="text-xs text-red-600 font-medium">{fieldErrors.email}</p>}
                                     </div>
                                 </div>
+
                                 {/* 🆕 [ARABE] CHAMP OPTIONNEL — NOM EN ÉCRITURE ARABE
                                     ================================================
                                     💡 POURQUOI UN CHAMP SÉPARÉ, ET NON UNE CONVERSION
@@ -576,8 +583,6 @@ export default function NewVerificationPage() {
                                     mentions sont des conventions administratives, pas
                                     des translittérations : "dit" devient شهرة sur les
                                     CIN tunisiennes — aucun outil ne le devinerait.
-                                    L'agent recopie ce qu'il voit, il n'y a donc rien
-                                    à deviner ni à maintenir.
 
                                     💡 LES DEUX CHAMPS SERVENT À DES CHOSES DIFFÉRENTES :
                                       • Nom latin → screening OpenSanctions (les listes
@@ -688,79 +693,77 @@ export default function NewVerificationPage() {
                             <div className="flex flex-col gap-5">
                                 <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">3. Document Vault</h3>
 
-                                <div className="flex flex-col sm:flex-row gap-5">
-                                    {/* Upload ID Card */}
-                                    <div className="flex-1 flex flex-col gap-1">
-                                        {/* 🆕 [PHASE B] `accept` restreint aux 3 formats autorisés au lieu de
-                                            `image/*` : le sélecteur de fichiers du système filtre directement,
-                                            l'utilisateur ne peut plus choisir un format qui sera refusé ensuite. */}
-                                        <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={idCardInputRef} onChange={(e) => handleFileChange(e, "idCard")} disabled={loading} />
-                                        <div
-                                            onClick={() => !loading && idCardInputRef.current?.click()}
-                                            className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
-                                        >
-                                            {idCardPreview ? (
-                                                <>
-                                                    <img src={idCardPreview} alt="ID Preview" className="absolute inset-0 w-full h-full object-cover" />
-                                                    {!loading && (
-                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                            <p className="text-white text-sm font-bold">Change Image</p>
-                                                        </div>
-                                                    )}
-                                                    {!loading && (
-                                                        <button type="button" onClick={(e) => removeFile("idCard", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
-                                                            <X className="w-4 h-4" />
-                                                        </button>
-                                                    )}
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
-                                                        <FileText className={`w-5 h-5 ${fieldErrors.idCardFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
+                                <div className="flex flex-col gap-2">
+                                    <label className="text-sm font-semibold text-gray-700">
+                                        Identity Document <span className="text-red-500">*</span>
+                                    </label>
+                                    {/* 🆕 [PHASE B] `accept` restreint aux 3 formats autorisés au lieu de
+                                        `image/*` : le sélecteur de fichiers du système filtre directement,
+                                        l'utilisateur ne peut plus choisir un format qui sera refusé ensuite. */}
+                                    <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={idCardInputRef} onChange={handleFileChange} disabled={loading} />
+                                    <div
+                                        onClick={() => !loading && idCardInputRef.current?.click()}
+                                        className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.idCardFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
+                                    >
+                                        {idCardPreview ? (
+                                            <>
+                                                <img src={idCardPreview} alt="ID Preview" className="absolute inset-0 w-full h-full object-cover" />
+                                                {!loading && (
+                                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                        <p className="text-white text-sm font-bold">Change Image</p>
                                                     </div>
-                                                    <p className="text-sm font-bold text-gray-700 mb-1">Upload Front ID</p>
-                                                    {/* 🆕 Texte aligné sur la vraie limite (4 Mo, pas 5) */}
-                                                    <p className="text-xs text-gray-500">JPG, PNG or WebP up to 4MB</p>
-                                                </>
-                                            )}
-                                        </div>
-                                        {fieldErrors.idCardFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.idCardFile}</p>}
+                                                )}
+                                                {!loading && (
+                                                    <button type="button" onClick={removeFile} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                )}
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
+                                                    <FileText className={`w-5 h-5 ${fieldErrors.idCardFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
+                                                </div>
+                                                <p className="text-sm font-bold text-gray-700 mb-1">Upload Front ID</p>
+                                                {/* 🆕 Texte aligné sur la vraie limite (4 Mo, pas 5) */}
+                                                <p className="text-xs text-gray-500">JPG, PNG or WebP up to 4MB</p>
+                                            </>
+                                        )}
                                     </div>
-
-                                    {/* Upload Selfie */}
-                                    <div className="flex-1 flex flex-col gap-1">
-                                        <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" ref={selfieInputRef} onChange={(e) => handleFileChange(e, "selfie")} disabled={loading} />
-                                        <div
-                                            onClick={() => !loading && selfieInputRef.current?.click()}
-                                            className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center h-48 relative overflow-hidden transition-colors ${loading ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer group'} ${fieldErrors.selfieFile ? 'border-red-500 bg-red-50' : 'border-gray-300 bg-gray-50 hover:bg-blue-50 hover:border-blue-400'}`}
-                                        >
-                                            {selfiePreview ? (
-                                                <>
-                                                    <img src={selfiePreview} alt="Selfie Preview" className="absolute inset-0 w-full h-full object-cover" />
-                                                    {!loading && (
-                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                            <p className="text-white text-sm font-bold">Change Image</p>
-                                                        </div>
-                                                    )}
-                                                    {!loading && (
-                                                        <button type="button" onClick={(e) => removeFile("selfie", e)} className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-full hover:bg-red-500 hover:text-white transition-colors">
-                                                            <X className="w-4 h-4" />
-                                                        </button>
-                                                    )}
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <div className={`w-10 h-10 bg-white rounded-full shadow-sm flex items-center justify-center mb-3 transition-transform ${!loading && 'group-hover:scale-110'}`}>
-                                                        <Camera className={`w-5 h-5 ${fieldErrors.selfieFile ? 'text-red-500' : 'text-gray-400'} ${!loading && 'group-hover:text-blue-600'}`} />
-                                                    </div>
-                                                    <p className="text-sm font-bold text-gray-700 mb-1">Upload Selfie</p>
-                                                    <p className="text-xs text-gray-500">JPG, PNG or WebP file</p>
-                                                </>
-                                            )}
-                                        </div>
-                                        {fieldErrors.selfieFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.selfieFile}</p>}
-                                    </div>
+                                    {fieldErrors.idCardFile && <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.idCardFile}</p>}
                                 </div>
+                            </div>
+
+                            {/* ================================================================
+                                🆕 [PHASE C — LIVENESS] SECTION DÉDIÉE, ET NON UNE CASE PARMI
+                                D'AUTRES DANS "DOCUMENT VAULT"
+                                ================================================================
+                                💡 POURQUOI SA PROPRE SECTION : la séquence n'est pas un fichier
+                                à joindre, c'est un ACTE que le client doit accomplir devant
+                                l'agent. La ranger à côté de l'upload de la pièce d'identité
+                                laisserait croire qu'il s'agit d'une formalité équivalente, alors
+                                qu'elle demande la présence physique de la personne. */}
+                            <div className="flex flex-col gap-5">
+                                <h3 className="text-md font-bold text-gray-800 border-b border-gray-100 pb-2">
+                                    4. Physical Presence Check <span className="text-red-500">*</span>
+                                </h3>
+
+                                <p className="text-xs text-gray-500 leading-relaxed -mt-2">
+                                    The applicant must be sitting in front of this camera. They will be asked
+                                    to hold two poses chosen at random by the server. A photograph or a screen
+                                    cannot perform them.
+                                </p>
+
+                                {/* ⚠️ `disabled={loading}` EST INDISPENSABLE : sans lui, l'agent
+                                    pourrait relancer une séquence pendant la soumission. Le composant
+                                    effacerait alors les images dont les chemins viennent d'être
+                                    transmis au serveur — qui se retrouverait à télécharger des
+                                    fichiers supprimés. */}
+                                <LivenessCapture onResult={handleLivenessResult} disabled={loading} />
+
+                                {fieldErrors.liveness && (
+                                    <p className="text-xs text-red-600 font-medium text-center">{fieldErrors.liveness}</p>
+                                )}
                             </div>
 
                             <div className="flex flex-col gap-4 bg-gray-50 p-5 rounded-xl border border-gray-200 mt-2">
@@ -784,7 +787,7 @@ export default function NewVerificationPage() {
                                 </div>
                             </div>
 
-                            <button type="submit" disabled={loading} className="mt-4 flex items-center justify-center gap-2 w-full px-6 py-3.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 cursor-not-allowed text-sm">
+                            <button type="submit" disabled={loading} className="mt-4 flex items-center justify-center gap-2 w-full px-6 py-3.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm">
                                 {loading ? (
                                     <>
                                         <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>

@@ -7,24 +7,32 @@
 //   2. Anti-doublon (email/CIN déjà en cours de traitement pour CETTE entreprise)
 //   3. OCR du document d'identité (Gemini Vision, Tesseract en repli)
 //   4. Résolution de la date de naissance et de l'âge (formulaire OU document)
-//   5. Screening AML/PEP + comparaison faciale serveur, EN PARALLÈLE
+//   5. Screening AML/PEP + comparaison faciale + LIVENESS, EN PARALLÈLE
 //   6. Moteur de règles déclaratif (json-rules-engine + lib/kyc-rules.json)
 //   7. Écriture du dossier + première ligne d'audit + notification si High Risk
 //
 // ✅ [PHASE C — RÉSOLU] LA BIOMÉTRIE N'EST PLUS CALCULÉE PAR LE CLIENT.
 // Le champ `biometricScore` envoyé par le formulaire est IGNORÉ. Le serveur
-// télécharge lui-même les deux images depuis le bucket privé et fait réaliser
-// la comparaison par Gemini Vision. Avant ce correctif, il suffisait
-// d'intercepter la requête et de remplacer le score par 99.9 pour annuler
-// toute pénalité biométrique.
+// télécharge lui-même les images depuis le bucket privé et fait réaliser la
+// comparaison par Gemini Vision.
 //
-// ✅ [PHASE C] L'ÂGE NE PEUT PLUS ÊTRE CONTOURNÉ EN OMETTANT LA DATE.
-// Voir le MODULE 2 plus bas : la valeur par défaut `clientAge = 30` désactivait
-// silencieusement le hard_kill sur les mineurs.
+// ✅ [PHASE C — RÉSOLU] L'ÂGE NE PEUT PLUS ÊTRE CONTOURNÉ EN OMETTANT LA DATE.
 //
-// ⚠️ FAILLE RESTANTE (Phase C — point 4) : le liveness. Le "selfie" reste un
-// fichier uploadé, pas une capture caméra en direct. Rien n'empêche encore
-// d'envoyer une photo de la personne trouvée en ligne.
+// ✅ [PHASE C — LIVENESS, ÉTAPE 5/5] LA PRÉSENCE PHYSIQUE EST VÉRIFIÉE.
+//
+// ❌ CE QUI EXISTAIT : le selfie était un fichier uploadé. Quelqu'un possédant
+// une photo de sa victime — Facebook, LinkedIn, une capture d'écran — l'envoyait,
+// et la comparaison faciale confirmait consciencieusement que c'était bien elle.
+// Le contrôle biométrique fonctionnait parfaitement et VALIDAIT UNE USURPATION.
+//
+// ✅ MAINTENANT : le client doit exécuter DEUX actions tirées au hasard par le
+// serveur, devant la caméra. Une photo imprimée ne tourne pas la tête. Le verdict
+// est rendu côté serveur par lib/liveness-verify.ts et alimente trois nouveaux
+// facts du moteur de règles.
+//
+// ⚠️ LIMITE DOCUMENTÉE : une VIDÉO pré-enregistrée de la vraie personne pourrait
+// passer. Ce n'est pas une faiblesse du modèle mais de l'information disponible —
+// une image 2D ne contient pas la profondeur. Voir lib/liveness-verify.ts.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
@@ -37,13 +45,17 @@ import { createSignedDocumentUrls } from "@/lib/storage";
 import { matchNameAgainstOcr, matchIdNumberAgainstOcr, containsArabic } from "@/lib/arabic";
 import { extractDocumentData, isDocumentExpired } from "@/lib/document-ocr";
 import { compareFacesServerSide } from "@/lib/face-match";
+// 🆕 [PHASE C — LIVENESS] Vérification serveur de la séquence de présence.
+import { verifyLivenessSequence } from "@/lib/liveness-verify";
 
 // 🆕 [FIX PROD] Durée max d'exécution sur Vercel. Sans cette ligne, le plan
 // Hobby coupe la fonction à 10 secondes.
 //
-// BUDGET : OCR (15 s max) + max(AML 8 s, visage 20 s) = ~35 s de pire cas.
-// Les deux derniers tournent EN PARALLÈLE. Enchaînés, on serait à 43 s, soit à
-// quelques secondes du plafond.
+// BUDGET APRÈS AJOUT DU LIVENESS :
+//   OCR (15 s max) + max(AML 8 s, visage 20 s, liveness 25 s) = ~40 s de pire cas.
+// Les trois derniers tournent EN PARALLÈLE. Enchaînés, on serait à 68 s — donc
+// au-delà du plafond. Le parallélisme n'est pas une optimisation ici, c'est ce
+// qui rend le pipeline possible.
 export const maxDuration = 60;
 
 const customerRegistrationSchema = z.object({
@@ -57,12 +69,45 @@ const customerRegistrationSchema = z.object({
     dateOfBirth: z.string().optional().or(z.literal('')),
     phoneNumber: z.string().optional().or(z.literal('')),
     idCardPath: z.string().min(1, "Le document d'identité est manquant"),
-    selfiePath: z.string().min(1, "Le selfie est manquant"),
+
+    // 🆕 [PHASE C — LIVENESS] LE SELFIE N'EST PLUS FOURNI DIRECTEMENT.
+    //
+    // ⚠️ IL EST DEVENU OPTIONNEL DANS LE SCHÉMA, mais ce n'est PAS un
+    // assouplissement : il est désormais dérivé de l'image de RÉFÉRENCE de la
+    // séquence de liveness (voir plus bas). Cette image EST un selfie — un visage
+    // de face, en pose neutre — à ceci près qu'elle est capturée en direct au lieu
+    // d'être uploadée. Strictement meilleure qu'avant.
+    //
+    // 💡 Le champ reste accepté pour ne pas casser un onglet resté ouvert avec
+    // l'ancienne version du formulaire, mais il n'est plus jamais utilisé quand
+    // une séquence de liveness est fournie.
+    selfiePath: z.string().optional(),
+
+    // 🆕 [PHASE C — LIVENESS] LA SÉQUENCE DE PRÉSENCE.
+    //
+    // ⚠️ OPTIONNELLE AU NIVEAU DE ZOD, ET C'EST DÉLIBÉRÉ : son absence n'est pas
+    // une erreur de validation, c'est un FAIT MÉTIER qui coûte 40 ou 45 points
+    // dans le moteur de règles. Un 400 ferait perdre toute la saisie de l'agent
+    // pour un cas qui doit au contraire produire un dossier — signalé, pénalisé,
+    // mais existant. Rejeter ici reviendrait à traiter un signal de risque comme
+    // un bug de formulaire.
+    liveness: z
+        .object({
+            token: z.string().min(1),
+            referencePath: z.string().min(1),
+            action1Path: z.string().min(1),
+            action2Path: z.string().min(1),
+            attempts: z.number().int().min(1).max(50),
+        })
+        .optional(),
+
+    // 🆕 [PHASE C — LIVENESS] CONTOURNEMENT TRACÉ.
+    // Renseigné quand l'agent crée le dossier sans capture caméra. La longueur
+    // minimale reprend celle imposée côté composant : une justification de deux
+    // caractères ne justifie rien.
+    livenessSkipReason: z.string().min(15).max(300).optional(),
 
     // 🆕 [PHASE C] CHAMP CONSERVÉ MAIS TOTALEMENT IGNORÉ.
-    // Le formulaire ne l'envoie plus, mais une version en cache du navigateur
-    // pourrait encore le faire. Si Zod le rejetait, ces clients verraient toute
-    // création de dossier échouer. On l'accepte donc, et on ne le lit nulle part.
     biometricScore: z.number().min(0).max(100).nullable().optional()
 });
 
@@ -95,16 +140,13 @@ const ID_FORMATS: Record<string, RegExp> = {
 };
 
 // ----------------------------------------------------------------------------
-// 🆕 [PHASE C] CALCUL D'ÂGE — EXTRAIT EN FONCTION AUTONOME
+// CALCUL D'ÂGE — FONCTION AUTONOME
 // ----------------------------------------------------------------------------
-// Il était en ligne dans le POST. On le sort parce qu'il est désormais appelé
-// DEUX FOIS : sur la date saisie au formulaire, et sur celle lue par l'OCR.
-//
-// 💡 Le calcul tient compte du mois et du jour, pas seulement de l'année : à
+// Appelée DEUX FOIS : sur la date saisie au formulaire, et sur celle lue par
+// l'OCR. Le calcul tient compte du mois et du jour, pas seulement de l'année : à
 // quelques jours près, un mineur passerait pour majeur.
 //
-// Renvoie `null` sur une date illisible plutôt qu'un NaN silencieux, pour que
-// l'appelant puisse traiter l'absence explicitement.
+// Renvoie `null` sur une date illisible plutôt qu'un NaN silencieux.
 function computeAge(isoDate: string): number | null {
     const birthDate = new Date(isoDate);
     if (isNaN(birthDate.getTime())) return null;
@@ -387,10 +429,31 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: `Security Validation Failed: ${errorMessages}` }, { status: 400 });
         }
 
-        // 🆕 [PHASE C] `biometricScore` N'EST VOLONTAIREMENT PAS EXTRAIT ICI.
+        // 🆕 [PHASE C] `biometricScore` N'EST VOLONTAIREMENT PAS EXTRAIT.
         // Ne pas le destructurer est le meilleur garde-fou possible — TypeScript
         // refusera toute tentative future de l'utiliser par inadvertance.
-        const { customerName, customerNameAr, email, type, cin, documentType, nationality, dateOfBirth, phoneNumber, idCardPath, selfiePath } = validationResult.data;
+        const {
+            customerName, customerNameAr, email, type, cin, documentType, nationality,
+            dateOfBirth, phoneNumber, idCardPath, selfiePath, liveness, livenessSkipReason,
+        } = validationResult.data;
+
+        // ====================================================================
+        // 🆕 [PHASE C — LIVENESS] LE SELFIE EST L'IMAGE DE RÉFÉRENCE
+        // ====================================================================
+        // ⚠️ CETTE LIGNE DOIT VENIR AVANT TOUT LE RESTE : la comparaison faciale
+        // en dépend, et elle est lancée plus bas dans le bloc parallèle. La
+        // résoudre plus tard reviendrait à comparer la pièce d'identité à rien.
+        //
+        // 💡 L'image neutre de la séquence EST un selfie — un visage de face, en
+        // pose neutre. La seule différence avec l'ancien champ, c'est qu'elle a
+        // été capturée en direct au lieu d'être choisie dans une galerie. Toute
+        // la comparaison faciale existante fonctionne donc sans modification, sur
+        // une source strictement meilleure.
+        //
+        // Le repli sur `selfiePath` ne sert qu'aux appels sans séquence de
+        // liveness : contournement tracé, ou onglet resté ouvert avec l'ancienne
+        // version du formulaire.
+        const effectiveSelfiePath = liveness?.referencePath ?? selfiePath ?? null;
 
         // ====================================================================
         // 🔒 VÉRIFICATION D'APPARTENANCE DES CHEMINS
@@ -400,10 +463,20 @@ export async function POST(req: Request) {
         // dossier — et le verrait s'afficher légitimement, puisque le contrôle
         // d'accès se base sur le propriétaire du DOSSIER, pas du fichier.
         //
-        // 🆕 [PHASE C] Ce contrôle prend une importance nouvelle : le serveur
-        // télécharge désormais lui-même ces fichiers pour la comparaison faciale.
+        // 🆕 [PHASE C] LA LISTE À CONTRÔLER S'EST ALLONGÉE. Le serveur télécharge
+        // désormais jusqu'à quatre fichiers pour ce dossier. Sans cette barrière,
+        // on lui ferait analyser — et donc valider — des images appartenant à une
+        // autre entreprise.
         const pathPrefix = `${companyId}/`;
-        if (!idCardPath.startsWith(pathPrefix) || !selfiePath.startsWith(pathPrefix)) {
+        const pathsToCheck = [
+            idCardPath,
+            effectiveSelfiePath,
+            liveness?.referencePath,
+            liveness?.action1Path,
+            liveness?.action2Path,
+        ].filter((p): p is string => typeof p === "string" && p.length > 0);
+
+        if (!pathsToCheck.every((p) => p.startsWith(pathPrefix))) {
             console.error(
                 `🔴 Sécurité : tentative de rattachement d'un document hors périmètre (company ${companyId})`
             );
@@ -433,27 +506,29 @@ export async function POST(req: Request) {
         }
 
         // ====================================================================
-        // SIGNATURE DES DEUX DOCUMENTS, EN AMONT
+        // SIGNATURE DES DOCUMENTS, EN AMONT
         // ====================================================================
         // Deux modules ont besoin de ces URLs — l'OCR (pièce d'identité) et la
-        // comparaison faciale (les deux images). Les signer à l'intérieur du bloc
-        // OCR rendrait le selfie inaccessible ailleurs.
+        // comparaison faciale (pièce d'identité + selfie). La vérification de
+        // liveness, elle, signe ses propres URLs dans lib/liveness-verify.ts.
         //
         // 💡 120 secondes de validité : ces liens doivent survivre à toute la
-        // durée du pipeline, y compris le téléchargement des images par Gemini
-        // pour la comparaison faciale, qui arrive bien après l'OCR.
+        // durée du pipeline.
         //
-        // 🔒 L'ÉCHEC N'EST PAS FATAL. Si la signature échoue, on laisse les URLs
-        // à `null` : l'OCR se déclarera indisponible (+25) et la biométrie aussi
+        // 🔒 L'ÉCHEC N'EST PAS FATAL. Si la signature échoue, les URLs restent à
+        // `null` : l'OCR se déclarera indisponible (+25) et la biométrie aussi
         // (+40). Le dossier part en revue manuelle — bien mieux qu'une erreur 500
         // qui ferait perdre toute la saisie de l'agent.
         let signedIdCardUrl: string | null = null;
         let signedSelfieUrl: string | null = null;
 
         try {
-            const signedUrls = await createSignedDocumentUrls([idCardPath, selfiePath], 120);
+            const toSign = [idCardPath, effectiveSelfiePath].filter(
+                (p): p is string => typeof p === "string" && p.length > 0
+            );
+            const signedUrls = await createSignedDocumentUrls(toSign, 120);
             signedIdCardUrl = signedUrls[idCardPath] ?? null;
-            signedSelfieUrl = signedUrls[selfiePath] ?? null;
+            signedSelfieUrl = effectiveSelfiePath ? signedUrls[effectiveSelfiePath] ?? null : null;
         } catch (error) {
             console.error("[STORAGE] Signature des documents impossible :", error);
         }
@@ -500,10 +575,9 @@ export async function POST(req: Request) {
                     ? matchIdNumberAgainstOcr(cin, extraction.idNumber)
                     : matchIdNumberAgainstOcr(cin, extraction.rawText);
 
-                // ⚠️ Les CIN tunisiennes ne portent PAS de date d'expiration :
-                // ce contrôle renverra `null` sur la quasi-totalité du marché
-                // principal. Il ne sert réellement que pour les passeports et
-                // les permis de conduire.
+                // ⚠️ Les CIN tunisiennes ne portent PAS de date d'expiration : ce
+                // contrôle renverra `null` sur la quasi-totalité du marché
+                // principal. Il ne sert réellement que pour les passeports.
                 documentExpired = isDocumentExpired(extraction.expiryDate);
             }
 
@@ -541,39 +615,21 @@ export async function POST(req: Request) {
         }
 
         // ====================================================================
-        // 🆕 [PHASE C] MODULE 2 : RÉSOLUTION DE LA DATE DE NAISSANCE
+        // MODULE 2 : RÉSOLUTION DE LA DATE DE NAISSANCE
         // ====================================================================
-        // ⚠️ CE BLOC A CHANGÉ DE PLACE, ET CE N'EST PAS COSMÉTIQUE. Il était le
-        // MODULE 1, exécuté AVANT l'OCR. Il doit maintenant venir APRÈS, parce
-        // qu'il peut s'appuyer sur la date lue sur le document.
+        // ⚠️ CE BLOC VIENT APRÈS L'OCR, ET CE N'EST PAS COSMÉTIQUE : il peut
+        // s'appuyer sur la date lue sur le document.
         //
-        // ❌ CE QUI EXISTAIT : `let clientAge = 30;` puis un `if (dateOfBirth)`.
-        // Sans date saisie, le client était donc traité comme un adulte de 30 ans
-        // et AUCUN signal n'était levé.
+        // ❌ CE QUI EXISTAIT : `let clientAge = 30;`. Sans date saisie, le client
+        // était traité comme un adulte de 30 ans et AUCUN signal n'était levé.
         //
-        // ⚠️ POURQUOI C'ÉTAIT LE PLUS GRAVE DES FAIL-OPEN RESTANTS : la règle
-        // `isUnderage` est un HARD_KILL — le contrôle le plus sévère du moteur,
-        // celui qui interdit l'inscription d'un mineur. C'est une obligation
-        // réglementaire, pas une préférence. Omettre la date de naissance
-        // DÉSACTIVAIT donc ce contrôle, silencieusement, sans le moindre point de
-        // pénalité. Le champ étant optionnel dans le formulaire, il suffisait de
-        // le laisser vide.
-        //
-        // ✅ TROIS CAS DÉSORMAIS DISTINGUÉS :
-        //   1. Date saisie          → contrôle normal + comparaison au document
-        //   2. Champ vide, mais date LUE SUR LE DOCUMENT → contrôle effectué
-        //      depuis cette date, aucune pénalité (la source est même meilleure
-        //      que la saisie manuelle : elle vient de la pièce elle-même)
-        //   3. Aucune des deux      → `dobMissing`, +40 points, revue manuelle
-        //
-        // 💡 Le cas 2 est un bénéfice inattendu du passage à Gemini Vision :
-        // il extrait la date de naissance, donc le contrôle d'âge reste possible
-        // même quand l'agent n'a rien saisi.
+        // ⚠️ POURQUOI C'ÉTAIT LE PLUS GRAVE DES FAIL-OPEN : la règle `isUnderage`
+        // est un HARD_KILL — une obligation réglementaire. Omettre la date de
+        // naissance DÉSACTIVAIT ce contrôle, silencieusement, sans la moindre
+        // pénalité. Le champ étant optionnel, il suffisait de le laisser vide.
         const documentDob = extraction?.success ? extraction.dateOfBirth : undefined;
         const formDob = dateOfBirth?.trim() || undefined;
 
-        // Comparaison des deux dates — inchangée, simplement déplacée ici avec
-        // le reste de la logique de date de naissance.
         // ⚠️ On ne compare QUE si les deux existent : une date absente n'est pas
         // une incohérence, c'est une information manquante.
         const dobMismatch = Boolean(formDob && documentDob && formDob !== documentDob.trim());
@@ -582,19 +638,15 @@ export async function POST(req: Request) {
         const documentAge = documentDob ? computeAge(documentDob) : null;
 
         // ⚠️ ON RETIENT LE PLUS JEUNE DES DEUX ÂGES DISPONIBLES. C'est du
-        // fail-closed appliqué à la minorité : quelqu'un qui saisit 1990 alors
-        // que sa carte indique 2010 ne doit pas échapper au blocage. Le
-        // `dobMismatch` ci-dessus lui coûte déjà 45 points en parallèle, mais une
-        // pénalité ne remplace pas une interdiction — un mineur doit être rejeté,
-        // pas seulement signalé.
+        // fail-closed appliqué à la minorité : quelqu'un qui saisit 1990 alors que
+        // sa carte indique 2010 ne doit pas échapper au blocage. Une pénalité ne
+        // remplace pas une interdiction.
         const availableAges = [formAge, documentAge].filter(
             (age): age is number => age !== null
         );
 
         const clientAge = availableAges.length > 0 ? Math.min(...availableAges) : null;
 
-        // Sert uniquement à la traçabilité : l'agent doit savoir d'où vient la
-        // date qui a fondé la décision.
         const dobSource: "form" | "document" | "none" =
             formAge !== null ? "form" : documentAge !== null ? "document" : "none";
 
@@ -603,47 +655,85 @@ export async function POST(req: Request) {
         const isYoungAdult = clientAge !== null && clientAge >= 18 && clientAge < 25;
 
         // ====================================================================
-        // MODULES 3 ET 4 EN PARALLÈLE — AML + BIOMÉTRIE
+        // 🆕 MODULES 3, 4 ET 5 EN PARALLÈLE — AML + BIOMÉTRIE + LIVENESS
         // ====================================================================
-        // ⚠️ POURQUOI EN PARALLÈLE : ces deux contrôles sont totalement
-        // indépendants. L'AML interroge OpenSanctions avec un NOM, la
-        // comparaison faciale interroge Gemini avec deux IMAGES — aucun n'a
-        // besoin du résultat de l'autre.
+        // ⚠️ POURQUOI EN PARALLÈLE : ces trois contrôles sont totalement
+        // indépendants. L'AML interroge OpenSanctions avec un NOM, la comparaison
+        // faciale et le liveness interrogent Gemini avec des IMAGES DIFFÉRENTES —
+        // aucun n'a besoin du résultat d'un autre.
         //
-        // Enchaînés : 8 s + 20 s = 28 s, à ajouter aux 15 s de l'OCR, soit 43 s —
-        // à quelques secondes du plafond de 60 s. En parallèle, le pire cas
-        // retombe à 20 s, donc ~35 s au total.
+        // Enchaînés : 8 + 20 + 25 = 53 s, à ajouter aux 15 s de l'OCR, soit 68 s —
+        // AU-DELÀ du plafond de 60 s de Vercel. En parallèle, le pire cas retombe
+        // à 25 s, donc ~40 s au total. Le parallélisme n'est pas une optimisation
+        // ici, c'est ce qui rend le pipeline possible.
         //
-        // 💡 `Promise.all` n'échoue jamais ici : les deux fonctions rattrapent
+        // 💡 `Promise.all` n'échoue jamais ici : les trois fonctions rattrapent
         // leurs propres erreurs et renvoient un état d'indisponibilité explicite
         // plutôt que de lever.
-        const [amlScreening, faceMatch] = await Promise.all([
+        //
+        // 💡 Quand aucune séquence n'est fournie (contournement tracé), on ne
+        // lance pas la vérification : il n'y a rien à vérifier. On renvoie
+        // directement un résultat "skipped" traité plus bas.
+        const [amlScreening, faceMatch, livenessResult] = await Promise.all([
             performGlobalSanctionsLookup(customerName, nationality || ""),
             compareFacesServerSide(signedIdCardUrl, signedSelfieUrl),
+            liveness
+                ? verifyLivenessSequence(liveness.token, {
+                      reference: liveness.referencePath,
+                      action1: liveness.action1Path,
+                      action2: liveness.action2Path,
+                  })
+                : Promise.resolve(null),
         ]);
 
         const normalizedEmail = String(email).toLowerCase();
+
+        // ====================================================================
+        // 🆕 [PHASE C — LIVENESS] LES QUATRE ÉTATS DE LA PRÉSENCE PHYSIQUE
+        // ====================================================================
+        // ⚠️ LA DISTINCTION ENTRE `livenessSkipped` ET `livenessUnavailable` EST
+        // ESSENTIELLE, et elle n'est pas cosmétique :
+        //
+        //   • SKIPPED — l'agent a DÉCIDÉ de ne pas faire la capture et l'a
+        //     justifié par écrit. C'est un choix humain, tracé, attribuable. Il
+        //     coûte 45 points (aligné sur amlScreeningFailed).
+        //
+        //   • UNAVAILABLE — la capture a EU LIEU mais n'a pas pu être analysée
+        //     (service injoignable, images illisibles, jeton expiré). Personne
+        //     n'a rien décidé, c'est notre outil qui n'a pas su conclure. 40
+        //     points, aligné sur biometricUnavailable.
+        //
+        // 💡 Les confondre reviendrait à traiter une décision humaine comme une
+        // panne technique — et à rendre invisible un agent qui contourne
+        // systématiquement le contrôle.
+        //
+        // ⚠️ ET SURTOUT : L'ABSENCE TOTALE DE SÉQUENCE, SANS JUSTIFICATION, EST
+        // TRAITÉE COMME UN CONTOURNEMENT. Sans ça, il suffirait d'appeler cette
+        // route directement en omettant le champ `liveness` pour échapper à toute
+        // pénalité — exactement le fail-open qu'on a corrigé sur l'AML, l'OCR, la
+        // biométrie et la date de naissance.
+        const livenessSkipped = !liveness;
+        const livenessPassed = livenessResult?.verdict === "passed";
+        const livenessFailed = livenessResult?.verdict === "failed";
+        const livenessUnavailable = livenessResult?.verdict === "unavailable";
+
+        // Le verdict stocké en base. "skipped" n'est pas produit par
+        // lib/liveness-verify.ts — c'est un état propre au dossier, pas au
+        // contrôle.
+        const storedLivenessVerdict = liveness ? livenessResult?.verdict ?? "unavailable" : "skipped";
 
         // ====================================================================
         // LES QUATRE FACTS BIOMÉTRIQUES DÉRIVENT DU VERDICT SERVEUR
         // ====================================================================
         // Les anciens seuils numériques (40/60/75) ont disparu : ils étaient
         // calibrés sur une distance euclidienne entre vecteurs — une mesure
-        // mathématique. Gemini ne mesure pas, il juge. Lui réclamer un
-        // pourcentage puis le comparer à des seuils donnerait une fausse
-        // impression de rigueur.
-        //
-        // 💡 `lib/kyc-rules.json` n'a pas eu besoin d'être modifié pour ce
-        // changement : les quatre facts et leurs pénalités sont inchangés, seule
-        // la façon de les dériver a changé. C'est tout l'intérêt d'un moteur de
-        // règles déclaratif.
+        // mathématique. Gemini ne mesure pas, il juge.
         const biometricUnavailable = faceMatch.verdict === "unavailable";
         const faceMatchFailed = faceMatch.verdict === "different_person";
         const faceMatchWeak = faceMatch.verdict === "inconclusive";
         const faceMatchBorderline = faceMatch.verdict === "likely_same_person";
 
-        // Conservé pour les règles COMBINÉES du moteur (nom + visage), qui
-        // raisonnent sur "le visage ne correspond pas" sans distinguer le degré.
+        // Conservé pour les règles COMBINÉES du moteur (nom + visage).
         const faceMismatch = faceMatchFailed || faceMatchWeak;
 
         // 💡 On ne pénalise QUE si un format est connu pour le pays déclaré.
@@ -655,7 +745,7 @@ export async function POST(req: Request) {
         const isBlacklistedJurisdiction = FATF_BLACKLIST.includes(nationality);
         const isGreylistedJurisdiction = FATF_GREYLIST.includes(nationality);
 
-        // --- MODULE 5 : MOTEUR DE RÈGLES ---
+        // --- MODULE 6 : MOTEUR DE RÈGLES ---
         // 🆕 [AUDIT MOTEUR] `isStolenDocument` A ÉTÉ SUPPRIMÉ. Son calcul était
         // `cin.endsWith("999") || cin.endsWith("000")`, mais le message affirmait
         // "matched stolen/lost databases" — une DÉCLARATION FAUSSE inscrite dans
@@ -671,28 +761,14 @@ export async function POST(req: Request) {
             isPassport: documentType === "Passport",
 
             isUnderage,
-            // 🆕 [PHASE C] `isYoungAdult` NE COÛTE PLUS 20 POINTS À LUI SEUL.
-            //
-            // ⚠️ POURQUOI CE CHANGEMENT : les seuils métier placent Medium Risk à
-            // partir de 20 points. Un client de 24 ans au dossier parfaitement
-            // propre basculait donc AUTOMATIQUEMENT en Medium, sans avoir rien
-            // fait. Sur un marché à population jeune, c'est une part importante
-            // des dossiers signalés à tort — et un moteur qui alerte sur tout le
-            // monde n'alerte plus sur personne.
-            //
-            // 💡 LE SIGNAL SOUS-JACENT EST POURTANT RÉEL : le recrutement de
-            // mules financières cible massivement les 18-25 ans, c'est documenté.
-            // Mais aucun acteur du secteur (Sumsub, Onfido, Veriff) n'applique de
-            // pénalité d'âge autonome au stade de la vérification d'identité :
-            // l'âge ne dit rien sur "cette personne est-elle bien celle qu'elle
-            // prétend être ?". Il n'a de valeur qu'en COMBINAISON.
-            //
-            // ✅ Le fact reste donc produit, mais il n'est scoré que combiné à un
-            // email jetable (voir kyc-rules.json). Seul, il ne génère qu'une
-            // mention informative à 0 point dans la piste d'audit.
+            // 🆕 [PHASE C] `isYoungAdult` NE COÛTE PLUS 20 POINTS À LUI SEUL : à
+            // ce tarif, tout client de moins de 25 ans au dossier propre basculait
+            // AUTOMATIQUEMENT en Medium Risk. Sur un marché à population jeune,
+            // c'est une part importante des dossiers signalés à tort — et un
+            // moteur qui alerte sur tout le monde n'alerte plus sur personne. Le
+            // signal reste réel (le recrutement de mules cible les 18-25 ans) mais
+            // n'est scoré qu'en COMBINAISON avec un email jetable.
             isYoungAdult,
-            // 🆕 [PHASE C] Le fail-open le plus grave qui restait : sans date de
-            // naissance, le hard_kill sur les mineurs ne pouvait pas se déclencher.
             dobMissing,
 
             isBlacklistedJurisdiction,
@@ -711,6 +787,12 @@ export async function POST(req: Request) {
             faceMatchWeak,
             faceMatchBorderline,
             biometricUnavailable,
+
+            // 🆕 [PHASE C — LIVENESS] Les quatre états de la présence physique.
+            livenessPassed,
+            livenessFailed,
+            livenessUnavailable,
+            livenessSkipped,
         };
 
         const engine = new Engine(kycRules);
@@ -724,8 +806,8 @@ export async function POST(req: Request) {
         // humaine) et soit un "hard_kill" (score forcé à 100), soit des points
         // cumulatifs.
         //
-        // 💡 Les événements de type "informational" (points: 0) passent par la
-        // même branche : ils enrichissent le rationale sans peser sur le score.
+        // 💡 Les événements "informational" (points: 0) et "trust_bonus" (points
+        // négatifs) passent par la même branche.
         events.forEach(event => {
             const points = event.params?.points as number || 0;
             const message = event.params?.message as string;
@@ -744,11 +826,64 @@ export async function POST(req: Request) {
         }
 
         // ====================================================================
+        // 🆕 [PHASE C — LIVENESS] RATIONALE DE PRÉSENCE — EN TÊTE
+        // ====================================================================
+        // ⚠️ `unshift` LE PLACE AVANT MÊME LE RATIONALE BIOMÉTRIQUE, et c'est
+        // délibéré : savoir si la personne était PHYSIQUEMENT LÀ prime sur toute
+        // comparaison de visages. Un visage qui correspond parfaitement à une
+        // photo trouvée en ligne ne prouve rien du tout.
+        if (livenessSkipped) {
+            rationale.unshift(
+                livenessSkipReason
+                    ? `⚠️ LIVENESS BYPASSED by the agent. Stated reason: "${livenessSkipReason}" — no evidence exists that the applicant was physically present.`
+                    : "⚠️ NO LIVENESS SEQUENCE was submitted with this file, and no justification was recorded. Physical presence is entirely unproven."
+            );
+        } else if (livenessFailed) {
+            rationale.unshift(
+                `⛔ LIVENESS FAILED: ${livenessResult?.reason ?? "The requested actions were not performed."}`
+            );
+        } else if (livenessUnavailable) {
+            rationale.unshift(
+                `⚠️ LIVENESS UNVERIFIED: ${livenessResult?.reason ?? "The sequence could not be analysed."}`
+            );
+        } else if (livenessPassed) {
+            rationale.unshift(`✅ LIVENESS CONFIRMED: ${livenessResult?.reason}`);
+        }
+
+        // 🆕 [PHASE C] LE NOMBRE DE TENTATIVES, SIGNALÉ AU-DELÀ DE TROIS.
+        //
+        // ⚠️ ON NE PÉNALISE PAS, ON REND VISIBLE. Une personne réelle rate parfois
+        // une pose — deux ou trois essais sont parfaitement normaux, et les
+        // plafonner pénaliserait des clients légitimes. Mais dix essais sur un
+        // même dossier est un signal : un fraudeur qui relance jusqu'à tomber sur
+        // les deux actions qu'il sait imiter. À charge de l'agent qui relit.
+        if (liveness && liveness.attempts > 3) {
+            rationale.push(
+                `🔍 LIVENESS RETRIES (informational, no score impact): the sequence was restarted ${liveness.attempts} times before completing. Repeated retries can be legitimate (poor lighting, applicant not understanding the instruction) but an unusually high count may indicate someone waiting for a favourable pair of actions.`
+            );
+        }
+
+        // 🔭 [PHASE C] Indices d'usurpation relevés pendant la séquence.
+        //
+        // ⚠️ SIGNALÉS SANS PÉNALITÉ ASSOCIÉE. Un modèle de langage n'est pas un
+        // détecteur d'attaque par présentation : un reflet de fenêtre, des
+        // lunettes ou la retouche automatique d'un téléphone produisent
+        // régulièrement de faux positifs. On observe la fiabilité du signal sur de
+        // vrais dossiers avant d'en faire un critère.
+        const allSpoofingSignals = [
+            ...(livenessResult?.spoofingSignals ?? []),
+            ...faceMatch.spoofingSignals,
+        ];
+
+        if (allSpoofingSignals.length > 0) {
+            rationale.push(
+                `🔍 PRESENTATION NOTICE (informational, no score impact): possible signs that the captured images are not live — ${[...new Set(allSpoofingSignals)].join(", ")}.`
+            );
+        }
+
+        // ====================================================================
         // RATIONALE BIOMÉTRIQUE — ALIGNÉ SUR LE VERDICT
         // ====================================================================
-        // `unshift` place ce message en TÊTE : c'est le premier élément que
-        // l'agent lit dans le panneau d'analyse.
-        //
         // 💡 LA SIMILARITÉ EST AFFICHÉE ENTRE PARENTHÈSES, JAMAIS SEULE. Le
         // verdict est la décision, le pourcentage n'est qu'un ordre de grandeur
         // fourni par le modèle. Les présenter au même niveau laisserait croire
@@ -757,58 +892,44 @@ export async function POST(req: Request) {
             faceMatch.similarity !== null ? ` (model estimate: ${faceMatch.similarity}%)` : "";
 
         if (biometricUnavailable) {
-            rationale.unshift(
+            rationale.push(
                 `⚠️ BIOMETRIC UNAVAILABLE: ${faceMatch.reason} Identity was NOT biometrically verified — manual visual comparison is mandatory.`
             );
         } else if (faceMatchFailed) {
-            rationale.unshift(
-                `⛔ BIOMETRIC FAILURE${similarityNote}: server-side comparison concluded the selfie and the document portrait show different people. ${faceMatch.reason}`
+            rationale.push(
+                `⛔ BIOMETRIC FAILURE${similarityNote}: server-side comparison concluded the face and the document portrait show different people. ${faceMatch.reason}`
             );
         } else if (faceMatchWeak) {
-            rationale.unshift(
+            rationale.push(
                 `⚠️ BIOMETRIC INCONCLUSIVE${similarityNote}: the comparison could not be settled automatically. ${faceMatch.reason} Manual visual comparison required.`
             );
         } else if (faceMatchBorderline) {
-            rationale.unshift(
+            rationale.push(
                 `🟡 BIOMETRIC BORDERLINE${similarityNote}: likely the same person, but below the high-confidence threshold. ${faceMatch.reason}`
             );
         } else {
-            rationale.unshift(
-                `✅ BIOMETRIC MATCH${similarityNote}: the selfie matches the document portrait. ${faceMatch.reason}`
+            rationale.push(
+                `✅ BIOMETRIC MATCH${similarityNote}: the captured face matches the document portrait. ${faceMatch.reason}`
             );
         }
 
-        // ⚠️ CE MESSAGE EST IMPORTANT POUR L'AUDIT : il indique noir sur blanc
-        // que la comparaison a eu lieu SUR LE SERVEUR. Les anciens dossiers
-        // reposaient sur un calcul navigateur non vérifiable — un auditeur doit
-        // pouvoir faire la différence entre les deux périodes.
+        // ⚠️ CE MESSAGE EST IMPORTANT POUR L'AUDIT : il indique noir sur blanc que
+        // la comparaison a eu lieu SUR LE SERVEUR. Les anciens dossiers reposaient
+        // sur un calcul navigateur non vérifiable — un auditeur doit pouvoir faire
+        // la différence entre les deux périodes.
         rationale.push(
             faceMatch.source === "gemini"
                 ? "✅ BIOMETRIC SOURCE: Server-side facial comparison (Gemini Vision). The client-supplied score was ignored."
                 : "⚠️ BIOMETRIC SOURCE: Server-side comparison could not be performed. No biometric evidence exists for this file."
         );
 
-        // 🔭 [PHASE C — PRÉPARATION LIVENESS] Indices d'usurpation, signalés SANS
-        // pénalité associée.
-        //
-        // ⚠️ POURQUOI AUCUN POINT N'EST RETIRÉ : un modèle de langage n'est pas un
-        // détecteur d'attaque par présentation. Pénaliser sur cette base
-        // produirait des faux positifs sur des selfies légitimes (reflet de
-        // fenêtre, lunettes, retouche automatique du téléphone). On observe
-        // d'abord la fiabilité du signal sur de vrais dossiers.
-        if (faceMatch.spoofingSignals.length > 0) {
-            rationale.push(
-                `🔍 PRESENTATION NOTICE (informational, no score impact): the selfie shows possible signs of not being a live capture — ${faceMatch.spoofingSignals.join(", ")}. Liveness detection is not yet implemented.`
-            );
-        }
-
         // ====================================================================
-        // 🆕 [PHASE C] TRAÇABILITÉ DE LA DATE DE NAISSANCE
+        // TRAÇABILITÉ DE LA DATE DE NAISSANCE
         // ====================================================================
-        // ⚠️ L'AGENT DOIT SAVOIR D'OÙ VIENT LA DATE QUI A FONDÉ LA DÉCISION.
-        // Sans cette mention, un dossier vérifié depuis la date lue sur la carte
-        // serait indiscernable d'un dossier vérifié depuis une saisie manuelle —
-        // alors que ce ne sont pas du tout les mêmes garanties.
+        // ⚠️ L'AGENT DOIT SAVOIR D'OÙ VIENT LA DATE QUI A FONDÉ LA DÉCISION. Sans
+        // cette mention, un dossier vérifié depuis la date lue sur la carte serait
+        // indiscernable d'un dossier vérifié depuis une saisie manuelle — alors
+        // que ce ne sont pas du tout les mêmes garanties.
         if (dobMissing) {
             rationale.push(
                 "⚠️ AGE CHECK: no date of birth was available from either the application form or the identity document. The mandatory minor check could NOT be performed."
@@ -821,7 +942,7 @@ export async function POST(req: Request) {
             rationale.push(`✅ AGE CHECK: applicant age is ${clientAge}, verified from the declared date of birth.`);
         }
 
-        // 🆕 [AUDIT MOTEUR] Traçabilité de la SOURCE du screening AML.
+        // Traçabilité de la SOURCE du screening AML.
         if (amlScreening.screeningFailed) {
             rationale.push(`⚠️ AML SCREENING SOURCE: ${amlScreening.source}. No watchlist comparison was performed for this applicant.`);
         } else {
@@ -863,6 +984,11 @@ export async function POST(req: Request) {
         // Le score est borné [0, 100] puis formaté en chaîne de 3 chiffres
         // ("007", "085"...) — c'est le format stocké en base (schema.prisma,
         // `score String?`), d'où les helpers de parsing côté frontend.
+        //
+        // 💡 LA BORNE INFÉRIEURE COMPTE DEPUIS L'AJOUT DU BONUS DE LIVENESS
+        // (-10) : sans elle, un dossier parfait descendrait sous zéro et le
+        // formatage produirait "-15". Elle empêche aussi qu'un crédit accumulé ne
+        // masque un problème réel apparu plus tard.
         riskScore = Math.min(100, Math.max(0, riskScore));
         const formattedScore = riskScore.toString().padStart(3, '0');
 
@@ -891,7 +1017,25 @@ export async function POST(req: Request) {
                 // On enregistre les CHEMINS. Les colonnes idCardUrl/selfieUrl
                 // restent volontairement nulles pour tout nouveau dossier.
                 idCardPath,
-                selfiePath,
+                // 🆕 [PHASE C] L'image de référence du liveness sert de selfie.
+                selfiePath: effectiveSelfiePath,
+
+                // 🆕 [PHASE C — LIVENESS] Les preuves et le verdict.
+                //
+                // 💡 POURQUOI CONSERVER LES TROIS IMAGES ALORS QUE LE VERDICT
+                // SUFFIRAIT À LA DÉCISION : parce qu'un verdict sans les pièces qui
+                // l'ont produit n'est pas auditable. Un compliance officer qui
+                // conteste un rejet — ou un régulateur qui contrôle un dossier
+                // accepté — doit pouvoir REGARDER ce sur quoi la machine s'est
+                // prononcée. Et le contrôle n'est PAS rejouable a posteriori : il
+                // dépend d'un jeton qui expire en trois minutes.
+                livenessReferencePath: liveness?.referencePath ?? null,
+                livenessAction1Path: liveness?.action1Path ?? null,
+                livenessAction2Path: liveness?.action2Path ?? null,
+                livenessVerdict: storedLivenessVerdict,
+                livenessSkipReason: livenessSkipReason ?? null,
+                livenessAttempts: liveness?.attempts ?? null,
+
                 status: "pending",
                 score: formattedScore,
                 riskLevel: riskLevel,
@@ -899,9 +1043,10 @@ export async function POST(req: Request) {
                 auditLogs: {
                     create: {
                         action: "CREATED",
-                        // 🆕 [PHASE C] La méthode biométrique ET la source de la date
-                        // de naissance figurent explicitement dans la piste d'audit.
-                        details: `KYC Pipeline initialized. Modules processed: Server-side Biometrics (${faceMatch.source}, verdict: ${faceMatch.verdict}), Age Check (${clientAge ?? "unavailable"}, source: ${dobSource}), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
+                        // 🆕 [PHASE C] Le verdict de liveness et la source de la
+                        // date de naissance figurent explicitement dans la piste
+                        // d'audit.
+                        details: `KYC Pipeline initialized. Modules processed: Liveness (${storedLivenessVerdict}${liveness?.attempts && liveness.attempts > 1 ? `, ${liveness.attempts} attempts` : ""}), Server-side Biometrics (${faceMatch.source}, verdict: ${faceMatch.verdict}), Age Check (${clientAge ?? "unavailable"}, source: ${dobSource}), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
                         agentId: serverAgentId!,
                         companyId: companyId!
                     }

@@ -204,6 +204,54 @@ model VerificationRequest {
   idCardPath   String?
   selfiePath   String?
 
+    // 🆕 [PHASE C — LIVENESS] LES TROIS IMAGES DE LA SÉQUENCE DE PRÉSENCE
+  //
+  // 💡 POURQUOI LES CONSERVER ALORS QUE LE VERDICT SUFFIRAIT À LA DÉCISION :
+  // parce qu'un verdict sans les pièces qui l'ont produit n'est pas auditable.
+  // Un compliance officer qui conteste un rejet — ou un régulateur qui contrôle
+  // un dossier accepté — doit pouvoir REGARDER ce sur quoi la machine s'est
+  // prononcée. C'est le même principe que la piste d'audit : on ne demande pas
+  // qu'on nous croie sur parole.
+  //
+  // ⚠️ `selfiePath` N'EST PAS REMPLACÉ, IL EST ALIMENTÉ PAR L'IMAGE NEUTRE.
+  // L'image de référence de la séquence EST un selfie — un visage de face, en
+  // pose neutre — à ceci près qu'elle est capturée en direct au lieu d'être
+  // uploadée. La comparaison faciale (pièce d'identité contre selfie) continue
+  // donc de fonctionner sans une ligne de changement, et sur une source
+  // strictement meilleure qu'avant.
+  livenessReferencePath String?
+  livenessAction1Path   String?
+  livenessAction2Path   String?
+
+  // Le verdict rendu par lib/liveness-verify.ts : "passed", "failed",
+  // "unavailable" — ou "skipped" quand l'agent a documenté un contournement.
+  //
+  // 💡 Stocké en clair plutôt que recalculable : le contrôle coûte un appel
+  // Gemini et dépend d'un jeton qui expire en 3 minutes. Il n'est PAS rejouable
+  // a posteriori. La seule trace possible est celle qu'on écrit au moment où il
+  // a lieu.
+  livenessVerdict String?
+
+  // 🆕 CONTOURNEMENT TRACÉ. Renseigné uniquement quand l'agent a créé le dossier
+  // sans capture caméra, en justifiant par écrit.
+  //
+  // ⚠️ CE CHAMP EST LA RAISON POUR LAQUELLE LE CONTOURNEMENT EST ACCEPTABLE.
+  // Sans lui, "pas de liveness" serait un état muet, indiscernable d'un oubli.
+  // Avec lui, chaque contournement porte un motif ET le nom de l'agent (via
+  // l'AuditLog du dossier). Un agent qui contourne dix fois par mois devient
+  // visible dans les journaux.
+  livenessSkipReason String?
+
+  // Nombre de séquences lancées avant d'aboutir.
+  //
+  // 💡 ON NE BLOQUE PAS SUR CE CHIFFRE, ON LE REND VISIBLE. Une personne réelle
+  // rate parfois une pose : deux ou trois essais sont normaux, les plafonner
+  // pénaliserait des clients légitimes. Dix essais sur un même dossier est un
+  // signal — un fraudeur qui relance jusqu'à tomber sur les deux actions qu'il
+  // sait imiter. Le compteur figure dans le rationale, à charge de l'agent qui
+  // relit de s'y intéresser.
+  livenessAttempts Int?
+
   score        String?  
   riskLevel    String?  
   aiRationale  String?  

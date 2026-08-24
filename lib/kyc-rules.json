@@ -37,6 +37,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "livenessFailed", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 65,
+        "message": "LIVENESS FAILURE: The applicant did not perform the randomly requested actions in front of the camera. This is characteristic of a static photograph or a recording being presented instead of a physically present person. Do not approve without an in-person identity check."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "isPep", "operator": "equal", "value": true }]
     },
     "event": {
@@ -44,6 +56,42 @@
       "params": {
         "points": 60,
         "message": "COMPLIANCE ALERT: Applicant identified as a Politically Exposed Person. Enhanced due diligence is mandatory before approval."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "faceMatchFailed", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 55,
+        "message": "BIOMETRIC CRITICAL ALERT: Server-side facial comparison concluded that the person in the selfie is not the document holder."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "documentExpired", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 50,
+        "message": "DOCUMENT EXPIRED: The identification document is past its expiry date and cannot be accepted as valid proof of identity."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "livenessSkipped", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 45,
+        "message": "LIVENESS BYPASSED: The agent created this file without live camera capture and recorded a written justification. There is NO evidence that the applicant was physically present. The submitted face image could have been obtained from any source."
       }
     }
   },
@@ -61,6 +109,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "dobMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 45,
+        "message": "DATA MISMATCH: The date of birth on the document does not match the one declared in the application."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "dobMissing", "operator": "equal", "value": true }]
     },
     "event": {
@@ -68,6 +128,30 @@
       "params": {
         "points": 40,
         "message": "AGE VERIFICATION IMPOSSIBLE: No date of birth was provided in the application, and none could be read from the identity document. The mandatory minor check could NOT be performed for this applicant. A date of birth must be obtained and the file re-assessed before any approval."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "livenessUnavailable", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "LIVENESS UNVERIFIED: The liveness sequence could not be analysed (service unavailable, unreadable frames, or expired challenge). Physical presence was NOT confirmed. Manual review required."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "biometricUnavailable", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "BIOMETRIC MISSING: No usable face could be extracted from the document or the selfie. Identity was NOT biometrically verified. Manual visual comparison is mandatory."
       }
     }
   },
@@ -83,6 +167,66 @@
       "params": {
         "points": 40,
         "message": "FRAUD PATTERN: Both the name and the face fail to match the submitted document. This combination is characteristic of a stolen or borrowed identity document."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "ocrNameMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "OCR ALERT: Applicant name could not be verified on the provided Identity Document image."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "ocrCinMismatch", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 40,
+        "message": "OCR ALERT: ID Number (CIN) does not match the text extracted from the document."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "faceMatchWeak", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 35,
+        "message": "BIOMETRIC WARNING: The facial comparison could not be settled automatically. Manual visual comparison required."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isGreylistedJurisdiction", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 35,
+        "message": "JURISDICTION RISK: Applicant country is under increased FATF monitoring (grey list). Enhanced due diligence recommended."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "isDisposableEmail", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 35,
+        "message": "Risk Warning: Disposable email domain detected."
       }
     }
   },
@@ -118,78 +262,6 @@
   },
   {
     "conditions": {
-      "all": [{ "fact": "faceMatchFailed", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 55,
-        "message": "BIOMETRIC CRITICAL ALERT: Server-side facial comparison concluded that the person in the selfie is not the document holder."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "faceMatchWeak", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 35,
-        "message": "BIOMETRIC WARNING: The facial comparison could not be settled automatically. Manual visual comparison required."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "faceMatchBorderline", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 15,
-        "message": "BIOMETRIC NOTICE: Likely the same person, but below the high-confidence threshold. Match accepted with reservation."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "biometricUnavailable", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 40,
-        "message": "BIOMETRIC MISSING: No usable face could be extracted from the document or the selfie. Identity was NOT biometrically verified. Manual visual comparison is mandatory."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "ocrNameMismatch", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 40,
-        "message": "OCR ALERT: Applicant name could not be verified on the provided Identity Document image."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "ocrCinMismatch", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 40,
-        "message": "OCR ALERT: ID Number (CIN) does not match the text extracted from the document."
-      }
-    }
-  },
-  {
-    "conditions": {
       "all": [{ "fact": "ocrUnavailable", "operator": "equal", "value": true }]
     },
     "event": {
@@ -197,30 +269,6 @@
       "params": {
         "points": 25,
         "message": "OCR UNAVAILABLE: The document image could not be read (unreadable, timed out, or processing failed). Document data was NOT cross-verified. Manual review required."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "isGreylistedJurisdiction", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 35,
-        "message": "JURISDICTION RISK: Applicant country is under increased FATF monitoring (grey list). Enhanced due diligence recommended."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "isDisposableEmail", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 35,
-        "message": "Risk Warning: Disposable email domain detected."
       }
     }
   },
@@ -238,6 +286,18 @@
   },
   {
     "conditions": {
+      "all": [{ "fact": "faceMatchBorderline", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 15,
+        "message": "BIOMETRIC NOTICE: Likely the same person, but below the high-confidence threshold. Match accepted with reservation."
+      }
+    }
+  },
+  {
+    "conditions": {
       "all": [{ "fact": "missingPhone", "operator": "equal", "value": true }]
     },
     "event": {
@@ -250,30 +310,6 @@
   },
   {
     "conditions": {
-      "all": [{ "fact": "documentExpired", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 50,
-        "message": "DOCUMENT EXPIRED: The identification document is past its expiry date and cannot be accepted as valid proof of identity."
-      }
-    }
-  },
-  {
-    "conditions": {
-      "all": [{ "fact": "dobMismatch", "operator": "equal", "value": true }]
-    },
-    "event": {
-      "type": "risk_penalty",
-      "params": {
-        "points": 45,
-        "message": "DATA MISMATCH: The date of birth on the document does not match the one declared in the application."
-      }
-    }
-  },
-  {
-    "conditions": {
       "all": [{ "fact": "isYoungAdult", "operator": "equal", "value": true }]
     },
     "event": {
@@ -281,6 +317,18 @@
       "params": {
         "points": 0,
         "message": "PROFILE NOTE (informational, no score impact): Applicant is under 25. Recorded for audit purposes only. Age alone is not treated as a risk factor; it is scored only in combination with other indicators."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "livenessPassed", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "trust_bonus",
+      "params": {
+        "points": -10,
+        "message": "LIVENESS CONFIRMED: The applicant performed two randomly requested actions in front of the camera. Physical presence at the time of enrolment is evidenced."
       }
     }
   },
