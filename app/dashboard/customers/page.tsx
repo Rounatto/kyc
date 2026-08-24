@@ -22,7 +22,7 @@ import { User, Loader2, Download, ListFilter, ShieldCheck, ClipboardClock, Trian
 import CustomerHeader from "@/components/HeaderCustomers";
 import NewVerificationButton from "@/components/NewVerificationButton";
 // 🆕 [FIX TENDANCES] Composant partagé — plus de copie inline.
-import TrendIndicator from "@/components/TrendIndicator";
+import TrendIndicator from "@/components/trend-indicator";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
