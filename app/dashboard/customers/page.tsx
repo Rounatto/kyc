@@ -1,35 +1,38 @@
+// app/dashboard/customers/page.tsx
 "use client"
 
 // ============================================================================
 // 📋 ANNUAIRE DES CLIENTS KYC — LISTE FILTRÉE/PAGINÉE + STATS + EXPORT CSV
 // ============================================================================
-// Trois `useEffect` indépendants, chacun avec sa propre responsabilité :
-//   1. `fetchGlobalStats` : KPIs + graphique 7 jours (une seule fois, fenêtre
-//      fixe "30d" — indépendante des filtres appliqués à la table plus bas).
-//   2. `fetchCustomers` : la table paginée elle-même, redéclenchée à chaque
-//      changement de page/limite/filtre (`activeFilters`).
-//   3. `fetchLiveCriticalRisks` : mini-liste des 3 dossiers les plus à risque
-//      (une seule fois au montage, indépendante des filtres aussi).
-// Les filtres suivent un pattern "brouillon / appliqué" : `draftFilters` se
-// modifie librement dans le panneau, `activeFilters` (qui déclenche vraiment
-// le fetch) n'est mis à jour qu'au clic sur "Apply Filters" — évite de
-// spammer l'API à chaque clic dans le panneau de filtres.
-// `initialRisk`/`initialStatus` lisent l'URL (`?risk=high`) pour permettre un
-// lien direct filtré depuis le dashboard (ex: carte "High Risk Alerts") — ce
-// qui impose d'envelopper ce composant dans un `<Suspense>` tout en bas
-// (`useSearchParams` l'exige en Next.js App Router, comme pour setup-account).
+// Trois `useEffect` indépendants :
+//   1. `fetchGlobalStats` : KPIs + graphique 7 jours (une fois, fenêtre fixe "30d").
+//   2. `fetchCustomers` : la table paginée, redéclenchée à chaque filtre/page.
+//   3. `fetchLiveCriticalRisks` : les 3 dossiers les plus à risque (une fois).
+// Filtres "brouillon/appliqué" : `draftFilters` bouge librement, `activeFilters`
+// ne se met à jour qu'au clic "Apply Filters".
 //
-// Export CSV 100% côté client (refait un fetch avec limit=1000, transforme en
-// texte, télécharge) — même logique que le PDF de dashboard/reports, sans
-// endpoint serveur dédié à l'export.
+// 🆕 [FIX TENDANCES] La pastille inline a été retirée au profit du composant
+// partagé `@/components/TrendIndicator`, et le `|| 0` sur les deltas remplacé
+// par `?? null` — sans quoi le `null` de l'API était raboté à 0 et la pastille
+// mentait ("0,0 %") au lieu d'afficher "New" / "No data".
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import VerificationLogTable from "@/components/VerificationLogTable";
-import { User, Loader2, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert, SlidersHorizontal, X, TrendingUp, TrendingDown, Minus, AlertCircle, ArrowRight } from "lucide-react";
+import { User, Loader2, Download, ListFilter, ShieldCheck, ClipboardClock, TriangleAlert, SlidersHorizontal, X, AlertCircle, ArrowRight } from "lucide-react";
 import CustomerHeader from "@/components/HeaderCustomers";
 import NewVerificationButton from "@/components/NewVerificationButton";
+// 🆕 [FIX TENDANCES] Composant partagé — plus de copie inline.
+import TrendIndicator from "@/components/TrendIndicator";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+
+// 🆕 `null` = "pas de base de comparaison", valeur attendue de l'API.
+type Trends = {
+    totalDelta: number | null;
+    verifiedDelta: number | null;
+    pendingDelta: number | null;
+    highRiskDelta: number | null;
+};
 
 function CustomerPageContent() {
     const searchParams = useSearchParams();
@@ -38,19 +41,25 @@ function CustomerPageContent() {
     const initialStatus = searchParams.get("status") || "all";
 
     const [customers, setCustomers] = useState<any[]>([]);
-    const [highRiskProfiles, setHighRiskProfiles] = useState<any[]>([]); 
+    const [highRiskProfiles, setHighRiskProfiles] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalItems, setTotalItems] = useState(0);
     const [LimitPerPage, setLimitPerPage] = useState(5);
-    
+
     const [stats, setStats] = useState({ totalCustomers: 0, verifiedToday: 0, pendingReviews: 0, highRisk: 0 });
-    const [trends, setTrends] = useState({ totalDelta: 0, verifiedDelta: 0, pendingDelta: 0, highRiskDelta: 0 });
-    const [chartData, setChartData] = useState<any[]>([]); 
+    // 🆕 Défauts à `null`, pas à 0.
+    const [trends, setTrends] = useState<Trends>({
+        totalDelta: null,
+        verifiedDelta: null,
+        pendingDelta: null,
+        highRiskDelta: null,
+    });
+    const [chartData, setChartData] = useState<any[]>([]);
 
     const [isFilterOpen, setIsFilterOpen] = useState(false);
-    
+
     const [draftFilters, setDraftFilters] = useState({ status: initialStatus, risk: initialRisk, sort: 'oldest' });
     const [activeFilters, setActiveFilters] = useState({ status: initialStatus, risk: initialRisk, sort: 'oldest' });
 
@@ -66,23 +75,25 @@ function CustomerPageContent() {
         return Number.isNaN(numericScore) ? "N/A" : `${numericScore}/100`;
     };
 
-    // 💡 CORRECTION MAJEURE : On récupère TOUTES les statistiques globales ici via la bonne API unifiée
+    // 💡 Toutes les stats globales via l'API unifiée /api/dashboard/stats.
     useEffect(() => {
         async function fetchGlobalStats() {
             try {
                 const res = await fetch('/api/dashboard/stats?range=30d');
                 if (res.ok) {
                     const data = await res.json();
-                    
-                    // On met à jour les tendances
+
+                    // 🆕 `?? null`, jamais `|| 0` : un vrai 0 % passe intact, un
+                    // `null` reste `null`. Le composant affiche alors "New" /
+                    // "No data" au lieu d'une fausse stabilité.
                     setTrends({
-                        totalDelta: data.trends?.totalDelta || 0,
-                        verifiedDelta: data.trends?.verifiedDelta || 0,
-                        pendingDelta: data.trends?.pendingDelta || 0,
-                        highRiskDelta: data.trends?.highRiskDelta || 0
+                        totalDelta: data.trends?.totalDelta ?? null,
+                        verifiedDelta: data.trends?.verifiedDelta ?? null,
+                        pendingDelta: data.trends?.pendingDelta ?? null,
+                        highRiskDelta: data.trends?.highRiskDelta ?? null,
                     });
-                    
-                    // 💡 C'est ça qui manquait ! On met à jour les gros chiffres ici.
+
+                    // Les compteurs, eux, retombent légitimement à 0 si absents.
                     if (data.stats) {
                         setStats({
                             totalCustomers: data.stats.total || 0,
@@ -91,7 +102,7 @@ function CustomerPageContent() {
                             highRisk: data.stats.highRisk || 0
                         });
                     }
-                    
+
                     setChartData(data.chartData || []);
                 }
             } catch (error) {
@@ -101,11 +112,11 @@ function CustomerPageContent() {
         fetchGlobalStats();
     }, []);
 
-    // Ce useEffect ne s'occupe plus QUE du tableau des clients
+    // Ce useEffect ne s'occupe QUE du tableau des clients.
     useEffect(() => {
         async function fetchCustomers() {
             setLoading(true);
-            try{
+            try {
                 const url = `/api/customers?page=${currentPage}&limit=${LimitPerPage}&status=${activeFilters.status}&risk=${activeFilters.risk}&sort=${activeFilters.sort}`;
                 const response = await fetch(url);
                 const data = await response.json();
@@ -113,7 +124,7 @@ function CustomerPageContent() {
                 if (response.ok && data.requests) {
                     const formattedData = data.requests.map((req: any) => {
                         const initials = req.customerName ? req.customerName.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2) : "??";
-                        
+
                         let dateFormatted = "N/A";
                         if (req.submittedAt) {
                             const d = new Date(req.submittedAt);
@@ -122,10 +133,10 @@ function CustomerPageContent() {
                                 dateFormatted = `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
                             }
                         }
-                        
-                        let risk = "Low"; 
+
+                        let risk = "Low";
                         const parsedScore = getNumericScore(req.score);
-                        
+
                         if (!isNaN(parsedScore)) {
                             if (parsedScore >= 50) risk = "High";
                             else if (parsedScore >= 20) risk = "Medium";
@@ -140,10 +151,10 @@ function CustomerPageContent() {
                             Score: formatScore(req.score),
                             RiskLevel: risk,
                             DateAdded: dateFormatted,
-                            parsedScore 
+                            parsedScore
                         };
                     });
-                    
+
                     setCustomers(formattedData);
                     setTotalItems(data.total);
                     setTotalPages(Math.ceil(data.total / LimitPerPage));
@@ -154,7 +165,7 @@ function CustomerPageContent() {
                 setLoading(false);
             }
         }
-        fetchCustomers();   
+        fetchCustomers();
     }, [currentPage, LimitPerPage, activeFilters]);
 
     useEffect(() => {
@@ -189,7 +200,7 @@ function CustomerPageContent() {
 
             if (response.ok && data.requests) {
                 const headers = ["ID", "Customer Name", "Email", "Procedure Type", "Document Type", "ID Number", "Nationality", "Risk Score", "Status", "Date Submitted"];
-                
+
                 const csvRows = data.requests.map((req: any) => {
                     return [
                         req.id,
@@ -209,7 +220,7 @@ function CustomerPageContent() {
                 const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
                 const link = document.createElement("a");
                 const urlObj = URL.createObjectURL(blob);
-                
+
                 link.setAttribute("href", urlObj);
                 link.setAttribute("download", `kyc_directory_export_${activeFilters.status}_risk_${activeFilters.risk}.csv`);
                 document.body.appendChild(link);
@@ -239,37 +250,10 @@ function CustomerPageContent() {
     const handlePrevPage = () => { if (currentPage > 1) { setCurrentPage((prev) => prev - 1); } };
     const handleLimitChange = (newLimit: number) => { setLimitPerPage(newLimit); setCurrentPage(1); }
 
-    // ⚠️ Duplication : ce composant est identique à celui défini dans
-    // dashboard/page.tsx (Lot 6) — candidat naturel à extraire en composant
-    // partagé (components/) plutôt que copié-collé dans chaque page.
-    const TrendIndicator = ({ value = 0, invertColors = false, neutral = false }: { value?: number, invertColors?: boolean, neutral?: boolean }) => {
-        const safeValue = Number(value) || 0;
-        const isPositive = safeValue > 0;
-        const isZero = safeValue === 0;
-        
-        let colorClass = "text-gray-500 bg-gray-100";
-        if (!isZero) {
-            if (neutral) {
-                colorClass = "text-orange-700 bg-yellow-300/40"; 
-            } else if (invertColors) {
-                colorClass = isPositive ? "text-red-700 bg-red-100" : "text-green-700 bg-green-100";
-            } else {
-                colorClass = isPositive ? "text-green-700 bg-green-100" : "text-red-700 bg-red-100";
-            }
-        }
-
-        return (
-            <div className={`flex items-center justify-center rounded-sm px-2 py-1 text-[10px] font-bold gap-1 ${colorClass} truncate`}>
-                {isPositive ? <TrendingUp className="w-3 h-3" /> : isZero ? <Minus className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {isPositive ? '+' : ''}{safeValue.toFixed(1)}%
-            </div>
-        );
-    };
-
     return (
         <div className="w-full">
             <CustomerHeader />
-            
+
             <div className="flex flex-col gap-8 mb-8 bg-gray-100 px-8 lg:px-12 mt-8">
                 <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end bg-gray-100 gap-4 lg:gap-0">
                     <div className="flex flex-col mb-2">
@@ -277,13 +261,13 @@ function CustomerPageContent() {
                         <h2 className="text-2xl font-bold text-gray-900">Customer Directory</h2>
                         <p className="text-sm text-gray-500">Manage identity verifications and monitor entreprise risk profiles.</p>
                     </div>
-                    
+
                     <div className="flex flex-row gap-3 w-full lg:w-auto items-center">
                         <NewVerificationButton />
-                        
+
                         <div className="relative flex-1 lg:flex-none">
-                            <button 
-                                onClick={() => setIsFilterOpen(!isFilterOpen)} 
+                            <button
+                                onClick={() => setIsFilterOpen(!isFilterOpen)}
                                 className={`w-full flex items-center gap-2 px-2 md:px-4 py-2 border rounded-lg text-sm font-medium transition-colors cursor-pointer lg:w-36 h-12 justify-center
                                 ${hasActiveFilters ? 'bg-blue-50 border-blue-600 text-blue-700 hover:bg-blue-100' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
                             >
@@ -309,7 +293,7 @@ function CustomerPageContent() {
                                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Status</label>
                                             <div className="flex gap-2 flex-wrap">
                                                 {['all', 'pending', 'verified', 'rejected'].map((s) => (
-                                                    <button 
+                                                    <button
                                                         key={s}
                                                         onClick={() => setDraftFilters({...draftFilters, status: s})}
                                                         className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors cursor-pointer capitalize
@@ -325,7 +309,7 @@ function CustomerPageContent() {
                                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">AI Risk Level</label>
                                             <div className="flex gap-2 flex-wrap">
                                                 {['all', 'high', 'medium', 'low'].map((r) => (
-                                                    <button 
+                                                    <button
                                                         key={r}
                                                         onClick={() => setDraftFilters({...draftFilters, risk: r})}
                                                         className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors cursor-pointer capitalize
@@ -339,7 +323,7 @@ function CustomerPageContent() {
 
                                         <div className="flex flex-col gap-2">
                                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Sort Directory By</label>
-                                            <select 
+                                            <select
                                                 value={draftFilters.sort}
                                                 onChange={(e) => setDraftFilters({...draftFilters, sort: e.target.value})}
                                                 className="w-full border border-gray-300 bg-white rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-500 text-gray-800 cursor-pointer"
@@ -360,7 +344,7 @@ function CustomerPageContent() {
                             )}
                         </div>
 
-                        <button 
+                        <button
                             onClick={handleExportCSV}
                             className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-blue-700 border border-blue-800 rounded-lg text-sm font-medium text-white hover:bg-blue-800 cursor-pointer lg:w-36 h-12 justify-center transition-colors shadow-sm"
                         >
@@ -369,49 +353,49 @@ function CustomerPageContent() {
                         </button>
                     </div>
                 </div>
-                
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Total Customers</p>
-                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center"><User className="w-5 h-5"/></div>      
+                            <div className="text-blue-800 text-sm font-bold flex items-center justify-center"><User className="w-5 h-5"/></div>
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.totalCustomers}</p>
-                            <TrendIndicator value={trends.totalDelta} />
+                            <TrendIndicator value={trends.totalDelta} current={stats.totalCustomers} />
                         </div>
                     </div>
-                    
+
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Verified Profiles</p>
-                            <div className="text-green-700 text-sm font-bold flex items-center justify-center"><ShieldCheck className="w-5 h-5"/></div>      
+                            <div className="text-green-700 text-sm font-bold flex items-center justify-center"><ShieldCheck className="w-5 h-5"/></div>
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verifiedToday}</p>
-                            <TrendIndicator value={trends.verifiedDelta} />
+                            <TrendIndicator value={trends.verifiedDelta} current={stats.verifiedToday} />
                         </div>
                     </div>
-                    
+
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Reviews</p>
-                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center"><ClipboardClock className="w-5 h-5"/></div>      
+                            <div className="text-yellow-500 text-sm font-bold flex items-center justify-center"><ClipboardClock className="w-5 h-5"/></div>
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pendingReviews}</p>
-                            <TrendIndicator value={trends.pendingDelta} neutral={true} />
+                            <TrendIndicator value={trends.pendingDelta} current={stats.pendingReviews} neutral={true} />
                         </div>
                     </div>
-                    
+
                     <div className="w-full bg-white p-5 md:p-6 rounded-md border border-gray-300 shadow-sm flex flex-col justify-between min-h-[130px] hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start w-full">
                             <p className="text-sm font-semibold text-gray-500 truncate">High Risk Flagged</p>
-                            <div className="text-red-700 text-sm font-bold flex items-center justify-center"><TriangleAlert className="w-5 h-5"/></div>      
+                            <div className="text-red-700 text-sm font-bold flex items-center justify-center"><TriangleAlert className="w-5 h-5"/></div>
                         </div>
                         <div className="flex flex-row justify-between items-end w-full mt-4">
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.highRisk}</p>
-                            <TrendIndicator value={trends.highRiskDelta} invertColors={true} />
+                            <TrendIndicator value={trends.highRiskDelta} current={stats.highRisk} invertColors={true} />
                         </div>
                     </div>
                 </div>
@@ -450,16 +434,16 @@ function CustomerPageContent() {
                             </ResponsiveContainer>
                         </div>
                     </div>
-                    
+
                     <div className="flex flex-col w-full lg:w-[35%] min-h-[400px] border border-gray-400 rounded-md p-4 justify-between gap-6 hover:shadow-md hover:-translate-y-1 transition-all duration-300 bg-white">
                         <div>
                             <div className="flex flex-row items-center mb-4">
                                 <h2 className="font-bold text-gray-900">Live Critical Risks</h2>
-                                <button 
+                                <button
                                     onClick={() => {
                                         setDraftFilters({...draftFilters, risk: 'high'});
                                         setActiveFilters({...activeFilters, risk: 'high'});
-                                    }} 
+                                    }}
                                     className="text-xs font-bold text-blue-700 ml-auto hover:underline flex items-center gap-1 cursor-pointer"
                                 >
                                     Filter All <ArrowRight className="w-3 h-3" />
@@ -468,8 +452,8 @@ function CustomerPageContent() {
                             <div className="flex flex-col gap-3">
                                 {highRiskProfiles.length > 0 ? (
                                     highRiskProfiles.map((profile) => (
-                                        <Link 
-                                            href={`/dashboard/customers/${profile.id}`} 
+                                        <Link
+                                            href={`/dashboard/customers/${profile.id}`}
                                             key={profile.id}
                                             className="flex flex-row items-center gap-3 p-2.5 border border-red-200 bg-red-50/40 hover:bg-red-50 transition-all rounded-lg cursor-pointer group"
                                         >
@@ -490,7 +474,7 @@ function CustomerPageContent() {
                                 )}
                             </div>
                         </div>
-                    </div> 
+                    </div>
                 </div>
 
                 {loading ? (
@@ -499,8 +483,8 @@ function CustomerPageContent() {
                         <p className="text-gray-500 font-medium">Loading recent compliance logs...</p>
                     </div>
                 ) : (
-                    <VerificationLogTable 
-                        data={customers} 
+                    <VerificationLogTable
+                        data={customers}
                         currentPage={currentPage}
                         totalPages={totalPages}
                         totalItems={totalItems}

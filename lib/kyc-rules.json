@@ -47,6 +47,18 @@
       }
     }
   },
+   {
+    "conditions": {
+      "all": [{ "fact": "duplicateFaceDetected", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 70,
+        "message": "IDENTITY REUSE DETECTED: this applicant's face matches one or more files already registered under a DIFFERENT identity. Each file may look clean in isolation — genuine documents, successful liveness — but the same person enrolling under several identities is the defining pattern of an organised fraud ring. Do not approve without investigating the linked files."
+      }
+    }
+  },
   {
     "conditions": {
       "all": [{ "fact": "isPep", "operator": "equal", "value": true }]
@@ -269,6 +281,18 @@
       "params": {
         "points": 25,
         "message": "OCR UNAVAILABLE: The document image could not be read (unreadable, timed out, or processing failed). Document data was NOT cross-verified. Manual review required."
+      }
+    }
+  },
+  {
+    "conditions": {
+      "all": [{ "fact": "duplicateCheckUnavailable", "operator": "equal", "value": true }]
+    },
+    "event": {
+      "type": "risk_penalty",
+      "params": {
+        "points": 20,
+        "message": "DUPLICATE CHECK UNAVAILABLE: the applicant's face could not be compared against previously registered files. Identity reuse was NOT ruled out for this file."
       }
     }
   },

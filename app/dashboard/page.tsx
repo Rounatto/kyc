@@ -1,3 +1,4 @@
+// app/dashboard/page.tsx
 "use client"
 
 // ============================================================================
@@ -8,34 +9,47 @@
 // affiche 5 en table + jusqu'à 3 en "profils à haut risque"). Le time-range
 // choisi dans le <select> ne recharge QUE les stats, pas la table du bas.
 //
-// ⚠️ DEUX INCOHÉRENCES FRONTEND ⟷ BACKEND TROUVÉES ICI :
-//   1. Le <select> propose "1y" (Last Year), mais app/api/dashboard/stats
-//      NE RECONNAÎT PAS cette valeur (seulement 7d/30d/90d/all) — elle tombe
-//      silencieusement dans le cas par défaut (30 jours). Choisir "Last Year"
-//      affiche donc en réalité les 30 derniers jours, sans aucune erreur visible.
-//   2. `trends.pendingDelta` est lu ici avec un fallback à 0, mais l'API
-//      dashboard/stats ne renvoie JAMAIS ce champ (seulement totalDelta,
-//      verifiedDelta, highRiskDelta) — la pastille de tendance sur la carte
-//      "Pending Review" affiche donc toujours "0.0%" (icône neutre), jamais
-//      une vraie évolution.
+// 🆕 [FIX TENDANCES] LES DEUX INCOHÉRENCES FRONTEND ⟷ BACKEND SONT FERMÉES :
+//   1. "1y" est désormais reconnu par /api/dashboard/stats (7d/30d/90d/1y/all).
+//   2. `pendingDelta` est renvoyé par l'API ET n'est plus raboté à 0 ici :
+//      le composant partagé <TrendIndicator> reçoit le `null` intact et
+//      affiche un état distinct ("New" / "No data"), plus jamais "0,0 %".
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import VerificationTable from "@/components/VerificationTable";
-import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Calendar, Download, UserRoundCheck, ClipboardClock, Clock, ShieldCheck, TriangleAlert, AlertCircle, ArrowRight, Loader2 } from "lucide-react";
 import Header from "@/components/header";
 import NewVerificationButton from "@/components/NewVerificationButton";
+// 🆕 [FIX TENDANCES] Composant partagé — plus de copie inline. Une seule source.
+import TrendIndicator from "@/components/TrendIndicator";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+
+// 🆕 [FIX TENDANCES] `null` EST UNE VALEUR ATTENDUE, PAS UNE ERREUR.
+// L'API renvoie `null` quand la période précédente est vide. Le type DOIT
+// l'autoriser, sinon TypeScript nous pousserait vers un `|| 0` qui rebugue tout.
+type Trends = {
+    totalDelta: number | null;
+    verifiedDelta: number | null;
+    pendingDelta: number | null;
+    highRiskDelta: number | null;
+};
 
 export default function DashboardPage() {
     const router = useRouter();
     const [requestsData, setRequestsData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [highRiskProfiles, setHighRiskProfiles] = useState<any[]>([]);
-    
+
     const [timeRange, setTimeRange] = useState("30d");
     const [stats, setStats] = useState({ total: 0, verified: 0, pending: 0, highRisk: 0 });
-    const [trends, setTrends] = useState({ totalDelta: 0, verifiedDelta: 0, pendingDelta: 0, highRiskDelta: 0 });
+    // 🆕 Défauts à `null` (= "pas encore de base de comparaison"), pas à 0.
+    const [trends, setTrends] = useState<Trends>({
+        totalDelta: null,
+        verifiedDelta: null,
+        pendingDelta: null,
+        highRiskDelta: null,
+    });
     const [chartData, setChartData] = useState<any[]>([]);
 
     useEffect(() => {
@@ -45,19 +59,37 @@ export default function DashboardPage() {
                 const statsRes = await fetch(`/api/dashboard/stats?range=${timeRange}`);
                 if (statsRes.ok) {
                     const statsData = await statsRes.json();
-                    // 💡 GARDE-FOU : On s'assure que si une donnée manque, on met 0 par défaut
+                    // 💡 GARDE-FOU KPIs : un compteur manquant retombe à 0. Ici c'est
+                    // légitime — un compteur absent VAUT bien zéro dossier.
                     setStats({
                         total: statsData.stats?.total || 0,
                         verified: statsData.stats?.verified || 0,
                         pending: statsData.stats?.pending || 0,
                         highRisk: statsData.stats?.highRisk || 0
                     });
+
+                    // ========================================================
+                    // 🆕 [FIX TENDANCES] `?? null` ET SURTOUT PAS `|| 0`
+                    // ========================================================
+                    // ❌ CE QUI EXISTAIT : `statsData.trends?.totalDelta || 0`
+                    //
+                    // ⚠️ `||` se déclenche sur TOUTE valeur falsy : `null`, mais
+                    // aussi `0`. Donc :
+                    //   • un `null` de l'API ("pas de base") → raboté en 0 →
+                    //     le composant affiche "0,0 %, pas de changement".
+                    //     Exactement le bug qu'on vient de tuer côté API.
+                    //   • un vrai delta de 0 % → indistinguable du cas ci-dessus.
+                    //
+                    // ✅ `??` ne se déclenche QUE sur null/undefined. Un vrai 0 %
+                    // passe intact, un `null` reste `null`. Le composant voit la
+                    // différence et affiche "New" / "No data" au lieu de mentir.
                     setTrends({
-                        totalDelta: statsData.trends?.totalDelta || 0,
-                        verifiedDelta: statsData.trends?.verifiedDelta || 0,
-                        pendingDelta: statsData.trends?.pendingDelta || 0, // Fallback de sécurité
-                        highRiskDelta: statsData.trends?.highRiskDelta || 0
+                        totalDelta: statsData.trends?.totalDelta ?? null,
+                        verifiedDelta: statsData.trends?.verifiedDelta ?? null,
+                        pendingDelta: statsData.trends?.pendingDelta ?? null,
+                        highRiskDelta: statsData.trends?.highRiskDelta ?? null,
                     });
+
                     setChartData(statsData.chartData || []);
                 }
 
@@ -87,7 +119,7 @@ export default function DashboardPage() {
                             Nom: req.customerName,
                             Email: req.email,
                             Type: req.type,
-                            Submitted: dateFormatted, 
+                            Submitted: dateFormatted,
                             Status: req.status ? req.status.toLowerCase() : "pending",
                             Score: req.score || "--",
                             rawDate: req.submittedAt,
@@ -96,7 +128,7 @@ export default function DashboardPage() {
                     });
 
                     setRequestsData(formattedData.slice(0, 5));
-                    
+
                     const criticalProfiles = formattedData.filter((req: any) => req.parsedScore >= 50);
                     setHighRiskProfiles(criticalProfiles.slice(0, 3));
                 }
@@ -115,7 +147,7 @@ export default function DashboardPage() {
     // l'UTF-8 correctement plutôt que d'afficher les accents corrompus.
     const handleExportDashboardReport = () => {
         const timestamp = new Date().toLocaleString();
-        
+
         const reportSections = [
             "==================================================",
             "   KYC/AML COMPLIANCE PLATFORM EXECUTIVE REPORT   ",
@@ -129,14 +161,14 @@ export default function DashboardPage() {
             `- Critical High Risk Flagged Alerts: ${stats.highRisk}`,
             "",
             "2. LIVE CRITICAL ANOMALIES DETECTED",
-            highRiskProfiles.length > 0 
+            highRiskProfiles.length > 0
                 ? highRiskProfiles.map(p => `- ALERT: ${p.Nom} (${p.Email}) - AI Risk Score: ${p.Score}/100`).join("\n")
                 : "- No critical security anomalies detected in this session.",
             "",
             "3. RECENT PIPELINE ACTIVITY LOG",
             "ID,Customer Name,Email,Procedure Type,Status,AI Score,Date Submitted"
         ];
-        
+
         const tableRows = requestsData.map((req: any) => {
             return [
                 req.id,
@@ -153,41 +185,12 @@ export default function DashboardPage() {
         const blob = new Blob([finalReportString], { type: "text/plain;charset=utf-8;" });
         const link = document.createElement("a");
         const urlObj = URL.createObjectURL(blob);
-        
+
         link.setAttribute("href", urlObj);
         link.setAttribute("download", `executive_compliance_report_${new Date().toISOString().split('T')[0]}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-    };
-
-    // Petite pastille +/-X% à côté de chaque KPI. `invertColors` sert pour les
-    // métriques où une hausse est MAUVAISE (ex: Risk Alerts en hausse = rouge,
-    // pas vert) — sans ce flag, +12% serait affiché en vert par défaut.
-    // GARDE-FOU : "value" est recasté en Number avant toFixed() car il peut
-    // arriver `undefined`/`NaN` selon la réponse API.
-    const TrendIndicator = ({ value = 0, invertColors = false, neutral = false }: { value?: number, invertColors?: boolean, neutral?: boolean }) => {
-        const safeValue = Number(value) || 0; 
-        const isPositive = safeValue > 0;
-        const isZero = safeValue === 0;
-        
-        let colorClass = "text-gray-500 bg-gray-100";
-        if (!isZero) {
-            if (neutral) {
-                colorClass = "text-orange-700 bg-yellow-300/40"; 
-            } else if (invertColors) {
-                colorClass = isPositive ? "text-red-700 bg-red-100" : "text-green-700 bg-green-100";
-            } else {
-                colorClass = isPositive ? "text-green-700 bg-green-100" : "text-red-700 bg-red-100";
-            }
-        }
-
-        return (
-            <div className={`flex justify-center items-center rounded-sm px-2 py-1 text-[10px] font-bold gap-1 ${colorClass}`}>
-                {isPositive ? <TrendingUp className="w-3 h-3" /> : isZero ? <Minus className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {isPositive ? '+' : ''}{safeValue.toFixed(1)}%
-            </div>
-        );
     };
 
     return (
@@ -203,20 +206,20 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex flex-row gap-3 w-full lg:w-auto">
                         <div className="relative flex-1 lg:flex-none">
-                            <select 
+                            <select
                                 value={timeRange}
                                 onChange={(e) => setTimeRange(e.target.value)}
                                 className="w-full lg:w-40 appearance-none flex items-center gap-2 px-10 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer h-12 outline-none shadow-sm"
                             >
                                 <option value="30d">Last 30 Days</option>
                                 <option value="90d">Last Quarter</option>
-                                {/* ⚠️ "1y" n'est pas géré par /api/dashboard/stats, voir note en tête de fichier */}
+                                {/* 🆕 "1y" est désormais géré par /api/dashboard/stats. */}
                                 <option value="1y">Last Year</option>
                             </select>
                             <Calendar className="w-4 h-4 text-gray-500 absolute left-4 top-4 pointer-events-none" />
                         </div>
-                        
-                        <button 
+
+                        <button
                             onClick={handleExportDashboardReport}
                             className="flex-1 lg:flex-none flex items-center gap-2 px-2 md:px-4 py-2 bg-blue-700 border border-blue-800 rounded-lg text-sm font-medium text-white hover:bg-blue-800 cursor-pointer lg:w-36 h-12 justify-center transition-colors shadow-sm"
                         >
@@ -225,53 +228,56 @@ export default function DashboardPage() {
                         </button>
                     </div>
                 </div>
-                
+
                 <div className="flex flex-col sm:flex-row sm:flex-wrap lg:flex-nowrap gap-4 md:gap-6 w-full mt-8">
                     <div className="w-full sm:w-[calc(50%-12px)] lg:flex-1 bg-white p-5 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between h-36 hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start gap-1">
                             <div className="bg-blue-600/20 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <UserRoundCheck className="text-blue-800" />
                             </div>
-                            <TrendIndicator value={trends.totalDelta} />
+                            {/* 🆕 `current` permet de distinguer "New" de "No data" quand le delta est null. */}
+                            <TrendIndicator value={trends.totalDelta} current={stats.total} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Total Verifications</p>
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.total}</p>
                         </div>
                     </div>
-                    
+
                     <div className="w-full sm:w-[calc(50%-12px)] lg:flex-1 bg-white p-5 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between h-36 hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start gap-1">
                             <div className="bg-yellow-400/30 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <ClipboardClock className="text-orange-600" />
                             </div>
-                            <TrendIndicator value={trends.pendingDelta} neutral={true} />
+                            {/* 🆕 La carte qui portait le bug d'origine : delta réel désormais, ou "New"/"No data". */}
+                            <TrendIndicator value={trends.pendingDelta} current={stats.pending} neutral={true} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Pending Review</p>
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.pending}</p>
                         </div>
                     </div>
-                    
+
                     <div className="w-full sm:w-[calc(50%-12px)] lg:flex-1 bg-white p-5 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between h-36 hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start gap-1">
                             <div className="bg-green-500/20 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <ShieldCheck className="text-green-700" />
                             </div>
-                            <TrendIndicator value={trends.verifiedDelta} />
+                            <TrendIndicator value={trends.verifiedDelta} current={stats.verified} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Approved Profiles</p>
                             <p className="text-2xl font-bold text-gray-900 leading-none">{stats.verified}</p>
                         </div>
                     </div>
-                    
+
                     <div className="w-full sm:w-[calc(50%-12px)] lg:flex-1 bg-white p-5 rounded-md border border-gray-400 shadow-sm flex flex-col justify-between h-36 hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-row justify-between items-start gap-1">
                             <div className="bg-red-600/20 w-10 h-12 flex items-center justify-center p-1.5 rounded-sm">
                                 <TriangleAlert className="text-red-700" />
                             </div>
-                            <TrendIndicator value={trends.highRiskDelta} invertColors={true} />
+                            {/* invertColors : ici une HAUSSE d'alertes est mauvaise → rouge. */}
+                            <TrendIndicator value={trends.highRiskDelta} current={stats.highRisk} invertColors={true} />
                         </div>
                         <div className="flex flex-col gap-0.5">
                             <p className="text-sm font-semibold text-gray-500 truncate">Risk Alerts</p>
@@ -314,7 +320,7 @@ export default function DashboardPage() {
                             </ResponsiveContainer>
                         </div>
                     </div>
-                    
+
                     <div className="flex flex-col w-full lg:w-[35%] bg-blue-600 rounded-xl shadow-sm p-5 md:p-6 text-white justify-between hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                         <div className="flex flex-col gap-4">
                             <svg viewBox="0 0 24 24" className="h-8 w-8 text-white" fill="currentColor">
@@ -326,7 +332,7 @@ export default function DashboardPage() {
                                 Our new neural engine has flagged <span className="font-bold text-white">{stats.highRisk}</span> potential anomalies in the system. Manual review recommended.
                             </p>
                         </div>
-                        <button 
+                        <button
                             onClick={() => router.push('/dashboard/customers?risk=high')}
                             className="mt-6 w-full py-2.5 bg-blue-500 hover:bg-blue-400 transition-colors border border-blue-400 rounded-lg font-medium text-sm cursor-pointer"
                         >

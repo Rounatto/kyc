@@ -7,7 +7,7 @@
 //   2. Anti-doublon (email/CIN déjà en cours de traitement pour CETTE entreprise)
 //   3. OCR du document d'identité (Gemini Vision, Tesseract en repli)
 //   4. Résolution de la date de naissance et de l'âge (formulaire OU document)
-//   5. Screening AML/PEP + comparaison faciale + LIVENESS, EN PARALLÈLE
+//   5. AML/PEP + comparaison faciale + LIVENESS + DOUBLONS, EN PARALLÈLE
 //   6. Moteur de règles déclaratif (json-rules-engine + lib/kyc-rules.json)
 //   7. Écriture du dossier + première ligne d'audit + notification si High Risk
 //
@@ -18,21 +18,27 @@
 //
 // ✅ [PHASE C — RÉSOLU] L'ÂGE NE PEUT PLUS ÊTRE CONTOURNÉ EN OMETTANT LA DATE.
 //
-// ✅ [PHASE C — LIVENESS, ÉTAPE 5/5] LA PRÉSENCE PHYSIQUE EST VÉRIFIÉE.
+// ✅ [PHASE C — LIVENESS] LA PRÉSENCE PHYSIQUE EST VÉRIFIÉE.
+// Le selfie était un fichier uploadé : quelqu'un possédant une photo de sa
+// victime l'envoyait, et la comparaison faciale confirmait consciencieusement
+// que c'était bien elle. Le contrôle biométrique fonctionnait parfaitement et
+// VALIDAIT UNE USURPATION. Le client doit désormais exécuter deux actions
+// tirées au hasard par le serveur, devant la caméra.
 //
-// ❌ CE QUI EXISTAIT : le selfie était un fichier uploadé. Quelqu'un possédant
-// une photo de sa victime — Facebook, LinkedIn, une capture d'écran — l'envoyait,
-// et la comparaison faciale confirmait consciencieusement que c'était bien elle.
-// Le contrôle biométrique fonctionnait parfaitement et VALIDAIT UNE USURPATION.
+// ✅ [DOUBLONS] LA RÉUTILISATION D'IDENTITÉ EST DÉTECTÉE.
 //
-// ✅ MAINTENANT : le client doit exécuter DEUX actions tirées au hasard par le
-// serveur, devant la caméra. Une photo imprimée ne tourne pas la tête. Le verdict
-// est rendu côté serveur par lib/liveness-verify.ts et alimente trois nouveaux
-// facts du moteur de règles.
+// ❌ CE QUI MANQUAIT : chaque dossier était vérifié EN ISOLATION. Personne ne
+// regardait si CE MÊME VISAGE avait déjà été enregistré sous un autre nom. Or
+// chaque dossier d'un réseau de fraude peut être parfaitement propre pris
+// séparément — vrais documents, liveness réussi, visage correspondant. La
+// fraude n'apparaît qu'en RAPPROCHANT les dossiers.
 //
-// ⚠️ LIMITE DOCUMENTÉE : une VIDÉO pré-enregistrée de la vraie personne pourrait
-// passer. Ce n'est pas une faiblesse du modèle mais de l'information disponible —
-// une image 2D ne contient pas la profondeur. Voir lib/liveness-verify.ts.
+// ⚠️ LIMITES DOCUMENTÉES :
+//   • Liveness — une VIDÉO pré-enregistrée de la vraie personne pourrait
+//     passer. Ce n'est pas une faiblesse du modèle mais de l'information
+//     disponible : une image 2D ne contient pas la profondeur.
+//   • Doublons — coût LINÉAIRE (un appel par dossier comparé), d'où un plafond
+//     de 3 candidats. Voir l'en-tête de lib/duplicate-face.ts.
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Engine } from "json-rules-engine";
@@ -47,15 +53,21 @@ import { extractDocumentData, isDocumentExpired } from "@/lib/document-ocr";
 import { compareFacesServerSide } from "@/lib/face-match";
 // 🆕 [PHASE C — LIVENESS] Vérification serveur de la séquence de présence.
 import { verifyLivenessSequence } from "@/lib/liveness-verify";
+// 🆕 [DOUBLONS] Détection de réutilisation d'identité.
+import { findDuplicateFaces } from "@/lib/duplicate-face";
 
 // 🆕 [FIX PROD] Durée max d'exécution sur Vercel. Sans cette ligne, le plan
 // Hobby coupe la fonction à 10 secondes.
 //
-// BUDGET APRÈS AJOUT DU LIVENESS :
-//   OCR (15 s max) + max(AML 8 s, visage 20 s, liveness 25 s) = ~40 s de pire cas.
-// Les trois derniers tournent EN PARALLÈLE. Enchaînés, on serait à 68 s — donc
-// au-delà du plafond. Le parallélisme n'est pas une optimisation ici, c'est ce
-// qui rend le pipeline possible.
+// 🆕 [DOUBLONS] BUDGET RECALCULÉ. Enchaînés, les quatre contrôles feraient
+// 8 + 20 + 25 + 20 = 73 s, plus 15 s d'OCR = 88 s — bien au-delà du plafond.
+// En parallèle, le pire cas reste à 25 s, donc ~40 s au total.
+//
+// ⚠️ La détection de doublons lance elle-même jusqu'à 3 comparaisons internes,
+// également en parallèle : le pipeline peut donc produire jusqu'à 5 appels
+// Gemini simultanés. C'est ce qui plafonne MAX_CANDIDATES à 3 — au-delà, le
+// quota de requêtes par minute du palier gratuit deviendrait le facteur
+// limitant.
 export const maxDuration = 60;
 
 const customerRegistrationSchema = z.object({
@@ -74,23 +86,21 @@ const customerRegistrationSchema = z.object({
     //
     // ⚠️ IL EST DEVENU OPTIONNEL DANS LE SCHÉMA, mais ce n'est PAS un
     // assouplissement : il est désormais dérivé de l'image de RÉFÉRENCE de la
-    // séquence de liveness (voir plus bas). Cette image EST un selfie — un visage
-    // de face, en pose neutre — à ceci près qu'elle est capturée en direct au lieu
-    // d'être uploadée. Strictement meilleure qu'avant.
+    // séquence de liveness. Cette image EST un selfie — un visage de face, en
+    // pose neutre — à ceci près qu'elle est capturée en direct au lieu d'être
+    // uploadée. Strictement meilleure qu'avant.
     //
     // 💡 Le champ reste accepté pour ne pas casser un onglet resté ouvert avec
-    // l'ancienne version du formulaire, mais il n'est plus jamais utilisé quand
-    // une séquence de liveness est fournie.
+    // l'ancienne version du formulaire.
     selfiePath: z.string().optional(),
 
     // 🆕 [PHASE C — LIVENESS] LA SÉQUENCE DE PRÉSENCE.
     //
     // ⚠️ OPTIONNELLE AU NIVEAU DE ZOD, ET C'EST DÉLIBÉRÉ : son absence n'est pas
-    // une erreur de validation, c'est un FAIT MÉTIER qui coûte 40 ou 45 points
-    // dans le moteur de règles. Un 400 ferait perdre toute la saisie de l'agent
-    // pour un cas qui doit au contraire produire un dossier — signalé, pénalisé,
-    // mais existant. Rejeter ici reviendrait à traiter un signal de risque comme
-    // un bug de formulaire.
+    // une erreur de validation, c'est un FAIT MÉTIER qui coûte 45 points. Un 400
+    // ferait perdre toute la saisie de l'agent pour un cas qui doit au contraire
+    // produire un dossier — signalé, pénalisé, mais existant. Rejeter ici
+    // reviendrait à traiter un signal de risque comme un bug de formulaire.
     liveness: z
         .object({
             token: z.string().min(1),
@@ -102,9 +112,8 @@ const customerRegistrationSchema = z.object({
         .optional(),
 
     // 🆕 [PHASE C — LIVENESS] CONTOURNEMENT TRACÉ.
-    // Renseigné quand l'agent crée le dossier sans capture caméra. La longueur
-    // minimale reprend celle imposée côté composant : une justification de deux
-    // caractères ne justifie rien.
+    // La longueur minimale reprend celle imposée côté composant : une
+    // justification de deux caractères ne justifie rien.
     livenessSkipReason: z.string().min(15).max(300).optional(),
 
     // 🆕 [PHASE C] CHAMP CONSERVÉ MAIS TOTALEMENT IGNORÉ.
@@ -441,18 +450,12 @@ export async function POST(req: Request) {
         // 🆕 [PHASE C — LIVENESS] LE SELFIE EST L'IMAGE DE RÉFÉRENCE
         // ====================================================================
         // ⚠️ CETTE LIGNE DOIT VENIR AVANT TOUT LE RESTE : la comparaison faciale
-        // en dépend, et elle est lancée plus bas dans le bloc parallèle. La
-        // résoudre plus tard reviendrait à comparer la pièce d'identité à rien.
+        // ET la détection de doublons en dépendent, et toutes deux sont lancées
+        // plus bas dans le bloc parallèle.
         //
         // 💡 L'image neutre de la séquence EST un selfie — un visage de face, en
         // pose neutre. La seule différence avec l'ancien champ, c'est qu'elle a
-        // été capturée en direct au lieu d'être choisie dans une galerie. Toute
-        // la comparaison faciale existante fonctionne donc sans modification, sur
-        // une source strictement meilleure.
-        //
-        // Le repli sur `selfiePath` ne sert qu'aux appels sans séquence de
-        // liveness : contournement tracé, ou onglet resté ouvert avec l'ancienne
-        // version du formulaire.
+        // été capturée en direct au lieu d'être choisie dans une galerie.
         const effectiveSelfiePath = liveness?.referencePath ?? selfiePath ?? null;
 
         // ====================================================================
@@ -491,9 +494,14 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Agent session invalid or revoked." }, { status: 401 });
         }
 
-        // Anti-doublon : empêche de soumettre 2 fois le même email/CIN tant
-        // qu'un dossier est encore "pending" ou "verified" pour CETTE entreprise
-        // (un dossier "rejected" peut être resoumis).
+        // Anti-doublon SUR LES IDENTIFIANTS : empêche de soumettre 2 fois le même
+        // email/CIN tant qu'un dossier est encore "pending" ou "verified" pour
+        // CETTE entreprise (un dossier "rejected" peut être resoumis).
+        //
+        // ⚠️ À NE PAS CONFONDRE AVEC LA DÉTECTION DE DOUBLONS DE VISAGE plus bas.
+        // Celle-ci attrape une resoumission du MÊME dossier ; celle-là attrape la
+        // MÊME PERSONNE sous une AUTRE identité. Le second cas est de la fraude,
+        // le premier est une maladresse.
         const existingRecord = await prisma.verificationRequest.findFirst({
             where: {
                 companyId: companyId,
@@ -509,16 +517,17 @@ export async function POST(req: Request) {
         // SIGNATURE DES DOCUMENTS, EN AMONT
         // ====================================================================
         // Deux modules ont besoin de ces URLs — l'OCR (pièce d'identité) et la
-        // comparaison faciale (pièce d'identité + selfie). La vérification de
-        // liveness, elle, signe ses propres URLs dans lib/liveness-verify.ts.
+        // comparaison faciale (pièce d'identité + selfie). Le liveness et la
+        // détection de doublons signent leurs propres URLs dans leurs modules.
         //
         // 💡 120 secondes de validité : ces liens doivent survivre à toute la
         // durée du pipeline.
         //
         // 🔒 L'ÉCHEC N'EST PAS FATAL. Si la signature échoue, les URLs restent à
-        // `null` : l'OCR se déclarera indisponible (+25) et la biométrie aussi
-        // (+40). Le dossier part en revue manuelle — bien mieux qu'une erreur 500
-        // qui ferait perdre toute la saisie de l'agent.
+        // `null` : l'OCR se déclarera indisponible (+25), la biométrie aussi
+        // (+40) et la détection de doublons également (+20). Le dossier part en
+        // revue manuelle — bien mieux qu'une erreur 500 qui ferait perdre toute
+        // la saisie de l'agent.
         let signedIdCardUrl: string | null = null;
         let signedSelfieUrl: string | null = null;
 
@@ -655,26 +664,27 @@ export async function POST(req: Request) {
         const isYoungAdult = clientAge !== null && clientAge >= 18 && clientAge < 25;
 
         // ====================================================================
-        // 🆕 MODULES 3, 4 ET 5 EN PARALLÈLE — AML + BIOMÉTRIE + LIVENESS
+        // 🆕 MODULES 3 À 6 EN PARALLÈLE — AML + BIOMÉTRIE + LIVENESS + DOUBLONS
         // ====================================================================
-        // ⚠️ POURQUOI EN PARALLÈLE : ces trois contrôles sont totalement
-        // indépendants. L'AML interroge OpenSanctions avec un NOM, la comparaison
-        // faciale et le liveness interrogent Gemini avec des IMAGES DIFFÉRENTES —
-        // aucun n'a besoin du résultat d'un autre.
+        // ⚠️ POURQUOI EN PARALLÈLE : ces contrôles sont totalement indépendants.
+        // L'AML interroge OpenSanctions avec un NOM ; les trois autres
+        // interrogent Gemini avec des IMAGES DIFFÉRENTES.
         //
-        // Enchaînés : 8 + 20 + 25 = 53 s, à ajouter aux 15 s de l'OCR, soit 68 s —
-        // AU-DELÀ du plafond de 60 s de Vercel. En parallèle, le pire cas retombe
-        // à 25 s, donc ~40 s au total. Le parallélisme n'est pas une optimisation
-        // ici, c'est ce qui rend le pipeline possible.
+        // Enchaînés : 8 + 20 + 25 + 20 = 73 s, plus 15 s d'OCR = 88 s — bien
+        // AU-DELÀ du plafond de 60 s de Vercel. En parallèle, le pire cas reste
+        // à 25 s, donc ~40 s au total. Le parallélisme n'est pas une
+        // optimisation ici, c'est ce qui rend le pipeline possible.
         //
-        // 💡 `Promise.all` n'échoue jamais ici : les trois fonctions rattrapent
+        // ⚠️ LA DÉTECTION DE DOUBLONS LANCE ELLE-MÊME JUSQU'À 3 COMPARAISONS
+        // INTERNES, également en parallèle. Le pipeline peut donc produire
+        // jusqu'à 5 appels Gemini simultanés. C'est ce qui plafonne
+        // MAX_CANDIDATES à 3 dans lib/duplicate-face.ts : au-delà, le quota de
+        // requêtes par minute du palier gratuit deviendrait le facteur limitant.
+        //
+        // 💡 `Promise.all` n'échoue jamais ici : les quatre fonctions rattrapent
         // leurs propres erreurs et renvoient un état d'indisponibilité explicite
         // plutôt que de lever.
-        //
-        // 💡 Quand aucune séquence n'est fournie (contournement tracé), on ne
-        // lance pas la vérification : il n'y a rien à vérifier. On renvoie
-        // directement un résultat "skipped" traité plus bas.
-        const [amlScreening, faceMatch, livenessResult] = await Promise.all([
+        const [amlScreening, faceMatch, livenessResult, duplicateCheck] = await Promise.all([
             performGlobalSanctionsLookup(customerName, nationality || ""),
             compareFacesServerSide(signedIdCardUrl, signedSelfieUrl),
             liveness
@@ -684,6 +694,9 @@ export async function POST(req: Request) {
                       action2: liveness.action2Path,
                   })
                 : Promise.resolve(null),
+            // 💡 On réutilise l'URL DÉJÀ SIGNÉE du selfie : la re-signer serait
+            // un aller-retour Supabase pour rien.
+            findDuplicateFaces(companyId!, signedSelfieUrl),
         ]);
 
         const normalizedEmail = String(email).toLowerCase();
@@ -745,7 +758,7 @@ export async function POST(req: Request) {
         const isBlacklistedJurisdiction = FATF_BLACKLIST.includes(nationality);
         const isGreylistedJurisdiction = FATF_GREYLIST.includes(nationality);
 
-        // --- MODULE 6 : MOTEUR DE RÈGLES ---
+        // --- MODULE 7 : MOTEUR DE RÈGLES ---
         // 🆕 [AUDIT MOTEUR] `isStolenDocument` A ÉTÉ SUPPRIMÉ. Son calcul était
         // `cin.endsWith("999") || cin.endsWith("000")`, mais le message affirmait
         // "matched stolen/lost databases" — une DÉCLARATION FAUSSE inscrite dans
@@ -793,6 +806,15 @@ export async function POST(req: Request) {
             livenessFailed,
             livenessUnavailable,
             livenessSkipped,
+
+            // 🆕 [DOUBLONS] Réutilisation d'identité.
+            //
+            // ⚠️ `no-candidates` NE DÉCLENCHE RIEN, et c'est important : le
+            // premier dossier d'une entreprise n'a aucun historique auquel se
+            // comparer. Le pénaliser reviendrait à sanctionner un client pour une
+            // absence dont il n'est en rien responsable.
+            duplicateFaceDetected: duplicateCheck.status === "duplicate",
+            duplicateCheckUnavailable: duplicateCheck.status === "unavailable",
         };
 
         const engine = new Engine(kycRules);
@@ -826,12 +848,35 @@ export async function POST(req: Request) {
         }
 
         // ====================================================================
-        // 🆕 [PHASE C — LIVENESS] RATIONALE DE PRÉSENCE — EN TÊTE
+        // 🆕 [DOUBLONS] RATIONALE DE RÉUTILISATION D'IDENTITÉ — TOUT EN TÊTE
         // ====================================================================
-        // ⚠️ `unshift` LE PLACE AVANT MÊME LE RATIONALE BIOMÉTRIQUE, et c'est
-        // délibéré : savoir si la personne était PHYSIQUEMENT LÀ prime sur toute
-        // comparaison de visages. Un visage qui correspond parfaitement à une
-        // photo trouvée en ligne ne prouve rien du tout.
+        // ⚠️ PLACÉ AVANT MÊME LE LIVENESS, et c'est délibéré. Un dossier peut
+        // avoir un liveness parfait, un visage correspondant et des documents
+        // authentiques — et rester frauduleux si la MÊME personne est déjà
+        // enregistrée sous un autre nom. C'est l'information qui recontextualise
+        // toutes les autres.
+        //
+        // ⚠️ ON NOMME LES DOSSIERS CONCERNÉS. Un message générique du type "un
+        // doublon a été détecté" serait inexploitable : l'agent doit pouvoir
+        // OUVRIR les dossiers liés et juger par lui-même. C'est ce qui transforme
+        // une alerte en piste d'enquête.
+        if (duplicateCheck.status === "duplicate") {
+            const linked = duplicateCheck.matches
+                .map((m) => `${m.customerName} (ID ${m.cin}, submitted ${m.submittedAt.toISOString().slice(0, 10)})`)
+                .join("; ");
+
+            rationale.unshift(
+                `⛔ IDENTITY REUSE: this face matches ${duplicateCheck.matches.length} previously registered file(s) under a different identity — ${linked}. Investigate before any approval.`
+            );
+        }
+
+        // ====================================================================
+        // 🆕 [PHASE C — LIVENESS] RATIONALE DE PRÉSENCE
+        // ====================================================================
+        // ⚠️ `unshift` LE PLACE AVANT LE RATIONALE BIOMÉTRIQUE : savoir si la
+        // personne était PHYSIQUEMENT LÀ prime sur toute comparaison de visages.
+        // Un visage qui correspond parfaitement à une photo trouvée en ligne ne
+        // prouve rien du tout.
         if (livenessSkipped) {
             rationale.unshift(
                 livenessSkipReason
@@ -922,6 +967,35 @@ export async function POST(req: Request) {
                 ? "✅ BIOMETRIC SOURCE: Server-side facial comparison (Gemini Vision). The client-supplied score was ignored."
                 : "⚠️ BIOMETRIC SOURCE: Server-side comparison could not be performed. No biometric evidence exists for this file."
         );
+
+        // ====================================================================
+        // 🆕 [DOUBLONS] TRAÇABILITÉ DU CONTRÔLE DE RÉUTILISATION
+        // ====================================================================
+        // 💡 Le cas "duplicate" a déjà été traité en tête du rationale. Ici on
+        // documente les TROIS AUTRES issues, qui doivent chacune être
+        // distinguables — sinon l'agent ne saurait pas ce qui a réellement été
+        // vérifié.
+        if (duplicateCheck.status === "unavailable") {
+            rationale.push(
+                "⚠️ DUPLICATE CHECK UNAVAILABLE: the face could not be compared against previously registered files. Identity reuse was not ruled out."
+            );
+        } else if (duplicateCheck.status === "no-candidates") {
+            // 💡 Mention explicite plutôt que silence : sur les premiers dossiers
+            // d'une entreprise, l'agent doit savoir que ce contrôle n'a rien pu
+            // établir — et non croire qu'il a été passé avec succès.
+            rationale.push(
+                "NOTICE: no previous file was available for duplicate comparison. This is expected on the first files of a workspace."
+            );
+        } else if (duplicateCheck.status === "clean") {
+            // ⚠️ LE NOMBRE DE DOSSIERS COMPARÉS EST DIT EXPLICITEMENT. "Aucune
+            // correspondance sur 3 dossiers" et "aucune correspondance sur 400"
+            // ne portent pas la même information, et laisser croire au second
+            // quand on a fait le premier serait trompeur. C'est aussi ce qui rend
+            // visible la limite de conception dans la piste d'audit.
+            rationale.push(
+                `✅ DUPLICATE CHECK: no identity reuse found against the ${duplicateCheck.comparedCount} most recent file(s) of this workspace (90-day window).`
+            );
+        }
 
         // ====================================================================
         // TRAÇABILITÉ DE LA DATE DE NAISSANCE
@@ -1029,6 +1103,10 @@ export async function POST(req: Request) {
                 // accepté — doit pouvoir REGARDER ce sur quoi la machine s'est
                 // prononcée. Et le contrôle n'est PAS rejouable a posteriori : il
                 // dépend d'un jeton qui expire en trois minutes.
+                //
+                // 💡 CES IMAGES SERVENT AUSSI AUX DOSSIERS FUTURS : ce sont elles
+                // que la détection de doublons comparera aux prochaines
+                // soumissions de cette entreprise.
                 livenessReferencePath: liveness?.referencePath ?? null,
                 livenessAction1Path: liveness?.action1Path ?? null,
                 livenessAction2Path: liveness?.action2Path ?? null,
@@ -1043,10 +1121,10 @@ export async function POST(req: Request) {
                 auditLogs: {
                     create: {
                         action: "CREATED",
-                        // 🆕 [PHASE C] Le verdict de liveness et la source de la
-                        // date de naissance figurent explicitement dans la piste
-                        // d'audit.
-                        details: `KYC Pipeline initialized. Modules processed: Liveness (${storedLivenessVerdict}${liveness?.attempts && liveness.attempts > 1 ? `, ${liveness.attempts} attempts` : ""}), Server-side Biometrics (${faceMatch.source}, verdict: ${faceMatch.verdict}), Age Check (${clientAge ?? "unavailable"}, source: ${dobSource}), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
+                        // 🆕 Le verdict de liveness, la source de la date de
+                        // naissance et le résultat du contrôle de doublons
+                        // figurent explicitement dans la piste d'audit.
+                        details: `KYC Pipeline initialized. Modules processed: Liveness (${storedLivenessVerdict}${liveness?.attempts && liveness.attempts > 1 ? `, ${liveness.attempts} attempts` : ""}), Server-side Biometrics (${faceMatch.source}, verdict: ${faceMatch.verdict}), Duplicate Face Check (${duplicateCheck.status}, ${duplicateCheck.comparedCount} file(s) compared), Age Check (${clientAge ?? "unavailable"}, source: ${dobSource}), AML Screening, OCR Document Analysis. Calculated Risk Score: ${riskScore}/100.`,
                         agentId: serverAgentId!,
                         companyId: companyId!
                     }
