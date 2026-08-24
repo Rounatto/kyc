@@ -16,10 +16,8 @@
 // brandissant une photo imprimée — on capture alors une photo d'une photo. On
 // demande donc DEUX poses distinctes, tirées au hasard côté serveur.
 //
-// ✅ ÉTAPE 3 (ce lot) : L'ENVOI AU BUCKET PRIVÉ. Les trois images n'existaient
-// que dans la mémoire du navigateur — elles disparaissaient au rechargement de
-// la page, et le serveur n'avait rien à télécharger pour les vérifier. Elles
-// partent maintenant dans Supabase, et le composant émet des CHEMINS.
+// ✅ ÉTAPE 3 : L'ENVOI AU BUCKET PRIVÉ, plus le NETTOYAGE DES TENTATIVES
+// ABANDONNÉES et le COMPTEUR D'ESSAIS (voir `restart` plus bas).
 //
 // ⏳ ÉTAPES 4 ET 5 (à venir) : vérification serveur que les poses correspondent
 // aux actions demandées, et fact `livenessFailed` dans le moteur de règles.
@@ -185,8 +183,8 @@ const BETWEEN_ACTIONS_MS = 800;
 // visage est parti.
 export type LivenessFrameKind = "reference" | "action1" | "action2";
 
-// 🆕 [ÉTAPE 3] Une image APRÈS envoi. Elle porte désormais un `path` — une
-// coordonnée interne au bucket privé — en plus de son aperçu local.
+// Une image APRÈS envoi. Elle porte un `path` — une coordonnée interne au bucket
+// privé — en plus de son aperçu local.
 //
 // 💡 LE BLOB A DISPARU DE CE TYPE, et c'est délibéré : une fois l'image envoyée,
 // la garder en mémoire n'a plus d'objet et pousserait le parent à croire qu'il
@@ -210,7 +208,14 @@ type PendingFrame = {
 };
 
 export type LivenessResult =
-    | { status: "captured"; token: string; instructions: string[]; frames: LivenessFrame[] }
+    | {
+          status: "captured";
+          token: string;
+          instructions: string[];
+          frames: LivenessFrame[];
+          // 🆕 Nombre de séquences lancées avant celle-ci, incluse. Voir `restart`.
+          attempts: number;
+      }
     | { status: "skipped"; reason: string };
 
 type Props = {
@@ -231,12 +236,12 @@ type Phase =
     | "reference"      // capture de l'image neutre
     | "instruction"    // une instruction s'affiche, le client la lit et prend la pose
     | "hold"           // décompte court, puis capture
-    | "uploading"      // 🆕 [ÉTAPE 3] envoi des trois images au bucket
+    | "uploading"      // envoi des trois images au bucket
     | "done"           // séquence terminée et images stockées
     | "error";
 
-// 🆕 [ÉTAPE 3] Correspondance entre la nature interne d'une image et la valeur
-// attendue par /api/kyc-documents/upload-url.
+// Correspondance entre la nature interne d'une image et la valeur attendue par
+// /api/kyc-documents/upload-url.
 //
 // ⚠️ Ces chaînes doivent correspondre EXACTEMENT à l'enum Zod de la route et au
 // type `KycDocumentKind` de lib/storage.ts. Une faute de frappe ici produirait un
@@ -261,7 +266,7 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     // s'exécuter sur un composant démonté.
     const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-    // ⚠️ RAISON TECHNIQUE IMPORTANTE POUR CES TROIS REFS : une fonction confiée à
+    // ⚠️ RAISON TECHNIQUE IMPORTANTE POUR CES REFS : une fonction confiée à
     // `setTimeout` fige les valeurs qu'elle voit au moment de sa création. Quand
     // elle s'exécutera trois secondes plus tard, elle lirait donc un state PÉRIMÉ
     // — les images déjà capturées apparaîtraient absentes. Une `ref`, elle,
@@ -269,6 +274,37 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     const capturedRef = useRef<PendingFrame[]>([]);
     const tokenRef = useRef<string | null>(null);
     const instructionsRef = useRef<string[]>([]);
+
+    // 🆕 Les chemins réellement stockés dans le bucket pour la tentative en cours.
+    // Ils servent à effacer cette tentative si l'agent relance la séquence.
+    const storedPathsRef = useRef<string[]>([]);
+
+    // 🆕 COMPTEUR DE TENTATIVES.
+    //
+    // ⚠️ LE TROU QUE ÇA FERME : rien n'empêchait de relancer la séquence
+    // indéfiniment, et le serveur ne voyait que la DERNIÈRE — celle qui a réussi.
+    // Un fraudeur pouvait donc relancer jusqu'à tomber sur les deux actions qu'il
+    // sait imiter, et personne ne le voyait.
+    //
+    // 💡 ON NE BLOQUE PAS, ON REND VISIBLE. Une personne réelle rate parfois une
+    // pose : deux ou trois essais sont parfaitement normaux, les plafonner
+    // pénaliserait des clients légitimes. Dix essais sur un même dossier, en
+    // revanche, est un signal — et il apparaîtra dans le rationale et la piste
+    // d'audit. Même logique que le contournement tracé : on n'interdit pas, on
+    // empêche que ça passe inaperçu.
+    //
+    // En `ref` parce qu'il doit survivre aux relances sans provoquer de rendu.
+    const attemptsRef = useRef(0);
+
+        // 🆕 [CORRECTIF] Miroirs de `phase` et de la nature de l'erreur, lisibles
+    // depuis un écouteur d'événement.
+    //
+    // ⚠️ POURQUOI DES REFS ET PAS LE STATE : l'écouteur `devicechange` plus bas
+    // est enregistré une seule fois. Il capturerait donc les valeurs du state
+    // telles qu'elles étaient à ce moment-là — c'est-à-dire "idle" et "aucune
+    // erreur", pour toujours. Une ref, elle, pointe sur la valeur actuelle.
+    const phaseRef = useRef<Phase>("idle");
+    const errorKindRef = useRef<CameraErrorKind | null>(null);
 
     const [phase, setPhase] = useState<Phase>("idle");
     const [error, setError] = useState<CameraError | null>(null);
@@ -278,6 +314,8 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     const [stepIndex, setStepIndex] = useState(0);
     const [countdown, setCountdown] = useState(0);
     const [frames, setFrames] = useState<LivenessFrame[]>([]);
+    // 🆕 Copie du compteur pour l'affichage — le `ref` ne déclenche pas de rendu.
+    const [attemptCount, setAttemptCount] = useState(0);
 
     const [showSkipForm, setShowSkipForm] = useState(false);
     const [skipReason, setSkipReason] = useState("");
@@ -308,6 +346,44 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     const schedule = useCallback((fn: () => void, delay: number) => {
         const id = setTimeout(fn, delay);
         timersRef.current.push(id);
+    }, []);
+
+    // ------------------------------------------------------------------------
+    // 🆕 SUPPRESSION DE LA TENTATIVE PRÉCÉDENTE
+    // ------------------------------------------------------------------------
+    // ⚠️ POURQUOI PAS UN BOUTON "VALIDER" AVANT L'ENVOI, qui aurait évité le
+    // problème à la racine : si l'agent peut examiner les trois images puis
+    // décider s'il les envoie, il peut RELANCER JUSQU'À OBTENIR DES IMAGES QUI
+    // PASSENT. Le contrôle deviendrait "l'agent trouve-t-il ces photos
+    // convaincantes ?" — exactement la question qu'on lui a retirée des mains.
+    // Chez Sumsub, Onfido et Veriff, la capture part, point : personne ne trie.
+    //
+    // ✅ LE COMPROMIS RETENU : l'envoi est toujours immédiat et non négociable,
+    // mais une relance efface la tentative précédente. Une seule séquence vit
+    // dans le bucket à la fois, et `attemptsRef` garde la trace du nombre réel
+    // d'essais — ce que la suppression ne fait pas disparaître.
+    //
+    // 🔒 NON BLOQUANT PAR CONSTRUCTION. Si la suppression échoue (réseau, erreur
+    // Supabase), on relance quand même la séquence : un problème de ménage ne
+    // doit jamais empêcher un agent de refaire une vérification. Les images
+    // resteront orphelines et seront ramassées par la purge du cron hebdomadaire.
+    const discardStoredFrames = useCallback(async () => {
+        const paths = storedPathsRef.current;
+        if (paths.length === 0) return;
+
+        // Vidé AVANT l'appel : si l'agent reclique vite, on ne redemande pas la
+        // suppression des mêmes chemins.
+        storedPathsRef.current = [];
+
+        try {
+            await fetch("/api/kyc-documents/discard", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ paths }),
+            });
+        } catch (err) {
+            console.error("[LIVENESS] Nettoyage de la tentative précédente impossible :", err);
+        }
     }, []);
 
     // ------------------------------------------------------------------------
@@ -358,10 +434,9 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     }, []);
 
     // ------------------------------------------------------------------------
-    // 🆕 [ÉTAPE 3] ENVOI D'UNE IMAGE VERS LE BUCKET PRIVÉ — EN 2 TEMPS
+    // ENVOI D'UNE IMAGE VERS LE BUCKET PRIVÉ — EN 2 TEMPS
     // ------------------------------------------------------------------------
-    // Exactement le même mécanisme que pour la pièce d'identité (voir
-    // `uploadDocument` dans le formulaire) :
+    // Exactement le même mécanisme que pour la pièce d'identité :
     //
     //   TEMPS 1 — On demande une AUTORISATION à notre serveur. Il vérifie la
     //   session, calcule lui-même le chemin de destination à partir du companyId,
@@ -455,8 +530,17 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
                 setPhase("error");
                 return;
             }
-
+            
+                        // 🆕 [CORRECTIF] Force le navigateur à ré-énumérer les périphériques
+            // avant de demander le flux. Sans ça, un "Retry" manuel après avoir
+            // branché une caméra retombe sur le cache périmé et échoue à nouveau.
+            //
+            // 💡 Le `.catch` vide est délibéré : cet appel n'est qu'un coup de
+            // pouce. S'il échoue, `getUserMedia` juste après nous donnera de toute
+            // façon une erreur bien plus parlante.
+            await navigator.mediaDevices.enumerateDevices().catch(() => {});
             const stream = await navigator.mediaDevices.getUserMedia(VIDEO_CONSTRAINTS);
+            
             streamRef.current = stream;
 
             if (videoRef.current) {
@@ -478,7 +562,7 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     }, [stopStream]);
 
     // ------------------------------------------------------------------------
-    // 🆕 [ÉTAPE 3] FIN DE SÉQUENCE — CAPTURE TERMINÉE, ENVOI EN COURS
+    // FIN DE SÉQUENCE — CAPTURE TERMINÉE, ENVOI EN COURS
     // ------------------------------------------------------------------------
     // ⚠️ POURQUOI L'ENVOI SE FAIT ICI, À LA FIN, ET NON AU FIL DE LA SÉQUENCE :
     // envoyer chaque image dès sa capture semblerait plus réactif, mais un
@@ -522,6 +606,10 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
         try {
             const paths = await Promise.all(captured.map((frame) => uploadFrame(frame)));
 
+            // 🆕 On retient les chemins : ce sont eux qu'on effacera si l'agent
+            // relance la séquence.
+            storedPathsRef.current = paths;
+
             const stored: LivenessFrame[] = captured.map((frame, index) => ({
                 kind: frame.kind,
                 path: paths[index],
@@ -536,6 +624,7 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
                 token: tokenRef.current,
                 instructions: instructionsRef.current,
                 frames: stored,
+                attempts: attemptsRef.current,
             });
         } catch (err: any) {
             console.error("[LIVENESS] Envoi des images impossible :", err);
@@ -593,10 +682,9 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
                         schedule(() => beginHold(1), READ_TIMEOUT_MS);
                     }, BETWEEN_ACTIONS_MS);
                 } else {
-                    // 🆕 [ÉTAPE 3] `finish` est désormais asynchrone (il envoie les
-                    // images). On ne l'attend pas ici : il gère lui-même ses phases
-                    // et ses erreurs, et cette fonction programmée n'a plus rien à
-                    // faire ensuite.
+                    // `finish` est asynchrone (il envoie les images). On ne l'attend
+                    // pas ici : il gère lui-même ses phases et ses erreurs, et cette
+                    // fonction programmée n'a plus rien à faire ensuite.
                     void finish();
                 }
             }, HOLD_COUNTDOWN_MS);
@@ -626,6 +714,12 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
         capturedRef.current = [];
         setStepIndex(0);
         onResult(null);
+
+        // 🆕 Une séquence lancée = une tentative comptée, qu'elle aboutisse ou non.
+        // ⚠️ On compte ICI et non à la réussite : sinon un fraudeur qui abandonne
+        // dix séquences en cours de route n'en verrait aucune comptabilisée.
+        attemptsRef.current += 1;
+        setAttemptCount(attemptsRef.current);
 
         // --- 1. LE CHALLENGE ---
         let issued: { token: string; instructions: string[] };
@@ -681,6 +775,52 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
         }, REFERENCE_DELAY_MS);
     }, [beginHold, clearTimers, frames, grabFrame, onResult, schedule, stopStream]);
 
+
+        // 🆕 [CORRECTIF] Maintien des miroirs à jour.
+    useEffect(() => {
+        phaseRef.current = phase;
+    }, [phase]);
+
+    useEffect(() => {
+        errorKindRef.current = error?.kind ?? null;
+    }, [error]);
+
+    // ------------------------------------------------------------------------
+    // 🆕 [CORRECTIF] REPRISE AUTOMATIQUE QUAND UNE CAMÉRA APPARAÎT
+    // ------------------------------------------------------------------------
+    // ⚠️ LE BUG CORRIGÉ : Chrome MET EN CACHE la liste des périphériques. Quand
+    // `getUserMedia` échoue parce qu'aucune caméra n'est branchée, le navigateur
+    // retient ce constat. Rallumer ou brancher la caméra ensuite ne suffit pas :
+    // les appels suivants continuent de répondre `NotFoundError` sur le cache
+    // périmé. Seul un rechargement complet de la page débloquait la situation —
+    // le bouton "Retry" semblait donc cassé, alors que le matériel était bien là.
+    //
+    // ✅ Le navigateur émet un événement `devicechange` dès qu'un périphérique
+    // apparaît ou disparaît. En l'écoutant, on relance la caméra AUTOMATIQUEMENT
+    // au moment exact où elle devient disponible : l'agent n'a même plus à
+    // cliquer sur "Retry".
+    //
+    // 💡 ON NE RELANCE QUE DANS UN CAS PRÉCIS : erreur "aucune caméra détectée".
+    // Un `devicechange` se produit aussi quand on branche un micro, un casque, un
+    // écran externe. Relancer la caméra à chacun de ces événements réveillerait le
+    // flux devant un client au milieu d'une conversation — ou pire, en plein
+    // formulaire de contournement.
+    useEffect(() => {
+        if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+
+        const handleDeviceChange = () => {
+            if (phaseRef.current === "error" && errorKindRef.current === "no-device") {
+                console.log("[LIVENESS] Une caméra vient d'apparaître — reprise automatique.");
+                startCamera();
+            }
+        };
+
+        navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+        return () => {
+            navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+        };
+    }, [startCamera]);
+
     // ------------------------------------------------------------------------
     // NETTOYAGE AU DÉMONTAGE
     // ------------------------------------------------------------------------
@@ -689,6 +829,12 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
     //     démonté, après le départ de l'utilisateur ;
     //   • le flux caméra — sinon la LED reste allumée et le périphérique
     //     verrouillé pour les autres applications.
+    //
+    // ⚠️ On ne supprime PAS les images du bucket ici. Un démontage arrive aussi
+    // quand le formulaire est soumis avec succès — effacer à ce moment détruirait
+    // les preuves du dossier qu'on vient de créer. Les images d'un agent qui ferme
+    // l'onglet en pleine séquence restent orphelines et seront ramassées par la
+    // purge du cron hebdomadaire.
     //
     // ⚠️ Ce useEffect n'a AUCUNE dépendance : il ne doit s'exécuter qu'au
     // démontage réel. Y mettre `frames` le ferait tourner à chaque capture,
@@ -701,6 +847,7 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // 🆕 RELANCE — efface la tentative précédente avant d'en démarrer une nouvelle.
     const restart = useCallback(() => {
         clearTimers();
         frames.forEach((f) => URL.revokeObjectURL(f.previewUrl));
@@ -710,8 +857,14 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
         setInstructions([]);
         setStepIndex(0);
         onResult(null);
+
+        // 💡 On n'attend PAS la suppression avant de relancer la caméra : elle est
+        // non bloquante par conception, et faire patienter l'agent devant un écran
+        // figé pour une opération de ménage serait absurde.
+        void discardStoredFrames();
+
         startCamera();
-    }, [clearTimers, frames, onResult, startCamera]);
+    }, [clearTimers, discardStoredFrames, frames, onResult, startCamera]);
 
     // ------------------------------------------------------------------------
     // CONTOURNEMENT TRACÉ
@@ -726,11 +879,16 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
 
         clearTimers();
         stopStream();
+
+        // 🆕 Une séquence déjà stockée n'a plus lieu d'être si l'agent bascule
+        // finalement sur le contournement : le dossier ne la référencera pas.
+        void discardStoredFrames();
+
         setIsSkipped(true);
         setShowSkipForm(false);
         setPhase("idle");
         onResult({ status: "skipped", reason });
-    }, [skipReason, onResult, stopStream, clearTimers]);
+    }, [skipReason, onResult, stopStream, clearTimers, discardStoredFrames]);
 
     const cancelSkip = useCallback(() => {
         setIsSkipped(false);
@@ -837,11 +995,22 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
         return (
             <div className="flex flex-col gap-3">
                 <div className="border-2 border-green-300 bg-green-50 rounded-xl p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                        <CheckCircle2 className="w-4 h-4 text-green-600" />
-                        <p className="text-sm font-bold text-green-800">
-                            Liveness sequence captured and stored
-                        </p>
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                        <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-green-600" />
+                            <p className="text-sm font-bold text-green-800">
+                                Liveness sequence captured and stored
+                            </p>
+                        </div>
+                        {/* 🆕 Le nombre de tentatives est affiché à partir de la
+                            deuxième. C'est une information neutre pour l'agent —
+                            personne n'est blâmé pour avoir recommencé — mais elle
+                            rend visible ce qui sera transmis au serveur. */}
+                        {attemptCount > 1 && (
+                            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+                                Attempt {attemptCount}
+                            </p>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">
@@ -985,7 +1154,7 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
                     </div>
                 )}
 
-                {/* --- 🆕 [ÉTAPE 3] PHASE ENVOI ---
+                {/* --- PHASE ENVOI ---
                     💡 Un écran dédié, et non un simple indicateur discret : trois
                     images de plusieurs centaines de kilo-octets sur une connexion
                     d'agence peuvent prendre quelques secondes. Sans retour visible,
@@ -1053,8 +1222,8 @@ export default function LivenessCapture({ onResult, disabled = false }: Props) {
             {/* 💡 Le lien de contournement est volontairement DISCRET : petit, gris,
                 en bas. Il doit rester trouvable pour les cas légitimes, mais ne
                 jamais ressembler à une alternative équivalente.
-                🆕 Masqué aussi pendant l'envoi : cliquer dessus à ce moment
-                laisserait trois images orphelines dans le bucket. */}
+                Masqué aussi pendant l'envoi : cliquer dessus à ce moment laisserait
+                trois images orphelines dans le bucket. */}
             {!disabled &&
                 phase !== "reference" &&
                 phase !== "instruction" &&
