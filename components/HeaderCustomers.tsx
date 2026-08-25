@@ -5,8 +5,8 @@
 // ============================================================================
 // ⚠️ Duplication : ce composant est ~80% identique à components/header.tsx
 // (même cloche de notifications, même menu utilisateur, mêmes imports) — mais
-// contrairement à `header.tsx` dont la barre de recherche est décorative
-// (Lot 9), CELLE-CI est réellement branchée : debounce 300ms, appel
+// contrairement à `header.tsx` dont la barre de recherche est décorative,
+// CELLE-CI est réellement branchée : debounce 300ms, appel
 // `/api/customers?search=...`, dropdown de résultats avec surlignage du texte
 // recherché (`highlightText`). Deux fichiers séparés plutôt qu'un seul
 // paramétrable (`<Header searchEnabled />`) — candidat à fusionner.
@@ -29,7 +29,7 @@ const highlightText = (text: string | null | undefined, highlight: string) => {
     const parts = text.split(regex);
     return (
         <span>
-            {parts.map((part, i) => 
+            {parts.map((part, i) =>
                 part.toLowerCase() === highlight.toLowerCase() ? (
                     <strong key={i} className="font-black text-blue-600 bg-gray-100 rounded-sm px-[1px]">
                         {part}
@@ -81,7 +81,7 @@ export default function HeaderCustomers() {
                 setIsSearching(false);
             }
         }, 300);
-        return () => clearTimeout(delayDebounceFn); 
+        return () => clearTimeout(delayDebounceFn);
     }, [searchTerm]);
 
     const getNotifIcon = (type: string) => {
@@ -101,7 +101,14 @@ export default function HeaderCustomers() {
     };
 
     return (
-        <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8">
+        // 🆕 [FIX RECHERCHE] `relative z-50` ajouté sur le <header>.
+        //
+        // ⚠️ Sans lui, le dropdown de résultats (z-[999]) n'a pas de contexte
+        // d'empilement parent garanti. Il s'affichait correctement, mais rien ne
+        // garantissait qu'un élément de la page en dessous — les cartes de stats,
+        // le graphique — ne passe pas au-dessus dans certaines configurations.
+        // `header.tsx` portait déjà cette classe ; celui-ci ne l'avait pas.
+        <header className="flex items-center justify-between border-b border-gray-200 pb-4 md:pb-5 mb-6 md:mb-8 bg-white shadow-sm px-4 lg:px-8 relative z-50">
             <div className="flex items-center gap-4 lg:gap-8 flex-1">
                 <div className="relative w-full max-w-[150px] sm:max-w-xs lg:max-w-[340px] mt-2 md:mt-3">
                     <div className="flex relative flex-row w-full border border-gray-300 rounded-lg text-sm outline-none bg-gray-200/50 text-gray-700 placeholder-gray-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-500 transition-all">
@@ -113,19 +120,58 @@ export default function HeaderCustomers() {
                                 </svg>
                             )}
                         </span>
-                        <input 
-                            type="text" 
-                            placeholder="Search customers..." 
+                        <input
+                            type="text"
+                            placeholder="Search customers..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             onFocus={() => { if (results.length > 0) setShowDropdown(true); }}
-                            onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+                            // 🆕 [FIX RECHERCHE] LE DÉLAI DE 200 ms A DISPARU.
+                            //
+                            // ❌ CE QUI EXISTAIT : `onBlur={() => setTimeout(() =>
+                            // setShowDropdown(false), 200)}`
+                            //
+                            // ⚠️ LE BUG QUE ÇA CAUSAIT — UNE COURSE, DONC UN
+                            // COMPORTEMENT INTERMITTENT. Cliquer sur un résultat
+                            // déclenche les événements dans cet ordre : mousedown →
+                            // le champ perd le focus → blur arme le minuteur →
+                            // mouseup → click. Si les 200 ms s'écoulaient avant le
+                            // `click` — un clic un peu appuyé, une machine chargée —
+                            // le <li> avait déjà quitté le DOM et le clic tombait
+                            // dans le vide. Rien ne se passait, sans la moindre
+                            // erreur en console.
+                            //
+                            // 💡 ALLONGER LE DÉLAI NE CORRIGE RIEN : ça déplace le
+                            // seuil sans supprimer la course, et ça laisse le
+                            // dropdown ouvert plus longtemps après un vrai clic
+                            // ailleurs. La bonne parade est d'empêcher le blur de
+                            // se produire — voir `onMouseDown` sur le conteneur du
+                            // dropdown plus bas. Le champ ne perd jamais le focus,
+                            // donc ce `onBlur` ne se déclenche que pour de vraies
+                            // sorties de champ, et peut fermer immédiatement.
+                            onBlur={() => setShowDropdown(false)}
                             className="w-full bg-transparent border-transparent rounded-lg py-2 pl-10 pr-3 text-sm outline-none transition-all text-gray-800 placeholder-gray-600 truncate"
                         />
                     </div>
 
                     {showDropdown && (
-                        <div className="absolute top-full left-0 mt-2 w-full min-w-[250px] bg-white border border-gray-200 shadow-xl rounded-xl overflow-hidden z-[999] flex flex-col">
+                        <div
+                            // 🆕 [FIX RECHERCHE] LA CORRECTION EST ICI.
+                            //
+                            // `preventDefault()` sur mousedown empêche le navigateur
+                            // de déplacer le focus. Le champ de recherche le
+                            // conserve, `onBlur` ne se déclenche pas, le dropdown
+                            // reste monté, et le `onClick` du <li> arrive toujours à
+                            // destination.
+                            //
+                            // 💡 C'est le motif standard pour toute liste de
+                            // suggestions au-dessus d'un champ de saisie. Le réflexe
+                            // du minuteur fonctionne dans la plupart des cas, ce qui
+                            // le rend d'autant plus trompeur : il échoue seulement
+                            // par intermittence, et jamais quand on le teste.
+                            onMouseDown={(e) => e.preventDefault()}
+                            className="absolute top-full left-0 mt-2 w-full min-w-[250px] bg-white border border-gray-200 shadow-xl rounded-xl overflow-hidden z-[999] flex flex-col"
+                        >
                             {results.length > 0 ? (
                                 <ul className="divide-y divide-gray-100">
                                     {results.map((req) => (
@@ -159,7 +205,7 @@ export default function HeaderCustomers() {
 
                 {/* 🔔 LA CLOCHE CONNECTÉE AU CONTEXT */}
                 <div className="relative">
-                    <button 
+                    <button
                         onClick={() => { setIsNotifOpen(!isNotifOpen); setIsMenuOpen(false); }}
                         className="text-gray-700 hover:text-gray-500 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200 cursor-pointer"
                     >
@@ -180,8 +226,8 @@ export default function HeaderCustomers() {
                                         {unreadCount > 0 && <span className="text-xs text-blue-700 font-bold bg-blue-100 px-2 py-0.5 rounded-full">{unreadCount} unread</span>}
                                     </div>
                                     {unreadCount > 0 && (
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); markAllAsRead(); }} 
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); markAllAsRead(); }}
                                             className="text-xs font-bold text-gray-500 hover:text-blue-700 transition-colors flex items-center gap-1 cursor-pointer"
                                         >
                                             <CheckCheck className="w-3.5 h-3.5" /> Mark all read
@@ -196,8 +242,8 @@ export default function HeaderCustomers() {
                                         </div>
                                     ) : (
                                         notifications.map((notif) => (
-                                            <div 
-                                                key={notif.id} 
+                                            <div
+                                                key={notif.id}
                                                 onClick={() => markAsRead(notif.id)}
                                                 className={`p-4 flex gap-3 hover:bg-gray-50 cursor-pointer transition-colors ${!notif.isRead ? 'bg-blue-50/40' : ''}`}
                                             >
@@ -220,12 +266,12 @@ export default function HeaderCustomers() {
                         </>
                     )}
                 </div>
-                
+
                 <Link href="/dashboard/support" className="text-gray-700 hover:text-gray-500 transition-colors text-lg relative flex items-center justify-center w-9 h-9 rounded-full hover:bg-gray-200 cursor-pointer mr-1">
                     <span className="sr-only">Information & Support</span>
                     <CircleQuestionMark className="w-5 h-5" />
                 </Link>
-                
+
                 <div className="relative">
                     <div onClick={() => { setIsMenuOpen(!isMenuOpen); setIsNotifOpen(false); }} className={`w-9 h-10 mr-2 md:mr-3 ${userImage ? 'bg-transparent' : 'bg-blue-200/70 border border-gray-200'} rounded-xl overflow-hidden cursor-pointer flex items-center justify-center relative`}>
                         {userImage ? (
