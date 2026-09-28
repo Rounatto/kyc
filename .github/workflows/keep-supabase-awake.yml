@@ -1,0 +1,48 @@
+# ============================================================
+# Garde la base Supabase eveillee (plan gratuit)
+# Supabase met en pause un projet gratuit sans assez de requetes
+# utilisateur sur la base pendant 7 jours. Ce workflow envoie une
+# vraie requete SQL en lecture seule deux fois par jour.
+# ============================================================
+name: Keep Supabase awake
+
+on:
+  schedule:
+    # Toutes les 12 h, a la minute 17 (UTC) : on evite la minute 00,
+    # ou les crons GitHub sont les plus charges et souvent retardes.
+    - cron: "17 */12 * * *"
+  # Permet de lancer le workflow a la main depuis l'onglet Actions
+  workflow_dispatch:
+
+jobs:
+  ping-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Install psql if missing
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+          psql --version
+
+      - name: Run a read-only query
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Le secret DATABASE_URL n'existe pas dans le repo"
+            exit 1
+          fi
+
+          # Prisma ajoute des parametres (?pgbouncer=true...) que psql
+          # refuse : on coupe tout apres le "?" et on force le SSL.
+          CLEAN_URL="${DATABASE_URL%%\?*}?sslmode=require"
+
+          # Vraie requete sur une table de l'app, resultat jete.
+          psql "$CLEAN_URL" -v ON_ERROR_STOP=1 -tA \
+            -c 'select count(*) from "AuditLog";' > /dev/null
+
+          echo "Base Supabase reveillee - OK"
