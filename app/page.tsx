@@ -13,31 +13,27 @@
 //   - "Privacy Policy" et "Terms" pointent vers /privacy-policy et
 //     /terms-of-service, qui N'EXISTENT PAS dans ce projet (404 garanti) —
 //     bloquant pour un vrai lancement (obligation légale RGPD).
-//   - Les chiffres/allégations ("Trusted by 500+ Global Enterprises", "SOC2
-//     Type II", "99.9% verification accuracy", logos "BankCorp"/"FinFlow"...)
-//     sont des placeholders marketing fictifs, pas des faits vérifiés — à
-//     retirer ou remplacer avant un lancement public pour éviter une
-//     allégation trompeuse.
+// 🆕 Les chiffres et allégations fictifs ("500+ Global Enterprises", "99.9%",
+//    "2,000+ teams", "SOC2", faux logos clients, "TrustVerify Inc.") ont été
+//    RETIRÉS et remplacés par la description des fonctionnalités réellement
+//    implémentées. Le site est présenté comme un projet de démonstration.
 import Link from "next/link";
 import {
     ShieldCheck,
     Globe,
     Cpu,
-    Code,
+    Lock, // 🆕 icône de la carte "Secure by design" (remplace Code)
     ArrowRight,
     Menu,
-    Landmark,
-    Wallet,
-    Coins,
-    Shield,
-    Key,
     CheckCircle
+    // 🆕 Landmark, Wallet, Coins, Shield, Key, Code retirés : ils ne servaient
+    //    qu'aux faux logos clients et à l'ancienne carte "Seamless Integration".
 } from "lucide-react";
 
 export default function Home() {
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-blue-200">
-            
+
             {/* Top Navigation Bar */}
             <header className="bg-white h-16 border-b border-gray-200 shadow-sm flex justify-between items-center px-4 md:px-8 sticky top-0 z-50">
                 <div className="flex items-center gap-10">
@@ -70,13 +66,15 @@ export default function Home() {
                     <div className="flex flex-col gap-6">
                         <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-100 rounded-full w-fit">
                             <ShieldCheck className="w-4 h-4 text-blue-700" />
-                            <span className="text-xs font-semibold text-blue-800 tracking-wide">Trusted by 500+ Global Enterprises</span>
+                            {/* 🆕 Remplace "Trusted by 500+ Global Enterprises" (chiffre fictif) */}
+                            <span className="text-xs font-semibold text-blue-800 tracking-wide">Demo project · KYC identity verification</span>
                         </div>
                         <h1 className="text-5xl lg:text-6xl font-extrabold leading-tight tracking-tight text-gray-900">
                             Verify with <span className="text-blue-700">Confidence.</span><br />Scale with Trust.
                         </h1>
+                        {/* 🆕 Remplace "bank-grade security, 99.9% verification accuracy..." par ce que l'application fait vraiment */}
                         <p className="text-lg text-gray-600 max-w-lg leading-relaxed">
-                            The ultimate KYC/AML platform for global compliance. Experience bank-grade security, 99.9% verification accuracy, and seamless integration in minutes.
+                            A KYC platform for businesses: it reads Tunisian ID cards (Arabic included), compares the applicant&apos;s selfie with the document photo, checks a live camera sequence, screens sanctions lists and turns every signal into a risk score.
                         </p>
                         <div className="flex flex-col sm:flex-row gap-4 pt-4">
                             <Link href="/register" className="px-6 py-3 bg-blue-700 text-white font-semibold rounded-md hover:bg-blue-800 transition-colors shadow-md flex items-center justify-center gap-2">
@@ -87,13 +85,22 @@ export default function Home() {
                                 Start Free Trial
                             </button>
                         </div>
-                        <p className="text-sm font-medium text-gray-500 pt-2">Join 2,000+ compliance teams worldwide</p>
+                        {/* 🆕 Remplace "Join 2,000+ compliance teams worldwide" (chiffre fictif) */}
+                        <p className="text-sm font-medium text-gray-500 pt-2">Designed and built by Rayen Mhalla · portfolio project</p>
                     </div>
 
-                    {/* Image Placeholder */}
+                    {/* 🆕 L'ancien cadre vide "Dashboard Interface Visualization" est remplacé
+                        par la liste des étapes réelles du pipeline de vérification. */}
                     <div className="relative mt-8 lg:mt-0">
-                        <div className="bg-white border border-gray-200 shadow-xl rounded-xl overflow-hidden relative z-10 w-full aspect-[4/3] flex items-center justify-center">
-                            <span className="text-gray-400 font-medium">Dashboard Interface Visualization</span>
+                        <div className="bg-white border border-gray-200 shadow-xl rounded-xl overflow-hidden relative z-10 w-full p-8 flex flex-col gap-5">
+                            <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Verification pipeline</p>
+                            <ul className="flex flex-col gap-4">
+                                <li className="flex items-start gap-3 text-gray-700"><CheckCircle className="w-5 h-5 text-green-500 mt-0.5 shrink-0" /> ID card reading with Gemini Vision, Arabic and Latin fields</li>
+                                <li className="flex items-start gap-3 text-gray-700"><CheckCircle className="w-5 h-5 text-green-500 mt-0.5 shrink-0" /> Selfie compared with the document photo, server-side</li>
+                                <li className="flex items-start gap-3 text-gray-700"><CheckCircle className="w-5 h-5 text-green-500 mt-0.5 shrink-0" /> Liveness check: live camera capture with two random poses</li>
+                                <li className="flex items-start gap-3 text-gray-700"><CheckCircle className="w-5 h-5 text-green-500 mt-0.5 shrink-0" /> Sanctions and PEP screening (OpenSanctions)</li>
+                                <li className="flex items-start gap-3 text-gray-700"><CheckCircle className="w-5 h-5 text-green-500 mt-0.5 shrink-0" /> Rules engine producing a risk score and an audit trail</li>
+                            </ul>
                         </div>
                         {/* Decor blobs */}
                         <div className="absolute -bottom-8 -right-8 w-64 h-64 bg-blue-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 -z-10"></div>
@@ -101,71 +108,62 @@ export default function Home() {
                     </div>
                 </section>
 
-                {/* Trust Bar */}
-                <section className="py-10 bg-white border-y border-gray-200">
-                    <div className="max-w-7xl mx-auto px-4 md:px-8">
-                        <p className="text-center text-sm font-bold text-gray-400 uppercase tracking-widest mb-8">Trusted by industry leaders</p>
-                        <div className="flex flex-wrap justify-center gap-8 md:gap-16 opacity-60">
-                            <div className="flex items-center gap-2 font-bold text-xl text-gray-700"><Landmark className="w-6 h-6" /> BankCorp</div>
-                            <div className="flex items-center gap-2 font-bold text-xl text-gray-700"><Wallet className="w-6 h-6" /> FinFlow</div>
-                            <div className="flex items-center gap-2 font-bold text-xl text-gray-700"><Coins className="w-6 h-6" /> NexusPay</div>
-                            <div className="flex items-center gap-2 font-bold text-xl text-gray-700"><Shield className="w-6 h-6" /> SecureVault</div>
-                            <div className="flex items-center gap-2 font-bold text-xl text-gray-700"><Key className="w-6 h-6" /> CryptoCore</div>
-                        </div>
-                    </div>
-                </section>
+                {/* 🆕 Section "Trusted by industry leaders" (faux logos BankCorp, FinFlow,
+                    NexusPay, SecureVault, CryptoCore) supprimée : aucune de ces entreprises
+                    n'utilise TrustVerify. */}
 
                 {/* Feature Grid */}
                 <section className="py-20 px-4 md:px-8 max-w-7xl mx-auto">
                     <div className="text-center mb-16">
-                        <h2 className="text-3xl font-bold text-gray-900 mb-4">Enterprise-Grade Infrastructure</h2>
+                        {/* 🆕 Titre et sous-titre recentrés sur ce qui est réellement construit */}
+                        <h2 className="text-3xl font-bold text-gray-900 mb-4">What TrustVerify Does</h2>
                         <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-                            Deploy a robust compliance stack designed for global scale, absolute precision, and uncompromised security.
+                            An end-to-end identity verification workflow, built with security in mind from the start.
                         </p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                         {/* Feature 1 */}
+                        {/* 🆕 Remplace "Global Compliance" (GDPR / SOC2 / 190 pays, non vérifiés) */}
                         <div className="bg-white border border-gray-200 shadow-sm p-8 rounded-xl flex flex-col gap-4">
                             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center text-blue-700">
                                 <Globe className="w-6 h-6" />
                             </div>
-                            <h3 className="text-xl font-bold text-gray-900">Global Compliance</h3>
+                            <h3 className="text-xl font-bold text-gray-900">Sanctions Screening</h3>
                             <p className="text-gray-600 text-sm leading-relaxed">
-                                Stay ahead of evolving regulations with native GDPR, SOC2 Type II, and local AML compliance in over 190 countries.
+                                Every applicant is checked against international sanctions and PEP lists, with additional rules for FATF high-risk countries.
                             </p>
                             <div className="flex gap-2 mt-auto pt-4">
-                                <span className="px-2.5 py-1 bg-gray-100 rounded text-xs font-semibold text-gray-600">GDPR</span>
-                                <span className="px-2.5 py-1 bg-gray-100 rounded text-xs font-semibold text-gray-600">SOC2</span>
+                                <span className="px-2.5 py-1 bg-gray-100 rounded text-xs font-semibold text-gray-600">Sanctions</span>
+                                <span className="px-2.5 py-1 bg-gray-100 rounded text-xs font-semibold text-gray-600">PEP</span>
                             </div>
                         </div>
 
                         {/* Feature 2 */}
+                        {/* 🆕 Texte corrigé ("Proprietary AI... in milliseconds" était faux) et barre "98%" retirée */}
                         <div className="bg-white border border-gray-200 shadow-sm p-8 rounded-xl flex flex-col gap-4">
                             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center text-blue-700">
                                 <Cpu className="w-6 h-6" />
                             </div>
-                            <h3 className="text-xl font-bold text-gray-900">AI Risk Scoring</h3>
+                            <h3 className="text-xl font-bold text-gray-900">AI-Assisted Risk Scoring</h3>
                             <p className="text-gray-600 text-sm leading-relaxed">
-                                Proprietary AI analyzes biometric data and document authenticity in milliseconds for an instant, actionable risk score.
+                                Gemini Vision reads the document and compares faces; a configurable rules engine combines all signals into a risk score that an agent reviews.
                             </p>
-                            <div className="mt-auto pt-4 w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-                                <div className="bg-blue-600 h-full w-[98%]"></div>
-                            </div>
                         </div>
 
                         {/* Feature 3 */}
+                        {/* 🆕 Remplace "Seamless Integration" (API publique, webhooks et SDK React inexistants) */}
                         <div className="bg-white border border-gray-200 shadow-sm p-8 rounded-xl flex flex-col gap-4">
                             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center text-blue-700">
-                                <Code className="w-6 h-6" />
+                                <Lock className="w-6 h-6" />
                             </div>
-                            <h3 className="text-xl font-bold text-gray-900">Seamless Integration</h3>
+                            <h3 className="text-xl font-bold text-gray-900">Secure by Design</h3>
                             <p className="text-gray-600 text-sm leading-relaxed">
-                                Integrate our API or Webhook system in less than a day. Our SDKs provide a white-label experience native to your product.
+                                Two-factor authentication, private document storage with short-lived signed links, and strict data isolation between client companies.
                             </p>
                             <div className="mt-auto pt-4 flex flex-col gap-2">
-                                <span className="flex items-center gap-2 text-xs text-gray-600"><CheckCircle className="w-4 h-4 text-green-500"/> RESTful API</span>
-                                <span className="flex items-center gap-2 text-xs text-gray-600"><CheckCircle className="w-4 h-4 text-green-500"/> React SDK</span>
+                                <span className="flex items-center gap-2 text-xs text-gray-600"><CheckCircle className="w-4 h-4 text-green-500"/> TOTP, passkeys and backup codes</span>
+                                <span className="flex items-center gap-2 text-xs text-gray-600"><CheckCircle className="w-4 h-4 text-green-500"/> Automated security tests (Playwright CI)</span>
                             </div>
                         </div>
                     </div>
@@ -194,7 +192,8 @@ export default function Home() {
                         </div>
                     </div>
                     <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-                        <p className="text-sm text-gray-500">© 2026 TrustVerify Inc. All rights reserved.</p>
+                        {/* 🆕 "TrustVerify Inc." retiré : ce n'est pas une société enregistrée */}
+                        <p className="text-sm text-gray-500">© 2026 TrustVerify · Demo project by Rayen Mhalla</p>
                         <div className="flex gap-6">
                             <Link href="/privacy-policy" className="text-sm text-gray-500 hover:text-white">Privacy Policy</Link>
                             <Link href="/terms-of-service" className="text-sm text-gray-500 hover:text-white">Terms</Link>
